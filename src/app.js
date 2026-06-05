@@ -23,6 +23,7 @@ const accountsRouter = require('./routes/v1/accounts');
 const authRouter = require('./routes/v1/auth');
 const provisionRouter = require('./routes/v1/provision');
 const webhooksRouter = require('./routes/v1/webhooks');
+const adminRouter = require('./routes/admin');
 
 function createApp() {
   const app = express();
@@ -75,6 +76,7 @@ function createApp() {
   app.use('/v1/accounts', accountsRouter);
   app.use('/v1/provision', provisionRouter);
   app.use('/v1/webhooks', webhooksRouter);
+  app.use('/admin', adminRouter);
 
   // 404 + centralized error envelope (CLAUDE.md "Error Response Format").
   // Must be mounted last and in this order.

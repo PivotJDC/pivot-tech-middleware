@@ -149,6 +149,11 @@ async function assignNumberToCampaign(numberSid, campaignId) {
   });
 }
 
+/** Submit a number port-in request. Returns the created port resource. */
+async function submitPort(payload) {
+  return request('POST', '/api/relay/rest/phone_numbers/port', payload);
+}
+
 /** Delete a SIP endpoint (on account cancellation). */
 async function deleteSipEndpoint(sipEndpointId) {
   return request('DELETE', `/api/relay/rest/sip_endpoints/${sipEndpointId}`);
@@ -161,6 +166,7 @@ module.exports = {
   assignNumberToEndpoint,
   updateSipEndpoint,
   assignNumberToCampaign,
+  submitPort,
   deleteSipEndpoint,
   // exposed for tests
   request,
