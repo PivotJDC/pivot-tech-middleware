@@ -42,29 +42,32 @@ async function run() {
       .sort();
 
     let count = 0;
+    // Sequential, ordered application is required: each migration may depend on
+    // a prior one, so this intentionally awaits inside the loop.
+    // eslint-disable-next-line no-restricted-syntax
     for (const filename of files) {
       if (applied.has(filename)) {
         // eslint-disable-next-line no-console
         console.log(`skip  ${filename}`);
-        continue;
-      }
-      const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, filename), 'utf8');
-      // eslint-disable-next-line no-await-in-loop
-      await client.query('BEGIN');
-      try {
+      } else {
+        const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, filename), 'utf8');
         // eslint-disable-next-line no-await-in-loop
-        await client.query(sql);
-        // eslint-disable-next-line no-await-in-loop
-        await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [filename]);
-        // eslint-disable-next-line no-await-in-loop
-        await client.query('COMMIT');
-        // eslint-disable-next-line no-console
-        console.log(`apply ${filename}`);
-        count += 1;
-      } catch (err) {
-        // eslint-disable-next-line no-await-in-loop
-        await client.query('ROLLBACK');
-        throw new Error(`Migration ${filename} failed: ${err.message}`);
+        await client.query('BEGIN');
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await client.query(sql);
+          // eslint-disable-next-line no-await-in-loop
+          await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [filename]);
+          // eslint-disable-next-line no-await-in-loop
+          await client.query('COMMIT');
+          // eslint-disable-next-line no-console
+          console.log(`apply ${filename}`);
+          count += 1;
+        } catch (err) {
+          // eslint-disable-next-line no-await-in-loop
+          await client.query('ROLLBACK');
+          throw new Error(`Migration ${filename} failed: ${err.message}`);
+        }
       }
     }
 
