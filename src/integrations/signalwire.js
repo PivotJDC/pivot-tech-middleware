@@ -142,6 +142,13 @@ async function updateSipEndpoint(sipEndpointId, fields) {
   return request('PUT', `/api/relay/rest/sip_endpoints/${sipEndpointId}`, fields);
 }
 
+/** Assign a number (by sid) to a 10DLC/TCR messaging campaign. */
+async function assignNumberToCampaign(numberSid, campaignId) {
+  return request('PUT', `/api/relay/rest/phone_numbers/${numberSid}`, {
+    campaign_id: campaignId,
+  });
+}
+
 /** Delete a SIP endpoint (on account cancellation). */
 async function deleteSipEndpoint(sipEndpointId) {
   return request('DELETE', `/api/relay/rest/sip_endpoints/${sipEndpointId}`);
@@ -153,6 +160,7 @@ module.exports = {
   createSipEndpoint,
   assignNumberToEndpoint,
   updateSipEndpoint,
+  assignNumberToCampaign,
   deleteSipEndpoint,
   // exposed for tests
   request,

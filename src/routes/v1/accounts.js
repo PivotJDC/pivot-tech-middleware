@@ -12,18 +12,25 @@
  */
 const express = require('express');
 const accountService = require('../../services/accountService');
+const provisioningService = require('../../services/provisioningService');
 const { authenticate, requireSelf } = require('../../middleware/auth');
 const { asyncHandler } = require('../../middleware/errorHandler');
 
 const router = express.Router();
 
-// Create account — public signup.
+// Create account — public signup. Assigns the DID (in createAccount) and issues
+// a provisioning token so the response carries everything the customer needs to
+// install + provision the app: the provisioning URL, QR code, and deep link.
+// Token issuance is composed here (not inside accountService) to keep
+// accountService free of a dependency on provisioningService.
 router.post(
   '/',
   asyncHandler(async (req, res) => {
     const { email, market, plan } = req.body || {};
     const account = await accountService.createAccount({ email, market, plan });
-    res.status(201).json(account);
+    // Drop raw_token from the response — the URL/QR/deep link already embed it.
+    const { raw_token: rawToken, ...provisioning } = await provisioningService.issueToken(account);
+    res.status(201).json({ ...account, provisioning });
   }),
 );
 

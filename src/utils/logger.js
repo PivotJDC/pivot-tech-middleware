@@ -29,7 +29,8 @@ const REDACT_PATHS = [
 const isTest = process.env.NODE_ENV === 'test';
 
 const logger = pino({
-  level: config.logLevel || (isTest ? 'silent' : 'info'),
+  // Force silent under test for clean output regardless of an inherited LOG_LEVEL.
+  level: isTest ? 'silent' : (config.logLevel || 'info'),
   redact: { paths: REDACT_PATHS, censor: '[REDACTED]' },
   transport: !isTest && !config.isProduction
     ? { target: 'pino-pretty', options: { translateTime: 'SYS:standard' } }

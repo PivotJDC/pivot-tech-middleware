@@ -11,6 +11,7 @@
  * Only the SHA-256 hash of a token is stored; the raw token lives only in the
  * link handed to the customer.
  */
+const qrcode = require('qrcode');
 const db = require('../db');
 const config = require('../config');
 const token = require('../utils/token');
@@ -20,13 +21,19 @@ const accountService = require('./accountService');
 const didOrchestration = require('./didOrchestrationService');
 const { errors, AppError } = require('../middleware/errorHandler');
 
-/** Build the customer-facing provisioning links for a raw token. */
-function buildLinks(rawToken) {
+/**
+ * Build the customer-facing provisioning links for a raw token. The QR is
+ * rendered locally to a data: URL — the provisioning URL embeds the single-use
+ * token, so it must never be sent to a third-party QR service (security rule #1).
+ */
+async function buildLinks(rawToken) {
   const provisioningUrl = `${config.provisioning.baseUrl}/v1/provision?token=${rawToken}`;
+  const qrCodeUrl = await qrcode.toDataURL(provisioningUrl, { errorCorrectionLevel: 'M' });
   return {
-    // The Acrobits app fetches this URL during setup; encode it as the QR.
+    // The Acrobits app fetches this URL during setup.
     provisioning_url: provisioningUrl,
-    qr_code_data: provisioningUrl,
+    // A self-contained PNG data URL the client can render directly.
+    qr_code_url: qrCodeUrl,
     // DECISION: the deep link is the https provisioning URL for MVP. A
     // white-label custom URL scheme can replace this once the app defines one.
     deep_link: provisioningUrl,
@@ -50,7 +57,8 @@ async function issueToken(account) {
     [account.id, tokenHash, ttlHours],
   );
 
-  return { raw_token: rawToken, expires_at: rows[0].expires_at, ...buildLinks(rawToken) };
+  const links = await buildLinks(rawToken);
+  return { raw_token: rawToken, expires_at: rows[0].expires_at, ...links };
 }
 
 /** Admin: reissue a token for an existing account (validates the account). */

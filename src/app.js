@@ -22,6 +22,7 @@ const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const accountsRouter = require('./routes/v1/accounts');
 const authRouter = require('./routes/v1/auth');
 const provisionRouter = require('./routes/v1/provision');
+const webhooksRouter = require('./routes/v1/webhooks');
 
 function createApp() {
   const app = express();
@@ -49,7 +50,12 @@ function createApp() {
       },
     },
   }));
-  app.use(express.json({ limit: '1mb' }));
+  // Capture the raw body so webhook routes can verify the HMAC signature over
+  // the exact bytes SignalWire signed (CLAUDE.md rule #5).
+  app.use(express.json({
+    limit: '1mb',
+    verify: (req, res, buf) => { req.rawBody = buf; },
+  }));
 
   // Liveness + readiness probe. Reports DB connectivity; returns 503 when the
   // database is unreachable so App Runner can pull the instance out of service.
@@ -68,6 +74,7 @@ function createApp() {
   app.use('/v1/auth', authRouter);
   app.use('/v1/accounts', accountsRouter);
   app.use('/v1/provision', provisionRouter);
+  app.use('/v1/webhooks', webhooksRouter);
 
   // 404 + centralized error envelope (CLAUDE.md "Error Response Format").
   // Must be mounted last and in this order.

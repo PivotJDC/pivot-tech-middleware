@@ -38,7 +38,7 @@ describe('issueToken', () => {
     expect(db.query.mock.calls[0][1]).toEqual(['acc-1', 'hash', 72]);
     expect(result.raw_token).toBe('raw-token');
     expect(result.provisioning_url).toBe('https://api.pivot-tech.io/v1/provision?token=raw-token');
-    expect(result.qr_code_data).toContain('token=raw-token');
+    expect(result.qr_code_url).toMatch(/^data:image\/png;base64,/);
     expect(result.deep_link).toContain('token=raw-token');
   });
 });
