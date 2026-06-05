@@ -1,0 +1,40 @@
+# Local development stack for Pivot-Tech middleware.
+# Brings up PostgreSQL 15 and Redis 7 to mirror RDS + ElastiCache.
+# Run from repo root:  docker compose -f infra/docker-compose.yml up -d
+name: pivot-tech-middleware
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: pivottech-postgres
+    environment:
+      POSTGRES_USER: pivottech
+      POSTGRES_PASSWORD: pivottech
+      POSTGRES_DB: pivottech
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pivottech -d pivottech"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: pivottech-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:

@@ -1,0 +1,14 @@
+node_modules/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
+.DS_Store
+dist/
+build/
+*.pem
+*.p8
+.idea/
+.vscode/

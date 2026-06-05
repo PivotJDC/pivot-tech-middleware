@@ -476,7 +476,7 @@ PROVISIONING_TOKEN_TTL_HOURS=72
 
 ## Markets
 
-Initial markets: **Lewiston** (area code 207), **Kendall** (confirm area code with Jim).
+Initial markets: **Lewiston, Idaho** (area code 208), **Kendall County, Illinois** (area codes 630, 331).
 Market is stored on every account and DID. All DIDs are assigned to a
 market-specific TCR campaign. New markets added via config — no code changes required.
 
