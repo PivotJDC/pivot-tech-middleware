@@ -19,6 +19,8 @@ const pinoHttp = require('pino-http');
 
 const config = require('./config');
 const db = require('./db');
+const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
+const accountsRouter = require('./routes/v1/accounts');
 
 // Redaction guards CLAUDE.md's non-negotiable: SIP passwords, transfer PINs,
 // and account numbers must never reach the logs. Paths cover both request
@@ -71,39 +73,14 @@ function createApp() {
     }
   });
 
-  // Routes mount here as they are built:
-  //   app.use('/v1', require('./routes/v1'));
-  //   app.use('/admin', require('./routes/admin'));
+  // Customer API. Further routers (provision, ports, webhooks, admin) mount
+  // here as they are built.
+  app.use('/v1/accounts', accountsRouter);
 
-  // 404 — no route matched.
-  app.use((req, res) => {
-    res.status(404).json({
-      error: {
-        code: 'NOT_FOUND',
-        message: `No route for ${req.method} ${req.path}.`,
-        trace_id: req.id,
-      },
-    });
-  });
-
-  // Centralized error envelope. A thrown error may carry a `.code`, `.status`,
-  // and `.field`; otherwise it is treated as an unexpected 500. The internal
-  // message is logged but never leaked to the client on a 500.
-  // eslint-disable-next-line no-unused-vars
-  app.use((err, req, res, next) => {
-    const status = err.status || 500;
-    if (status >= 500) {
-      req.log.error({ err }, 'unhandled error');
-    }
-    res.status(status).json({
-      error: {
-        code: err.code || 'INTERNAL_ERROR',
-        message: status >= 500 ? 'An unexpected error occurred.' : err.message,
-        ...(err.field ? { field: err.field } : {}),
-        trace_id: req.id,
-      },
-    });
-  });
+  // 404 + centralized error envelope (CLAUDE.md "Error Response Format").
+  // Must be mounted last and in this order.
+  app.use(notFoundHandler);
+  app.use(errorHandler);
 
   return app;
 }

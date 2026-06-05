@@ -10,5 +10,7 @@ dist/
 build/
 *.pem
 *.p8
+*.swp
+*.swo
 .idea/
 .vscode/
