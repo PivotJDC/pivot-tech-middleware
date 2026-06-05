@@ -8,6 +8,9 @@
  */
 const db = require('../db');
 const { errors } = require('../middleware/errorHandler');
+const didOrchestration = require('./didOrchestrationService');
+const crypto = require('../utils/crypto');
+const { logger } = require('../utils/logger');
 
 const PLANS = ['unlimited_25'];
 const STATUSES = ['pending', 'active', 'suspended', 'cancelled'];
@@ -75,7 +78,16 @@ function assertTransition(from, to) {
 }
 
 /**
- * Create a new account in 'pending' status.
+ * Create a new account in 'pending' status, provisioning its DID + SIP endpoint
+ * in the same call (CLAUDE.md DoD #1: DID assigned at creation).
+ *
+ * Sequence: validate -> pre-check email -> orchestrate DID/SIP on SignalWire
+ * (external, no DB writes) -> persist account + did rows in one transaction.
+ * The SignalWire side effects run BEFORE the inserts so a failure leaves no
+ * orphan account; the unique constraint on email is the final backstop against
+ * a race. The plaintext SIP password from orchestration is hashed (bcrypt) and
+ * never stored in the clear — it will be rotated and surfaced at provision time.
+ *
  * @param {{ email: string, market: string, plan?: string }} input
  * @returns {Promise<object>} the created account (serialized)
  */
@@ -84,21 +96,71 @@ async function createAccount(input = {}) {
   const market = validateMarket(input.market);
   const plan = validatePlan(input.plan);
 
+  // Pre-check to avoid purchasing a DID for an email that already exists.
+  const existing = await db.query('SELECT id FROM accounts WHERE email = $1', [email]);
+  if (existing.rows.length > 0) {
+    throw errors.conflict('An account with this email already exists.', 'email');
+  }
+
+  // External provisioning (SignalWire). Throws DID_UNAVAILABLE / SIGNALWIRE_ERROR.
+  const credentials = await didOrchestration.assignDid(market);
+  const sipPasswordHash = await crypto.hashPassword(credentials.sipPassword);
+
   try {
-    const { rows } = await db.query(
-      `INSERT INTO accounts (email, market, plan)
-       VALUES ($1, $2, $3)
-       RETURNING *`,
-      [email, market, plan],
+    const account = await db.withTransaction(async (client) => {
+      const inserted = await client.query(
+        `INSERT INTO accounts
+           (email, market, plan, phone_e164, sip_username, sip_endpoint_id, sip_password_hash)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [
+          email,
+          market,
+          plan,
+          credentials.phoneE164,
+          credentials.sipUsername,
+          credentials.sipEndpointId,
+          sipPasswordHash,
+        ],
+      );
+      const accountId = inserted.rows[0].id;
+      await client.query(
+        `INSERT INTO dids (e164, area_code, market, signalwire_sid, account_id, status)
+         VALUES ($1, $2, $3, $4, $5, 'assigned')`,
+        [
+          credentials.phoneE164,
+          credentials.areaCode,
+          market,
+          credentials.signalwireSid,
+          accountId,
+        ],
+      );
+      return inserted.rows[0];
+    });
+
+    logger.info(
+      { accountId: account.id, market, areaCode: credentials.areaCode },
+      'account created and DID assigned',
     );
-    return serializeAccount(rows[0]);
+    return serializeAccount(account);
   } catch (err) {
     if (err.code === '23505') {
-      // unique_violation on accounts.email
+      // Lost the email race after orchestration; the purchased DID is now
+      // unattached. Surface conflict; orphaned-DID cleanup is an ops concern.
+      logger.warn({ email }, 'email race after DID purchase; DID may be orphaned');
       throw errors.conflict('An account with this email already exists.', 'email');
     }
     throw err;
   }
+}
+
+/**
+ * Persist a new bcrypt hash for the account's SIP password. Used by the
+ * provisioning flow when the SIP password is rotated.
+ */
+async function setSipPasswordHash(id, hash) {
+  assertUuid(id);
+  await db.query('UPDATE accounts SET sip_password_hash = $1 WHERE id = $2', [hash, id]);
 }
 
 /** Fetch a full account by id, or throw NOT_FOUND. */
@@ -107,6 +169,20 @@ async function getAccountById(id) {
   const { rows } = await db.query('SELECT * FROM accounts WHERE id = $1', [id]);
   if (rows.length === 0) {
     throw errors.notFound('Account not found.');
+  }
+  return serializeAccount(rows[0]);
+}
+
+/**
+ * Look up an account by email (used for MVP token issuance). Returns the full
+ * account or throws NOT_FOUND. Email is matched case-insensitively via the
+ * normalized (lowercased) stored value.
+ */
+async function getAccountByEmail(rawEmail) {
+  const email = normalizeEmail(rawEmail);
+  const { rows } = await db.query('SELECT * FROM accounts WHERE email = $1', [email]);
+  if (rows.length === 0) {
+    throw errors.notFound('No account found for that email.');
   }
   return serializeAccount(rows[0]);
 }
@@ -192,9 +268,11 @@ async function transitionStatus(id, status) {
 module.exports = {
   createAccount,
   getAccountById,
+  getAccountByEmail,
   getAccountStatus,
   updateAccount,
   transitionStatus,
+  setSipPasswordHash,
   serializeAccount,
   // exported for tests / reuse
   STATUS_TRANSITIONS,

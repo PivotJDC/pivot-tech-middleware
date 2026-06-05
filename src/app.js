@@ -7,10 +7,8 @@
  * they are built out; for now the app exposes structured logging, JSON parsing,
  * a /health probe, and the standard 404 + error envelope from CLAUDE.md.
  *
- * DECISION (for Jim): the base Pino logger lives here for now and is exported
- * alongside createApp so server.js can reuse it. When we add the logging
- * middleware layer it will move to src/utils/logger.js with the sanitizeLog
- * redaction rules; the redact paths below are the seed for that.
+ * The shared Pino logger now lives in src/utils/logger.js (so integrations can
+ * log without importing the app); it is re-exported here for server.js.
  */
 const crypto = require('crypto');
 const express = require('express');
@@ -19,30 +17,11 @@ const pinoHttp = require('pino-http');
 
 const config = require('./config');
 const db = require('./db');
+const { logger, REDACT_PATHS } = require('./utils/logger');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const accountsRouter = require('./routes/v1/accounts');
-
-// Redaction guards CLAUDE.md's non-negotiable: SIP passwords, transfer PINs,
-// and account numbers must never reach the logs. Paths cover both request
-// bodies and known sensitive headers.
-const REDACT_PATHS = [
-  'req.headers.authorization',
-  'req.headers.cookie',
-  'req.body.password',
-  'req.body.sip_password',
-  'req.body.pin',
-  'req.body.account_number',
-  'res.body.password',
-];
-
-const logger = pino({
-  level: config.logLevel,
-  redact: { paths: REDACT_PATHS, censor: '[REDACTED]' },
-  // Pretty-print locally; emit raw JSON lines in production for log ingestion.
-  transport: config.isProduction
-    ? undefined
-    : { target: 'pino-pretty', options: { translateTime: 'SYS:standard' } },
-});
+const authRouter = require('./routes/v1/auth');
+const provisionRouter = require('./routes/v1/provision');
 
 function createApp() {
   const app = express();
@@ -54,10 +33,21 @@ function createApp() {
 
   // genReqId produces the `req_...` trace ids surfaced in the error envelope
   // (CLAUDE.md "Error Response Format"); honors an inbound X-Request-Id if set.
+  // The req serializer scrubs the provisioning ?token= from the logged URL so
+  // single-use tokens never land in logs (CLAUDE.md security rule #1).
   app.use(pinoHttp({
     logger,
     redact: { paths: REDACT_PATHS, censor: '[REDACTED]' },
     genReqId: (req) => req.headers['x-request-id'] || `req_${crypto.randomUUID()}`,
+    serializers: {
+      req(req) {
+        const serialized = pino.stdSerializers.req(req);
+        if (serialized.url) {
+          serialized.url = serialized.url.replace(/([?&]token=)[^&]+/i, '$1[REDACTED]');
+        }
+        return serialized;
+      },
+    },
   }));
   app.use(express.json({ limit: '1mb' }));
 
@@ -73,9 +63,11 @@ function createApp() {
     }
   });
 
-  // Customer API. Further routers (provision, ports, webhooks, admin) mount
-  // here as they are built.
+  // Customer API. Further routers (ports, webhooks, admin) mount here as they
+  // are built.
+  app.use('/v1/auth', authRouter);
   app.use('/v1/accounts', accountsRouter);
+  app.use('/v1/provision', provisionRouter);
 
   // 404 + centralized error envelope (CLAUDE.md "Error Response Format").
   // Must be mounted last and in this order.
