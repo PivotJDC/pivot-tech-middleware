@@ -1,9 +1,9 @@
 # Pivot-Tech middleware — CI/CD
 #
 # Job "test"  : lint + migrate + test on every push and PR. No AWS required.
-# Job "deploy": build -> ECR -> App Runner, only on push to main, only after
-#               "test" passes. Skips gracefully until AWS secrets are configured
-#               so the pipeline stays green before AWS is wired up.
+# Job "deploy": build -> ECR -> App Runner, only on push to main, after "test".
+#               AWS account 430155298813 / region us-east-1. The App Runner step
+#               skips gracefully until APPRUNNER_SERVICE_ARN is set.
 name: deploy
 
 on:
@@ -14,7 +14,10 @@ on:
 
 env:
   AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "430155298813"
+  ECR_REGISTRY: 430155298813.dkr.ecr.us-east-1.amazonaws.com
   ECR_REPOSITORY: pivot-tech-middleware
+  AWS_ROLE_ARN: arn:aws:iam::430155298813:role/pivot-tech-middleware-role
 
 jobs:
   test:
@@ -62,55 +65,42 @@ jobs:
       id-token: write
       contents: read
     env:
-      # Surfaced from secrets so steps can detect whether AWS is configured.
-      # (secrets cannot be read directly in job/step `if:` conditions.)
-      AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
       APPRUNNER_SERVICE_ARN: ${{ secrets.APPRUNNER_SERVICE_ARN }}
     steps:
       - uses: actions/checkout@v4
 
-      # Decide what's configured. Missing AWS creds => skip the whole deploy
-      # (job still succeeds). Missing App Runner ARN => build/push only.
-      - name: Check AWS configuration
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:latest" .
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+
+      # App Runner ARN isn't provisioned yet — skip gracefully until it is.
+      - name: Check App Runner config
         id: guard
         run: |
-          if [ -n "$AWS_DEPLOY_ROLE_ARN" ]; then
-            echo "aws=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "aws=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::AWS_DEPLOY_ROLE_ARN not set — skipping ECR build/push and App Runner deploy."
-          fi
           if [ -n "$APPRUNNER_SERVICE_ARN" ]; then
             echo "apprunner=true" >> "$GITHUB_OUTPUT"
           else
             echo "apprunner=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::APPRUNNER_SERVICE_ARN not set — will skip the App Runner deploy step."
+            echo "::notice::APPRUNNER_SERVICE_ARN not set — skipping App Runner deploy (image still pushed to ECR)."
           fi
 
-      - name: Configure AWS credentials
-        if: steps.guard.outputs.aws == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        id: ecr
-        if: steps.guard.outputs.aws == 'true'
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build, tag, and push image
-        if: steps.guard.outputs.aws == 'true'
-        env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          docker build -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" -t "$REGISTRY/$ECR_REPOSITORY:latest" .
-          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          docker push "$REGISTRY/$ECR_REPOSITORY:latest"
-
       - name: Deploy to App Runner
-        if: steps.guard.outputs.aws == 'true' && steps.guard.outputs.apprunner == 'true'
+        if: steps.guard.outputs.apprunner == 'true'
         run: |
           aws apprunner start-deployment \
             --service-arn "$APPRUNNER_SERVICE_ARN" \
