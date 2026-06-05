@@ -1,6 +1,9 @@
 # Pivot-Tech middleware — CI/CD
-# Lint + test on every push/PR; build, push to ECR, and deploy to App Runner on main.
-# Move to .github/workflows/deploy.yml to activate (kept here in infra/ during scaffolding).
+#
+# Job "test"  : lint + migrate + test on every push and PR. No AWS required.
+# Job "deploy": build -> ECR -> App Runner, only on push to main, only after
+#               "test" passes. Skips gracefully until AWS secrets are configured
+#               so the pipeline stays green before AWS is wired up.
 name: deploy
 
 on:
@@ -58,17 +61,46 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      # Surfaced from secrets so steps can detect whether AWS is configured.
+      # (secrets cannot be read directly in job/step `if:` conditions.)
+      AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+      APPRUNNER_SERVICE_ARN: ${{ secrets.APPRUNNER_SERVICE_ARN }}
     steps:
       - uses: actions/checkout@v4
+
+      # Decide what's configured. Missing AWS creds => skip the whole deploy
+      # (job still succeeds). Missing App Runner ARN => build/push only.
+      - name: Check AWS configuration
+        id: guard
+        run: |
+          if [ -n "$AWS_DEPLOY_ROLE_ARN" ]; then
+            echo "aws=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "aws=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AWS_DEPLOY_ROLE_ARN not set — skipping ECR build/push and App Runner deploy."
+          fi
+          if [ -n "$APPRUNNER_SERVICE_ARN" ]; then
+            echo "apprunner=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "apprunner=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::APPRUNNER_SERVICE_ARN not set — will skip the App Runner deploy step."
+          fi
+
       - name: Configure AWS credentials
+        if: steps.guard.outputs.aws == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+
       - name: Login to Amazon ECR
         id: ecr
+        if: steps.guard.outputs.aws == 'true'
         uses: aws-actions/amazon-ecr-login@v2
+
       - name: Build, tag, and push image
+        if: steps.guard.outputs.aws == 'true'
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
@@ -76,8 +108,10 @@ jobs:
           docker build -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" -t "$REGISTRY/$ECR_REPOSITORY:latest" .
           docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           docker push "$REGISTRY/$ECR_REPOSITORY:latest"
+
       - name: Deploy to App Runner
+        if: steps.guard.outputs.aws == 'true' && steps.guard.outputs.apprunner == 'true'
         run: |
           aws apprunner start-deployment \
-            --service-arn "${{ secrets.APPRUNNER_SERVICE_ARN }}" \
+            --service-arn "$APPRUNNER_SERVICE_ARN" \
             --region "$AWS_REGION"
