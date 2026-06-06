@@ -2,10 +2,11 @@
  * Centralized configuration: loads, validates, and freezes environment config.
  *
  * In development the values come from a local .env file (loaded here via dotenv).
- * In production, secrets are injected from AWS Secrets Manager into the process
- * environment by the runtime — never read from a committed .env file
- * (see CLAUDE.md "Security Rules"). This module only reads process.env; it does
- * not call Secrets Manager directly.
+ * In production, secrets come from AWS Secrets Manager: src/config/secrets.js
+ * fetches the secret named by SECRETS_ARN and injects its keys into
+ * process.env BEFORE this module is required (see server.js boot order) —
+ * never read from a committed .env file (CLAUDE.md "Security Rules"). This
+ * module only reads process.env; it does not call Secrets Manager directly.
  *
  * Validation is fail-fast: if any required key for the current NODE_ENV is
  * missing, the process throws at import time with the full list of what's

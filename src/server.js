@@ -1,18 +1,29 @@
 /**
  * HTTP server entrypoint.
  *
- * Builds the app via the factory, verifies connectivity to PostgreSQL and
- * Redis, binds the port, and wires graceful shutdown: on SIGTERM/SIGINT
- * (App Runner sends SIGTERM on deploy/scale-in) it stops accepting new
- * connections, drains in-flight requests, then closes the DB pool and Redis.
- * Unhandled rejections and uncaught exceptions are logged and exit non-zero so
- * the orchestrator restarts a known-bad instance rather than limping along.
+ * Boot order matters here:
+ *   1. Secrets bootstrap — when SECRETS_ARN is set, fetch the JSON secret
+ *      from Secrets Manager and inject its keys into process.env.
+ *   2. Only then require config/app/db/cache — config validates process.env
+ *      at require time, so it must not load before step 1 completes. That is
+ *      why those requires live inside bootstrap() instead of at the top.
+ *   3. Startup connectivity check (diagnostic only), then bind the port.
+ *
+ * Graceful shutdown: on SIGTERM/SIGINT (App Runner sends SIGTERM on
+ * deploy/scale-in) stop accepting new connections, drain in-flight requests,
+ * then close the DB pool and Redis. Unhandled rejections and uncaught
+ * exceptions are logged and exit non-zero so the orchestrator restarts a
+ * known-bad instance rather than limping along.
  *
  * Every failure path here logs to stdout before exiting. App Runner forwards
  * container stdout/stderr to the CloudWatch application log group
  * (/aws/apprunner/<service>/<id>/application), so a deploy that crash-loops
  * leaves a readable reason in CloudWatch instead of a silent restart cycle.
  */
+
+// Safe to require eagerly: secrets.js deliberately imports nothing from this
+// project, so it can never pull in config before secrets are injected.
+const { loadSecrets } = require('./config/secrets');
 
 /**
  * Last-resort startup logger. Used when the failure may have happened before
@@ -31,25 +42,14 @@ function logFatalToStdout(stage, err) {
   }));
 }
 
-// Module loading is wrapped so a require-time throw (config validation is
-// fail-fast by design) still produces a clear stdout line instead of a bare
-// Node stack trace with no context.
+// Assigned by bootstrap() once secrets are in place and modules can load.
 let createApp;
 let logger;
 let config;
 let db;
 let cache;
-try {
-  /* eslint-disable global-require */
-  ({ createApp, logger } = require('./app'));
-  config = require('./config');
-  db = require('./db');
-  cache = require('./cache');
-  /* eslint-enable global-require */
-} catch (err) {
-  logFatalToStdout('module load (check required environment variables)', err);
-  process.exit(1);
-}
+let server;
+let shuttingDown = false;
 
 /**
  * Startup connectivity check. Confirms the instance can actually reach its
@@ -87,9 +87,6 @@ async function verifyConnectivity() {
     );
   }
 }
-
-let server;
-let shuttingDown = false;
 
 async function shutdown(signal) {
   if (shuttingDown) return;
@@ -140,17 +137,46 @@ async function start() {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-process.on('unhandledRejection', (reason) => {
-  logger.error({ reason }, 'unhandled promise rejection');
-  process.exit(1);
-});
+async function bootstrap() {
+  try {
+    await loadSecrets();
+  } catch (err) {
+    logFatalToStdout(
+      'secrets bootstrap (check SECRETS_ARN and the instance role secretsmanager:GetSecretValue permission)',
+      err,
+    );
+    process.exit(1);
+  }
 
-process.on('uncaughtException', (err) => {
-  logger.error({ err }, 'uncaught exception');
-  process.exit(1);
-});
+  // Module loading is deferred to here (after secrets injection) and wrapped
+  // so a require-time throw (config validation is fail-fast by design) still
+  // produces a clear stdout line instead of a bare Node stack trace.
+  try {
+    /* eslint-disable global-require */
+    ({ createApp, logger } = require('./app'));
+    config = require('./config');
+    db = require('./db');
+    cache = require('./cache');
+    /* eslint-enable global-require */
+  } catch (err) {
+    logFatalToStdout('module load (check required environment variables)', err);
+    process.exit(1);
+  }
 
-start().catch((err) => {
+  process.on('unhandledRejection', (reason) => {
+    logger.error({ reason }, 'unhandled promise rejection');
+    process.exit(1);
+  });
+
+  process.on('uncaughtException', (err) => {
+    logger.error({ err }, 'uncaught exception');
+    process.exit(1);
+  });
+
+  await start();
+}
+
+bootstrap().catch((err) => {
   // logger writes to stdout; the raw fallback below guarantees a line lands
   // even if the failure was in the logging pipeline itself.
   logFatalToStdout('startup', err);
