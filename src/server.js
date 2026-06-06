@@ -63,7 +63,7 @@ async function verifyConnectivity() {
     logger.info('startup connectivity check: database reachable');
   } catch (err) {
     logger.error(
-      { err: { message: err.message } },
+      { err: { message: err.message, stack: err.stack } },
       'startup connectivity check: CANNOT REACH DATABASE — verify DATABASE_URL, '
         + 'the App Runner VPC connector, and the RDS security group allow this service',
     );
@@ -80,7 +80,7 @@ async function verifyConnectivity() {
     logger.info('startup connectivity check: redis reachable');
   } catch (err) {
     logger.error(
-      { err: { message: err.message } },
+      { err: { message: err.message, stack: err.stack } },
       'startup connectivity check: CANNOT REACH REDIS — verify REDIS_URL, '
         + 'the App Runner VPC connector, and the ElastiCache security group allow this service',
     );
@@ -130,7 +130,10 @@ async function start() {
   // listen() errors (port in use, EACCES) arrive as an 'error' event, not a
   // throw — without this handler they would crash with no structured log line.
   server.on('error', (err) => {
-    logger.fatal({ err: { message: err.message, code: err.code } }, `failed to bind port ${config.port}`);
+    logger.fatal(
+      { err: { message: err.message, code: err.code, stack: err.stack } },
+      `failed to bind port ${config.port}`,
+    );
     process.exit(1);
   });
 
