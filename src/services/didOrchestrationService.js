@@ -43,10 +43,28 @@ async function findAvailableNumber(market) {
     // eslint-disable-next-line no-await-in-loop
     const results = await signalwire.searchAvailableNumbers(areaCode);
     if (results.length > 0) {
+      // Surface when we landed on a fallback — a market whose primary area
+      // code keeps coming up dry is an inventory signal ops should see.
+      if (i > 0) {
+        logger.warn(
+          { market, areaCode, exhausted: areaCodes.slice(0, i) },
+          `no DIDs in primary area code(s) ${areaCodes.slice(0, i).join(', ')} for market ${market}; using fallback ${areaCode}`,
+        );
+      }
       return { e164: numberOf(results[0]), areaCode };
     }
+    logger.warn(
+      { market, areaCode },
+      `no DIDs available in area code ${areaCode} for market ${market}`,
+    );
   }
 
+  // Every configured area code came up empty: log loudly with the full list
+  // tried so the CloudWatch line alone tells ops what to replenish.
+  logger.error(
+    { code: 'DID_UNAVAILABLE', market, areaCodesTried: areaCodes },
+    `DID_UNAVAILABLE: no numbers available for market ${market} after trying area codes ${areaCodes.join(', ')}`,
+  );
   throw new AppError(
     'DID_UNAVAILABLE',
     `No numbers available for market ${market} (area codes ${areaCodes.join(', ')}).`,
