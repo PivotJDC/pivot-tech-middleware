@@ -58,8 +58,16 @@ function createApp() {
     verify: (req, res, buf) => { req.rawBody = buf; },
   }));
 
-  // Liveness + readiness probe. Reports DB connectivity; returns 503 when the
-  // database is unreachable so App Runner can pull the instance out of service.
+  // Liveness probe for the App Runner health check: answers 200 as long as the
+  // process is up and the event loop is serving — no dependency checks, so a
+  // database blip never makes App Runner kill/recycle otherwise-healthy
+  // instances. Deeper connectivity reporting stays on /health.
+  app.get('/ping', (req, res) => {
+    res.json({ status: 'ok' });
+  });
+
+  // Readiness/diagnostic probe. Reports DB connectivity; returns 503 when the
+  // database is unreachable.
   app.get('/health', async (req, res) => {
     try {
       await db.healthCheck();
