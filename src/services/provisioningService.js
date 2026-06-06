@@ -22,21 +22,45 @@ const didOrchestration = require('./didOrchestrationService');
 const { errors, AppError } = require('../middleware/errorHandler');
 
 /**
- * Build the customer-facing provisioning links for a raw token. The QR is
- * rendered locally to a data: URL — the provisioning URL embeds the single-use
- * token, so it must never be sent to a third-party QR service (security rule #1).
+ * Rotate the account's SIP password on SignalWire and persist its bcrypt hash.
+ * Returns the new plaintext, which the caller must hold in memory only for the
+ * duration of building its response (CLAUDE.md security rule #3).
  */
-async function buildLinks(rawToken) {
+async function rotateAndPersistSipPassword(account) {
+  const sipPassword = await didOrchestration.rotateSipPassword(account.sip_endpoint_id);
+  const sipPasswordHash = await crypto.hashPassword(sipPassword);
+  await accountService.setSipPasswordHash(account.id, sipPasswordHash);
+  return sipPassword;
+}
+
+/**
+ * Build the Acrobits csc: provisioning URI: csc:username:password@CLOUD_ID.
+ * Scanning it (or tapping it as a deep link) hands the Cloud Softphone app the
+ * SIP credentials directly. Both parts are base64url/uuid charsets, so the
+ * URI needs no percent-encoding. NEVER log the result — it embeds the live
+ * SIP password (security rule #1).
+ */
+function buildCscUri(sipUsername, sipPassword) {
+  return `csc:${sipUsername}:${sipPassword}@${config.acrobits.cloudId}`;
+}
+
+/**
+ * Build the customer-facing provisioning links. The QR encodes the Acrobits
+ * csc: URI (live SIP credentials); the provisioning URL still embeds the
+ * single-use token for the XML credential-delivery flow. Both are secrets —
+ * the QR is rendered locally to a data: URL and must never be sent to a
+ * third-party QR service (security rule #1).
+ */
+async function buildLinks(rawToken, cscUri) {
   const provisioningUrl = `${config.provisioning.baseUrl}/v1/provision?token=${rawToken}`;
-  const qrCodeUrl = await qrcode.toDataURL(provisioningUrl, { errorCorrectionLevel: 'M' });
+  const qrCodeUrl = await qrcode.toDataURL(cscUri, { errorCorrectionLevel: 'M' });
   return {
-    // The Acrobits app fetches this URL during setup.
+    // XML credential delivery — the Acrobits app can fetch this URL during setup.
     provisioning_url: provisioningUrl,
     // A self-contained PNG data URL the client can render directly.
     qr_code_url: qrCodeUrl,
-    // DECISION: the deep link is the https provisioning URL for MVP. A
-    // white-label custom URL scheme can replace this once the app defines one.
-    deep_link: provisioningUrl,
+    // The csc: URI doubles as the deep link on devices with the app installed.
+    deep_link: cscUri,
   };
 }
 
@@ -46,6 +70,13 @@ async function buildLinks(rawToken) {
  * @returns {Promise<{ raw_token: string, expires_at: Date } & ReturnType<typeof buildLinks>>}
  */
 async function issueToken(account) {
+  if (!account.sip_endpoint_id || !account.sip_username) {
+    throw new AppError(
+      'INTERNAL_ERROR',
+      'Account is not ready for provisioning (DID assignment incomplete).',
+    );
+  }
+
   const rawToken = token.generateProvisioningToken();
   const tokenHash = token.hashProvisioningToken(rawToken);
   const ttlHours = config.provisioning.tokenTtlHours;
@@ -57,7 +88,16 @@ async function issueToken(account) {
     [account.id, tokenHash, ttlHours],
   );
 
-  const links = await buildLinks(rawToken);
+  // DECISION: the csc: QR must embed a LIVE SIP password, and we only ever
+  // store the bcrypt hash — so issuing links rotates the password right here.
+  // Consequence: the QR and the XML endpoint each rotate on use, so whichever
+  // path runs LAST holds the valid credentials; a device provisioned from the
+  // QR is invalidated if the XML URL is fetched afterward (and vice versa).
+  // One account, one delivery path per issuance.
+  const sipPassword = await rotateAndPersistSipPassword(account);
+  const cscUri = buildCscUri(account.sip_username, sipPassword);
+
+  const links = await buildLinks(rawToken, cscUri);
   return { raw_token: rawToken, expires_at: rows[0].expires_at, ...links };
 }
 
@@ -106,9 +146,7 @@ async function generateAccountXml(account) {
       'Account is not ready for provisioning (DID assignment incomplete).',
     );
   }
-  const sipPassword = await didOrchestration.rotateSipPassword(account.sip_endpoint_id);
-  const sipPasswordHash = await crypto.hashPassword(sipPassword);
-  await accountService.setSipPasswordHash(account.id, sipPasswordHash);
+  const sipPassword = await rotateAndPersistSipPassword(account);
 
   return acrobits.buildAccountXml({
     sipUsername: account.sip_username,

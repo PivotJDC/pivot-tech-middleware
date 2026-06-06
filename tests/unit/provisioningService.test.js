@@ -1,6 +1,7 @@
 jest.mock('../../src/db');
 jest.mock('../../src/config', () => ({
   provisioning: { baseUrl: 'https://api.pivot-tech.io', tokenTtlHours: 72 },
+  acrobits: { cloudId: '54873' },
 }));
 jest.mock('../../src/utils/token');
 jest.mock('../../src/utils/crypto');
@@ -28,9 +29,15 @@ beforeEach(() => {
 });
 
 describe('issueToken', () => {
-  it('stores the token hash and returns raw token + links', async () => {
+  beforeEach(() => {
     token.generateProvisioningToken.mockReturnValue('raw-token');
     token.hashProvisioningToken.mockReturnValue('hash');
+    didOrchestration.rotateSipPassword.mockResolvedValue('qr-pw');
+    crypto.hashPassword.mockResolvedValue('qr-hash');
+    accountService.setSipPasswordHash.mockResolvedValue();
+  });
+
+  it('stores the token hash and returns raw token + links', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ expires_at: '2026-06-08T00:00:00Z' }] });
 
     const result = await provisioning.issueToken(account);
@@ -39,7 +46,25 @@ describe('issueToken', () => {
     expect(result.raw_token).toBe('raw-token');
     expect(result.provisioning_url).toBe('https://api.pivot-tech.io/v1/provision?token=raw-token');
     expect(result.qr_code_url).toMatch(/^data:image\/png;base64,/);
-    expect(result.deep_link).toContain('token=raw-token');
+  });
+
+  it('builds the QR and deep link from the Acrobits csc: URI with rotated SIP creds', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ expires_at: '2026-06-08T00:00:00Z' }] });
+
+    const result = await provisioning.issueToken(account);
+
+    expect(result.deep_link).toBe('csc:pivottech-abc:qr-pw@54873');
+    expect(didOrchestration.rotateSipPassword).toHaveBeenCalledWith('ep-1');
+    expect(accountService.setSipPasswordHash).toHaveBeenCalledWith('acc-1', 'qr-hash');
+    // provisioning_url keeps the token flow — csc: is QR/deep-link only.
+    expect(result.provisioning_url).toContain('token=raw-token');
+  });
+
+  it('throws INTERNAL_ERROR (no token row, no rotation) when SIP setup is incomplete', async () => {
+    await expect(provisioning.issueToken({ id: 'acc-1' }))
+      .rejects.toMatchObject({ code: 'INTERNAL_ERROR' });
+    expect(db.query).not.toHaveBeenCalled();
+    expect(didOrchestration.rotateSipPassword).not.toHaveBeenCalled();
   });
 });
 
@@ -115,6 +140,9 @@ describe('reissueToken', () => {
     accountService.getAccountById.mockResolvedValueOnce(account);
     token.generateProvisioningToken.mockReturnValue('raw-2');
     token.hashProvisioningToken.mockReturnValue('hash-2');
+    didOrchestration.rotateSipPassword.mockResolvedValue('qr-pw');
+    crypto.hashPassword.mockResolvedValue('qr-hash');
+    accountService.setSipPasswordHash.mockResolvedValue();
     db.query.mockResolvedValueOnce({ rows: [{ expires_at: 'x' }] });
 
     const result = await provisioning.reissueToken('acc-1');

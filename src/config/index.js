@@ -122,6 +122,13 @@ function buildConfig() {
       webhookSecret: process.env.SIGNALWIRE_WEBHOOK_SECRET || '',
     }),
 
+    acrobits: Object.freeze({
+      // Cloud Softphone app id for the csc: provisioning QR scheme. Not a
+      // secret — it identifies the published Pivot-Tech app. Defaulted so a
+      // missing env var can't break startup or emit a malformed csc: URI.
+      cloudId: process.env.ACROBITS_CLOUD_ID || '54873',
+    }),
+
     aws: Object.freeze({
       region: process.env.AWS_REGION || 'us-east-1',
       sqs: Object.freeze({
