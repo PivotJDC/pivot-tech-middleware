@@ -1,22 +1,95 @@
 /**
  * HTTP server entrypoint.
  *
- * Builds the app via the factory, binds the port, and wires graceful shutdown:
- * on SIGTERM/SIGINT (App Runner sends SIGTERM on deploy/scale-in) it stops
- * accepting new connections, drains in-flight requests, then closes the DB pool.
+ * Builds the app via the factory, verifies connectivity to PostgreSQL and
+ * Redis, binds the port, and wires graceful shutdown: on SIGTERM/SIGINT
+ * (App Runner sends SIGTERM on deploy/scale-in) it stops accepting new
+ * connections, drains in-flight requests, then closes the DB pool and Redis.
  * Unhandled rejections and uncaught exceptions are logged and exit non-zero so
  * the orchestrator restarts a known-bad instance rather than limping along.
+ *
+ * Every failure path here logs to stdout before exiting. App Runner forwards
+ * container stdout/stderr to the CloudWatch application log group
+ * (/aws/apprunner/<service>/<id>/application), so a deploy that crash-loops
+ * leaves a readable reason in CloudWatch instead of a silent restart cycle.
  */
-const { createApp, logger } = require('./app');
-const config = require('./config');
-const db = require('./db');
 
-const app = createApp();
+/**
+ * Last-resort startup logger. Used when the failure may have happened before
+ * (or inside) the Pino logger's own module graph — most commonly src/config
+ * throwing at require time on a missing env var. Emits one structured JSON
+ * line to stdout, matching the shape of our Pino logs, so CloudWatch picks
+ * it up no matter how early the boot failed.
+ */
+function logFatalToStdout(stage, err) {
+  // eslint-disable-next-line no-console
+  console.log(JSON.stringify({
+    level: 'fatal',
+    stage,
+    msg: `startup failed during ${stage}: ${err.message}`,
+    stack: err.stack,
+  }));
+}
 
-const server = app.listen(config.port, () => {
-  logger.info({ port: config.port, env: config.env }, 'pivot-tech-middleware listening');
-});
+// Module loading is wrapped so a require-time throw (config validation is
+// fail-fast by design) still produces a clear stdout line instead of a bare
+// Node stack trace with no context.
+let createApp;
+let logger;
+let config;
+let db;
+let cache;
+try {
+  /* eslint-disable global-require */
+  ({ createApp, logger } = require('./app'));
+  config = require('./config');
+  db = require('./db');
+  cache = require('./cache');
+  /* eslint-enable global-require */
+} catch (err) {
+  logFatalToStdout('module load (check required environment variables)', err);
+  process.exit(1);
+}
 
+/**
+ * Startup connectivity check. Confirms the instance can actually reach its
+ * backing services and says so explicitly either way, so an App Runner deploy
+ * that fails on networking (VPC connector, security groups, bad URL) is
+ * diagnosable from the application log alone.
+ */
+async function verifyConnectivity() {
+  try {
+    await db.healthCheck();
+    logger.info('startup connectivity check: database reachable');
+  } catch (err) {
+    logger.error(
+      { err: { message: err.message } },
+      'startup connectivity check: CANNOT REACH DATABASE — verify DATABASE_URL, '
+        + 'the App Runner VPC connector, and the RDS security group allow this service',
+    );
+    // DECISION: a production instance without its database is useless — fail
+    // the deploy so App Runner rolls back and the reason is in CloudWatch. In
+    // dev we boot anyway (matches existing behavior: /health reports 503).
+    if (config.isProduction) {
+      throw new Error(`database unreachable at startup: ${err.message}`);
+    }
+  }
+
+  try {
+    await cache.healthCheck();
+    logger.info('startup connectivity check: redis reachable');
+  } catch (err) {
+    logger.error(
+      { err: { message: err.message } },
+      'startup connectivity check: CANNOT REACH REDIS — verify REDIS_URL, '
+        + 'the App Runner VPC connector, and the ElastiCache security group allow this service',
+    );
+    // DECISION: Redis is logged but non-fatal — nothing on the request path
+    // consumes it yet (rate limiter not built). Revisit once it does.
+  }
+}
+
+let server;
 let shuttingDown = false;
 
 async function shutdown(signal) {
@@ -28,6 +101,7 @@ async function shutdown(signal) {
   server.close(async () => {
     try {
       await db.close();
+      await cache.close();
       logger.info('shutdown complete');
       process.exit(0);
     } catch (err) {
@@ -43,8 +117,26 @@ async function shutdown(signal) {
   }, 10000).unref();
 }
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+async function start() {
+  logger.info({ env: config.env, port: config.port }, 'starting pivot-tech-middleware');
+
+  await verifyConnectivity();
+
+  const app = createApp();
+  server = app.listen(config.port, () => {
+    logger.info({ port: config.port, env: config.env }, 'pivot-tech-middleware listening');
+  });
+
+  // listen() errors (port in use, EACCES) arrive as an 'error' event, not a
+  // throw — without this handler they would crash with no structured log line.
+  server.on('error', (err) => {
+    logger.fatal({ err: { message: err.message, code: err.code } }, `failed to bind port ${config.port}`);
+    process.exit(1);
+  });
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}
 
 process.on('unhandledRejection', (reason) => {
   logger.error({ reason }, 'unhandled promise rejection');
@@ -56,4 +148,9 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
-module.exports = server;
+start().catch((err) => {
+  // logger writes to stdout; the raw fallback below guarantees a line lands
+  // even if the failure was in the logging pipeline itself.
+  logFatalToStdout('startup', err);
+  process.exit(1);
+});
