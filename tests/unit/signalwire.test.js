@@ -30,7 +30,7 @@ describe('request retry policy', () => {
     expect(result).toEqual([{ number: '+12085550100' }]);
 
     const [url, init] = global.fetch.mock.calls[0];
-    expect(url).toContain('https://sw.signalwire.com/api/relay/rest/phone_numbers/search?area_code=208');
+    expect(url).toContain('https://sw.signalwire.com/api/relay/rest/phone_numbers/search?areacode=208');
     expect(init.headers.Authorization).toBe(`Basic ${Buffer.from('pid:tok').toString('base64')}`);
   });
 
@@ -69,10 +69,13 @@ describe('typed API calls', () => {
     expect(JSON.parse(init.body)).toEqual({ number: '+12085550100' });
   });
 
-  it('createSipEndpoint sends encryption + codecs', async () => {
+  it('createSipEndpoint posts to /endpoints/sip with encryption + codecs', async () => {
     global.fetch.mockResolvedValueOnce(ok({ id: 'ep-1' }));
     await signalwire.createSipEndpoint({ username: 'u', password: 'p', callerId: '+12085550100' });
-    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://sw.signalwire.com/api/relay/rest/endpoints/sip');
+    expect(init.method).toBe('POST');
+    const body = JSON.parse(init.body);
     expect(body).toEqual({
       username: 'u',
       password: 'p',
@@ -91,10 +94,21 @@ describe('typed API calls', () => {
     expect(JSON.parse(init.body)).toEqual({ sip_endpoint_id: 'ep-1' });
   });
 
-  it('deleteSipEndpoint returns null on 204', async () => {
+  it('updateSipEndpoint PUTs to /endpoints/sip/{id}', async () => {
+    global.fetch.mockResolvedValueOnce(ok({ id: 'ep-1' }));
+    await signalwire.updateSipEndpoint('ep-1', { password: 'rotated' });
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://sw.signalwire.com/api/relay/rest/endpoints/sip/ep-1');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({ password: 'rotated' });
+  });
+
+  it('deleteSipEndpoint hits /endpoints/sip/{id} and returns null on 204', async () => {
     global.fetch.mockResolvedValueOnce({ ok: true, status: 204, text: async () => '' });
     const res = await signalwire.deleteSipEndpoint('ep-1');
     expect(res).toBeNull();
-    expect(global.fetch.mock.calls[0][1].method).toBe('DELETE');
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://sw.signalwire.com/api/relay/rest/endpoints/sip/ep-1');
+    expect(init.method).toBe('DELETE');
   });
 });

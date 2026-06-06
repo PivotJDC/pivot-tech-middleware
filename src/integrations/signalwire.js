@@ -105,9 +105,11 @@ async function request(method, path, body) {
 
 /** Search available numbers in an area code. Returns the raw results array. */
 async function searchAvailableNumbers(areaCode, maxResults = 5) {
+  // NB: the documented param is `areacode` (no underscore) — `area_code` is
+  // silently ignored and returns numbers from any region.
   const data = await request(
     'GET',
-    `/api/relay/rest/phone_numbers/search?area_code=${encodeURIComponent(areaCode)}&max_results=${maxResults}`,
+    `/api/relay/rest/phone_numbers/search?areacode=${encodeURIComponent(areaCode)}&max_results=${maxResults}`,
   );
   // SignalWire returns { data: [ { number, ... } ] } or an array; normalize.
   if (Array.isArray(data)) return data;
@@ -121,7 +123,7 @@ async function purchaseNumber(e164) {
 
 /** Create a SIP endpoint. Returns the created endpoint resource (incl. id). */
 async function createSipEndpoint({ username, password, callerId }) {
-  return request('POST', '/api/relay/rest/sip_endpoints', {
+  return request('POST', '/api/relay/rest/endpoints/sip', {
     username,
     password,
     caller_id: callerId,
@@ -139,7 +141,7 @@ async function assignNumberToEndpoint(numberSid, sipEndpointId) {
 
 /** Update a SIP endpoint — used to rotate the password at provisioning time. */
 async function updateSipEndpoint(sipEndpointId, fields) {
-  return request('PUT', `/api/relay/rest/sip_endpoints/${sipEndpointId}`, fields);
+  return request('PUT', `/api/relay/rest/endpoints/sip/${sipEndpointId}`, fields);
 }
 
 /** Assign a number (by sid) to a 10DLC/TCR messaging campaign. */
@@ -156,7 +158,7 @@ async function submitPort(payload) {
 
 /** Delete a SIP endpoint (on account cancellation). */
 async function deleteSipEndpoint(sipEndpointId) {
-  return request('DELETE', `/api/relay/rest/sip_endpoints/${sipEndpointId}`);
+  return request('DELETE', `/api/relay/rest/endpoints/sip/${sipEndpointId}`);
 }
 
 module.exports = {
