@@ -56,36 +56,35 @@ try {
  * backing services and says so explicitly either way, so an App Runner deploy
  * that fails on networking (VPC connector, security groups, bad URL) is
  * diagnosable from the application log alone.
+ *
+ * Diagnostic only — never fatal. A failed ping logs a warning and startup
+ * continues: the server binds and serves regardless, and /health performs the
+ * live DB check that pulls an unhealthy instance out of service. A transient
+ * blip at boot shouldn't kill an instance that would recover seconds later.
  */
 async function verifyConnectivity() {
   try {
     await db.healthCheck();
     logger.info('startup connectivity check: database reachable');
   } catch (err) {
-    logger.error(
+    logger.warn(
       { err: { message: err.message, stack: err.stack } },
       'startup connectivity check: CANNOT REACH DATABASE — verify DATABASE_URL, '
-        + 'the App Runner VPC connector, and the RDS security group allow this service',
+        + 'the App Runner VPC connector, and the RDS security group allow this service. '
+        + 'Starting anyway; /health will report 503 until the database is reachable',
     );
-    // DECISION: a production instance without its database is useless — fail
-    // the deploy so App Runner rolls back and the reason is in CloudWatch. In
-    // dev we boot anyway (matches existing behavior: /health reports 503).
-    if (config.isProduction) {
-      throw new Error(`database unreachable at startup: ${err.message}`);
-    }
   }
 
   try {
     await cache.healthCheck();
     logger.info('startup connectivity check: redis reachable');
   } catch (err) {
-    logger.error(
+    logger.warn(
       { err: { message: err.message, stack: err.stack } },
       'startup connectivity check: CANNOT REACH REDIS — verify REDIS_URL, '
-        + 'the App Runner VPC connector, and the ElastiCache security group allow this service',
+        + 'the App Runner VPC connector, and the ElastiCache security group allow this service. '
+        + 'Starting anyway',
     );
-    // DECISION: Redis is logged but non-fatal — nothing on the request path
-    // consumes it yet (rate limiter not built). Revisit once it does.
   }
 }
 
