@@ -1,0 +1,26 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadAppSecret",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:us-east-1:430155298813:secret:pivot-tech/middleware/all-*"
+    },
+    {
+      "Sid": "UseAppQueues",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:SendMessage",
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl"
+      ],
+      "Resource": [
+        "arn:aws:sqs:us-east-1:430155298813:pivot-tech-did-assignment",
+        "arn:aws:sqs:us-east-1:430155298813:pivot-tech-notifications"
+      ]
+    }
+  ]
+}
