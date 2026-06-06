@@ -57,7 +57,16 @@ function validate() {
   }
 }
 
-validate();
+/**
+ * Unescape PEM key material injected via environment variables. Secrets
+ * Manager → App Runner env injection delivers multi-line PEM keys as a single
+ * line with literal "\n" two-character sequences; jsonwebtoken/crypto need
+ * real newlines or RS256 sign/verify fails with a cryptic key-parse error.
+ * Safe on already-correct values (nothing to replace).
+ */
+function unescapePem(value) {
+  return (value || '').replace(/\\n/g, '\n');
+}
 
 /** Parse a comma-separated env var into a trimmed, non-empty string array. */
 function parseList(value) {
@@ -74,68 +83,89 @@ function parseIntOr(value, fallback) {
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
-const config = Object.freeze({
-  env: NODE_ENV,
-  isProduction: NODE_ENV === 'production',
-  isTest: NODE_ENV === 'test',
-  port: parseIntOr(process.env.PORT, 3000),
-  logLevel: process.env.LOG_LEVEL || 'info',
+function buildConfig() {
+  return Object.freeze({
+    env: NODE_ENV,
+    isProduction: NODE_ENV === 'production',
+    isTest: NODE_ENV === 'test',
+    port: parseIntOr(process.env.PORT, 3000),
+    logLevel: process.env.LOG_LEVEL || 'info',
 
-  database: Object.freeze({
-    url: process.env.DATABASE_URL,
-  }),
-
-  redis: Object.freeze({
-    url: process.env.REDIS_URL || 'redis://localhost:6379',
-  }),
-
-  jwt: Object.freeze({
-    // RS256: JWT_SECRET holds the signing (private) key, JWT_PUBLIC_KEY verifies.
-    signingKey: process.env.JWT_SECRET || '',
-    publicKey: process.env.JWT_PUBLIC_KEY || '',
-    customerTtl: '24h',
-  }),
-
-  admin: Object.freeze({
-    jwtSecret: process.env.ADMIN_JWT_SECRET || '',
-    ipAllowlist: Object.freeze(parseList(process.env.ADMIN_IP_ALLOWLIST)),
-    jwtTtl: '8h',
-  }),
-
-  encryptionKey: process.env.ENCRYPTION_KEY || '',
-
-  signalwire: Object.freeze({
-    space: process.env.SIGNALWIRE_SPACE || '',
-    projectId: process.env.SIGNALWIRE_PROJECT_ID || '',
-    apiToken: process.env.SIGNALWIRE_API_TOKEN || '',
-    webhookSecret: process.env.SIGNALWIRE_WEBHOOK_SECRET || '',
-  }),
-
-  aws: Object.freeze({
-    region: process.env.AWS_REGION || 'us-east-1',
-    sqs: Object.freeze({
-      didAssignmentQueueUrl: process.env.SQS_DID_ASSIGNMENT_QUEUE_URL || '',
-      notificationQueueUrl: process.env.SQS_NOTIFICATION_QUEUE_URL || '',
+    database: Object.freeze({
+      url: process.env.DATABASE_URL,
     }),
-  }),
 
-  apns: Object.freeze({
-    keyId: process.env.APNS_KEY_ID || '',
-    teamId: process.env.APNS_TEAM_ID || '',
-    bundleId: process.env.APNS_BUNDLE_ID || 'io.pivot-tech.dialer',
-    privateKey: process.env.APNS_PRIVATE_KEY || '',
-  }),
+    redis: Object.freeze({
+      url: process.env.REDIS_URL || 'redis://localhost:6379',
+    }),
 
-  fcm: Object.freeze({
-    projectId: process.env.FCM_PROJECT_ID || '',
-    privateKey: process.env.FCM_PRIVATE_KEY || '',
-    clientEmail: process.env.FCM_CLIENT_EMAIL || '',
-  }),
+    jwt: Object.freeze({
+    // RS256: JWT_SECRET holds the signing (private) key, JWT_PUBLIC_KEY verifies.
+      signingKey: unescapePem(process.env.JWT_SECRET),
+      publicKey: unescapePem(process.env.JWT_PUBLIC_KEY),
+      customerTtl: '24h',
+    }),
 
-  provisioning: Object.freeze({
-    baseUrl: process.env.PROVISIONING_BASE_URL || 'https://api.pivot-tech.io',
-    tokenTtlHours: parseIntOr(process.env.PROVISIONING_TOKEN_TTL_HOURS, 72),
-  }),
-});
+    admin: Object.freeze({
+      jwtSecret: process.env.ADMIN_JWT_SECRET || '',
+      ipAllowlist: Object.freeze(parseList(process.env.ADMIN_IP_ALLOWLIST)),
+      jwtTtl: '8h',
+    }),
+
+    encryptionKey: process.env.ENCRYPTION_KEY || '',
+
+    signalwire: Object.freeze({
+      space: process.env.SIGNALWIRE_SPACE || '',
+      projectId: process.env.SIGNALWIRE_PROJECT_ID || '',
+      apiToken: process.env.SIGNALWIRE_API_TOKEN || '',
+      webhookSecret: process.env.SIGNALWIRE_WEBHOOK_SECRET || '',
+    }),
+
+    aws: Object.freeze({
+      region: process.env.AWS_REGION || 'us-east-1',
+      sqs: Object.freeze({
+        didAssignmentQueueUrl: process.env.SQS_DID_ASSIGNMENT_QUEUE_URL || '',
+        notificationQueueUrl: process.env.SQS_NOTIFICATION_QUEUE_URL || '',
+      }),
+    }),
+
+    apns: Object.freeze({
+      keyId: process.env.APNS_KEY_ID || '',
+      teamId: process.env.APNS_TEAM_ID || '',
+      bundleId: process.env.APNS_BUNDLE_ID || 'io.pivot-tech.dialer',
+      // DECISION: APNS/FCM private keys are PEM too — same Secrets Manager
+      // literal-\n injection issue as the JWT keys, so unescape them the same
+      // way. ADMIN_JWT_SECRET is deliberately NOT unescaped: it is an HS256
+      // shared secret, not PEM, and must be used byte-for-byte as provided.
+      privateKey: unescapePem(process.env.APNS_PRIVATE_KEY),
+    }),
+
+    fcm: Object.freeze({
+      projectId: process.env.FCM_PROJECT_ID || '',
+      privateKey: unescapePem(process.env.FCM_PRIVATE_KEY),
+      clientEmail: process.env.FCM_CLIENT_EMAIL || '',
+    }),
+
+    provisioning: Object.freeze({
+      baseUrl: process.env.PROVISIONING_BASE_URL || 'https://api.pivot-tech.io',
+      tokenTtlHours: parseIntOr(process.env.PROVISIONING_TOKEN_TTL_HOURS, 72),
+    }),
+  });
+}
+
+// Initialization is wrapped so a config failure (most commonly validate()
+// throwing on missing env vars) always lands in the logs. This runs at require
+// time — before Pino exists — so console.error is the only safe sink; App
+// Runner forwards it to the CloudWatch application log group. Rethrow so the
+// process still fails fast (server.js logs its own structured line and exits).
+let config;
+try {
+  validate();
+  config = buildConfig();
+} catch (err) {
+  // eslint-disable-next-line no-console
+  console.error(`FATAL: configuration failed to initialize: ${err.message}\n${err.stack}`);
+  throw err;
+}
 
 module.exports = config;
