@@ -281,14 +281,16 @@ Never call SignalWire directly from route handlers — always via the integratio
 
 ```javascript
 // Search available phone numbers
-GET /api/relay/rest/phone_numbers/search?area_code=207&max_results=5
+// NB: the query param is `areacode` (no underscore) — `area_code` is silently
+// ignored by SignalWire and returns numbers from any region.
+GET /api/relay/rest/phone_numbers/search?areacode=207&max_results=5
 
 // Purchase a phone number
 POST /api/relay/rest/phone_numbers
 { "number": "+12075550100" }
 
 // Create SIP endpoint
-POST /api/relay/rest/sip_endpoints
+POST /api/relay/rest/endpoints/sip
 {
   "username": "pivottech-{uuid}",
   "password": "{generated}",
@@ -300,6 +302,10 @@ POST /api/relay/rest/sip_endpoints
 // Assign number to SIP endpoint
 PUT /api/relay/rest/phone_numbers/{sid}
 { "sip_endpoint_id": "{endpoint_id}" }
+
+// Update SIP endpoint (e.g. rotate password at provisioning time)
+PUT /api/relay/rest/endpoints/sip/{endpoint_id}
+{ "password": "{generated}" }
 
 // Submit port-in
 POST /api/relay/rest/phone_numbers/port
@@ -313,7 +319,7 @@ POST /api/relay/rest/phone_numbers/port
 }
 
 // Delete SIP endpoint (on account cancellation)
-DELETE /api/relay/rest/sip_endpoints/{endpoint_id}
+DELETE /api/relay/rest/endpoints/sip/{endpoint_id}
 ```
 
 ### Retry policy for SignalWire calls:
