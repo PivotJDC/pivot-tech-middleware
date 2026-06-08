@@ -29,15 +29,14 @@ const adminRouter = require('./routes/admin');
 
 // Browser origins always allowed, regardless of environment. Production custom
 // domains are added via CORS_ORIGINS (config.cors.origins) without a deploy.
+// NB: explicit allowlist (no broad *.netlify.app wildcard) — with
+// credentials:true a wildcard would let any Netlify-hosted site make
+// credentialed requests. Scope to the exact dashboard origin instead.
 const STATIC_CORS_ORIGINS = [
-  'https://pivot-tech-dashboard.netlify.app',
+  'https://boisterous-twilight-fd4b28.netlify.app',
   'http://localhost:3000',
+  'http://localhost:3001',
 ];
-
-// Netlify preview deploys get a per-branch subdomain (e.g.
-// deploy-preview-12--pivot-tech-dashboard.netlify.app), so allow any
-// *.netlify.app host. Anchored to avoid matching e.g. evil-netlify.app.com.
-const NETLIFY_HOST = /^https:\/\/([a-z0-9-]+\.)*netlify\.app$/i;
 
 /** Build the cors options, merging static defaults with CORS_ORIGINS. */
 function corsOptions() {
@@ -47,14 +46,13 @@ function corsOptions() {
       // No Origin header → not a browser CORS request (curl, health checks,
       // server-to-server). Allow; there is nothing to protect cross-origin.
       if (!origin) return callback(null, true);
-      const allowed = allowList.has(origin) || NETLIFY_HOST.test(origin);
       // On a disallowed origin we resolve false (not an error): cors simply
       // omits the Access-Control-Allow-Origin header and the browser blocks it.
-      return callback(null, allowed);
+      return callback(null, allowList.has(origin));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
     maxAge: 86400,
   };
 }

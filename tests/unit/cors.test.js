@@ -11,19 +11,11 @@ const app = createApp();
 const ACAO = 'access-control-allow-origin';
 
 describe('CORS', () => {
-  it('allows localhost:3000 (local dev)', async () => {
-    const res = await request(app).get('/ping').set('Origin', 'http://localhost:3000');
-    expect(res.headers[ACAO]).toBe('http://localhost:3000');
-  });
-
-  it('allows the Netlify production origin', async () => {
-    const origin = 'https://pivot-tech-dashboard.netlify.app';
-    const res = await request(app).get('/ping').set('Origin', origin);
-    expect(res.headers[ACAO]).toBe(origin);
-  });
-
-  it('allows any *.netlify.app preview subdomain', async () => {
-    const origin = 'https://deploy-preview-12--pivot-tech-dashboard.netlify.app';
+  it.each([
+    ['http://localhost:3000', 'local dev'],
+    ['http://localhost:3001', 'local dev alt port'],
+    ['https://boisterous-twilight-fd4b28.netlify.app', 'Netlify production'],
+  ])('allows %s (%s)', async (origin) => {
     const res = await request(app).get('/ping').set('Origin', origin);
     expect(res.headers[ACAO]).toBe(origin);
   });
@@ -40,12 +32,12 @@ describe('CORS', () => {
     expect(res.status).toBe(200); // request still proceeds; browser blocks the read
   });
 
-  it('does not match a look-alike netlify domain', async () => {
-    const res = await request(app).get('/ping').set('Origin', 'https://evil-netlify.app.attacker.com');
+  it('does not allow an arbitrary *.netlify.app site (no wildcard)', async () => {
+    const res = await request(app).get('/ping').set('Origin', 'https://some-other-site.netlify.app');
     expect(res.headers[ACAO]).toBeUndefined();
   });
 
-  it('answers preflight (OPTIONS) for an allowed origin with the allowed methods', async () => {
+  it('reflects only the configured headers and credentials on preflight', async () => {
     const res = await request(app)
       .options('/v1/accounts')
       .set('Origin', 'http://localhost:3000')
@@ -53,5 +45,7 @@ describe('CORS', () => {
     expect(res.status).toBe(204);
     expect(res.headers[ACAO]).toBe('http://localhost:3000');
     expect(res.headers['access-control-allow-methods']).toContain('POST');
+    expect(res.headers['access-control-allow-headers']).toBe('Content-Type,Authorization');
+    expect(res.headers['access-control-allow-credentials']).toBe('true');
   });
 });
