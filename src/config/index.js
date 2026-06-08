@@ -92,6 +92,13 @@ function buildConfig() {
     port: parseIntOr(process.env.PORT, 3000),
     logLevel: process.env.LOG_LEVEL || 'info',
 
+    // Extra browser origins allowed via CORS, on top of the hardcoded defaults
+    // in app.js. Comma-separated so production domains (custom dashboard URLs)
+    // can be added through Secrets Manager without a code deploy.
+    cors: Object.freeze({
+      origins: Object.freeze(parseList(process.env.CORS_ORIGINS)),
+    }),
+
     database: Object.freeze({
       url: process.env.DATABASE_URL,
     }),

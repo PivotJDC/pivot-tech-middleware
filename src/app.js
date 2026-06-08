@@ -12,6 +12,7 @@
  */
 const crypto = require('crypto');
 const express = require('express');
+const cors = require('cors');
 const pino = require('pino');
 const pinoHttp = require('pino-http');
 
@@ -26,6 +27,38 @@ const provisionRouter = require('./routes/v1/provision');
 const webhooksRouter = require('./routes/v1/webhooks');
 const adminRouter = require('./routes/admin');
 
+// Browser origins always allowed, regardless of environment. Production custom
+// domains are added via CORS_ORIGINS (config.cors.origins) without a deploy.
+const STATIC_CORS_ORIGINS = [
+  'https://pivot-tech-dashboard.netlify.app',
+  'http://localhost:3000',
+];
+
+// Netlify preview deploys get a per-branch subdomain (e.g.
+// deploy-preview-12--pivot-tech-dashboard.netlify.app), so allow any
+// *.netlify.app host. Anchored to avoid matching e.g. evil-netlify.app.com.
+const NETLIFY_HOST = /^https:\/\/([a-z0-9-]+\.)*netlify\.app$/i;
+
+/** Build the cors options, merging static defaults with CORS_ORIGINS. */
+function corsOptions() {
+  const allowList = new Set([...STATIC_CORS_ORIGINS, ...config.cors.origins]);
+  return {
+    origin(origin, callback) {
+      // No Origin header → not a browser CORS request (curl, health checks,
+      // server-to-server). Allow; there is nothing to protect cross-origin.
+      if (!origin) return callback(null, true);
+      const allowed = allowList.has(origin) || NETLIFY_HOST.test(origin);
+      // On a disallowed origin we resolve false (not an error): cors simply
+      // omits the Access-Control-Allow-Origin header and the browser blocks it.
+      return callback(null, allowed);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
+    maxAge: 86400,
+  };
+}
+
 function createApp() {
   const app = express();
 
@@ -33,6 +66,10 @@ function createApp() {
   // trust one proxy hop so rate limiting and the admin IP allowlist see it.
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
+
+  // CORS first, so preflight (OPTIONS) and every response — including 404s and
+  // error envelopes — carry the right headers for the browser dashboard.
+  app.use(cors(corsOptions()));
 
   // genReqId produces the `req_...` trace ids surfaced in the error envelope
   // (CLAUDE.md "Error Response Format"); honors an inbound X-Request-Id if set.
