@@ -103,14 +103,31 @@ async function request(method, path, body) {
 
 // --- Typed API surface (CLAUDE.md "Key API calls needed") ---
 
-/** Search available numbers in an area code. Returns the raw results array. */
-async function searchAvailableNumbers(areaCode, maxResults = 5) {
+/**
+ * Search available numbers in an area code. Returns the raw results array.
+ * @param {string} areaCode - 3-digit NPA.
+ * @param {object} [options]
+ * @param {number} [options.maxResults=5] - cap on results (SignalWire max 100).
+ * @param {string} [options.contains] - 3-7 digit pattern anywhere in the number.
+ * @param {string} [options.startsWith] - 3-7 digit pattern at the start.
+ * @param {string} [options.endsWith] - 3-7 digit pattern at the end.
+ */
+async function searchAvailableNumbers(areaCode, options = {}) {
+  const {
+    maxResults = 5, contains, startsWith, endsWith,
+  } = options;
   // NB: the documented param is `areacode` (no underscore) — `area_code` is
-  // silently ignored and returns numbers from any region.
-  const data = await request(
-    'GET',
-    `/api/relay/rest/phone_numbers/search?areacode=${encodeURIComponent(areaCode)}&max_results=${maxResults}`,
-  );
+  // silently ignored and returns numbers from any region. URLSearchParams keeps
+  // areacode first and handles encoding.
+  const params = new URLSearchParams({
+    areacode: areaCode,
+    max_results: String(maxResults),
+  });
+  if (contains) params.set('contains', contains);
+  if (startsWith) params.set('starts_with', startsWith);
+  if (endsWith) params.set('ends_with', endsWith);
+
+  const data = await request('GET', `/api/relay/rest/phone_numbers/search?${params.toString()}`);
   // SignalWire returns { data: [ { number, ... } ] } or an array; normalize.
   if (Array.isArray(data)) return data;
   return (data && data.data) || [];

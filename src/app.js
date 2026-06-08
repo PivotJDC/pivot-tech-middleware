@@ -21,6 +21,7 @@ const { logger, REDACT_PATHS } = require('./utils/logger');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const accountsRouter = require('./routes/v1/accounts');
 const authRouter = require('./routes/v1/auth');
+const didsRouter = require('./routes/v1/dids');
 const provisionRouter = require('./routes/v1/provision');
 const webhooksRouter = require('./routes/v1/webhooks');
 const adminRouter = require('./routes/admin');
@@ -82,6 +83,7 @@ function createApp() {
   // are built.
   app.use('/v1/auth', authRouter);
   app.use('/v1/accounts', accountsRouter);
+  app.use('/v1/numbers', didsRouter);
   app.use('/v1/provision', provisionRouter);
   app.use('/v1/webhooks', webhooksRouter);
   app.use('/admin', adminRouter);
