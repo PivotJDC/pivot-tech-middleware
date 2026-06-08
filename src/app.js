@@ -33,7 +33,7 @@ const adminRouter = require('./routes/admin');
 // credentials:true a wildcard would let any Netlify-hosted site make
 // credentialed requests. Scope to the exact dashboard origin instead.
 const STATIC_CORS_ORIGINS = [
-  'https://boisterous-twilight-fd4b28.netlify.app',
+  'https://pivot-mobility.netlify.app',
   'http://localhost:3000',
   'http://localhost:3001',
 ];

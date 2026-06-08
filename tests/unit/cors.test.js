@@ -14,7 +14,7 @@ describe('CORS', () => {
   it.each([
     ['http://localhost:3000', 'local dev'],
     ['http://localhost:3001', 'local dev alt port'],
-    ['https://boisterous-twilight-fd4b28.netlify.app', 'Netlify production'],
+    ['https://pivot-mobility.netlify.app', 'Netlify production'],
   ])('allows %s (%s)', async (origin) => {
     const res = await request(app).get('/ping').set('Origin', origin);
     expect(res.headers[ACAO]).toBe(origin);
