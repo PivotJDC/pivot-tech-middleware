@@ -1,4 +1,4 @@
-jest.mock('../../src/config', () => ({ admin: { jwtSecret: 'adminsecret', ipAllowlist: [] } }));
+jest.mock('../../src/config', () => ({ isProduction: false, admin: { jwtSecret: 'adminsecret', ipAllowlist: [] } }));
 
 const jwt = require('jsonwebtoken');
 const config = require('../../src/config');
@@ -9,6 +9,7 @@ function sign(payload) {
 }
 
 beforeEach(() => {
+  config.isProduction = false;
   config.admin.jwtSecret = 'adminsecret';
   config.admin.ipAllowlist = [];
 });
@@ -56,12 +57,23 @@ describe('adminAuth', () => {
     expect(next).toHaveBeenCalledWith(expect.objectContaining({ code: 'UNAUTHORIZED' }));
   });
 
-  it('rejects an IP outside the allowlist with FORBIDDEN', () => {
+  it('rejects an IP outside the allowlist with FORBIDDEN in production', () => {
+    config.isProduction = true;
     config.admin.ipAllowlist = ['10.0.0.0/8'];
     const req = { headers: { authorization: `Bearer ${sign({ sub: 'admin-1' })}` }, ip: '8.8.8.8' };
     const next = jest.fn();
     adminAuth(req, {}, next);
     expect(next).toHaveBeenCalledWith(expect.objectContaining({ code: 'FORBIDDEN' }));
+  });
+
+  it('skips the IP allowlist outside production', () => {
+    config.isProduction = false;
+    config.admin.ipAllowlist = ['10.0.0.0/8'];
+    const req = { headers: { authorization: `Bearer ${sign({ sub: 'admin-1' })}` }, ip: '8.8.8.8' };
+    const next = jest.fn();
+    adminAuth(req, {}, next);
+    expect(next).toHaveBeenCalledWith();
+    expect(req.admin.id).toBe('admin-1');
   });
 
   it('fails closed when no admin secret is configured', () => {

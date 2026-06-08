@@ -2,8 +2,9 @@
  * Admin authentication middleware.
  *
  * Enforces, in order:
- *   1. IP allowlist (CIDR-aware for IPv4; exact match otherwise). Skipped when
- *      ADMIN_IP_ALLOWLIST is empty.
+ *   1. IP allowlist (CIDR-aware for IPv4; exact match otherwise). Enforced in
+ *      production only; skipped outside production or when ADMIN_IP_ALLOWLIST
+ *      is empty.
  *   2. A Bearer admin JWT (HS256, signed with ADMIN_JWT_SECRET) that carries a
  *      `sub` claim identifying the admin — used for audit logging on actions
  *      like forced status changes.
@@ -60,9 +61,10 @@ function verifyAdminToken(raw) {
 }
 
 function adminAuth(req, res, next) {
-  // 1. IP allowlist (cheap reject before any crypto).
+  // 1. IP allowlist (cheap reject before any crypto). Enforced in production
+  //    only — in development/test the dashboard can be reached from any IP.
   const allowlist = config.admin.ipAllowlist;
-  if (allowlist.length > 0 && !isIpAllowed(req.ip, allowlist)) {
+  if (config.isProduction && allowlist.length > 0 && !isIpAllowed(req.ip, allowlist)) {
     next(errors.forbidden('Admin access is not permitted from this address.'));
     return;
   }
