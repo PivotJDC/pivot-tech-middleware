@@ -1,8 +1,8 @@
-jest.mock('../../src/integrations/signalwire');
+jest.mock('../../src/integrations/telnyx');
 
 const express = require('express');
 const request = require('supertest');
-const signalwire = require('../../src/integrations/signalwire');
+const telnyx = require('../../src/integrations/telnyx');
 const didsRouter = require('../../src/routes/v1/dids');
 const { errorHandler } = require('../../src/middleware/errorHandler');
 
@@ -19,7 +19,7 @@ describe('GET /v1/numbers/available', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('returns numbers mapped to { e164, formatted, area_code } (no auth required)', async () => {
-    signalwire.searchAvailableNumbers.mockResolvedValueOnce([
+    telnyx.searchAvailableNumbers.mockResolvedValueOnce([
       { number: '+12085550100' },
       { number: '+12085550142' },
     ]);
@@ -36,25 +36,25 @@ describe('GET /v1/numbers/available', () => {
   });
 
   it('defaults max_results to 50 and passes it to the integration', async () => {
-    signalwire.searchAvailableNumbers.mockResolvedValueOnce([]);
+    telnyx.searchAvailableNumbers.mockResolvedValueOnce([]);
 
     await request(app).get('/v1/numbers/available?areacode=630');
 
-    expect(signalwire.searchAvailableNumbers).toHaveBeenCalledWith(
+    expect(telnyx.searchAvailableNumbers).toHaveBeenCalledWith(
       '630',
       expect.objectContaining({ maxResults: 50 }),
     );
   });
 
   it('forwards contains / starts_with / ends_with and a clamped max_results', async () => {
-    signalwire.searchAvailableNumbers.mockResolvedValueOnce([]);
+    telnyx.searchAvailableNumbers.mockResolvedValueOnce([]);
 
     await request(app).get(
       '/v1/numbers/available?areacode=208&max_results=500&contains=420&starts_with=208&ends_with=99',
     );
 
-    expect(signalwire.searchAvailableNumbers).toHaveBeenCalledWith('208', {
-      maxResults: 100, // 500 clamped to the SignalWire ceiling
+    expect(telnyx.searchAvailableNumbers).toHaveBeenCalledWith('208', {
+      maxResults: 100, // 500 clamped to the Telnyx ceiling
       contains: '420',
       startsWith: '208',
       endsWith: undefined, // "99" is < 3 digits, dropped as malformed
@@ -66,7 +66,7 @@ describe('GET /v1/numbers/available', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatchObject({ code: 'VALIDATION_ERROR', field: 'areacode' });
-    expect(signalwire.searchAvailableNumbers).not.toHaveBeenCalled();
+    expect(telnyx.searchAvailableNumbers).not.toHaveBeenCalled();
   });
 
   it('400s when areacode is not 3 digits', async () => {
@@ -74,11 +74,11 @@ describe('GET /v1/numbers/available', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
-    expect(signalwire.searchAvailableNumbers).not.toHaveBeenCalled();
+    expect(telnyx.searchAvailableNumbers).not.toHaveBeenCalled();
   });
 
-  it('returns an empty list when SignalWire has no matches', async () => {
-    signalwire.searchAvailableNumbers.mockResolvedValueOnce([]);
+  it('returns an empty list when Telnyx has no matches', async () => {
+    telnyx.searchAvailableNumbers.mockResolvedValueOnce([]);
 
     const res = await request(app).get('/v1/numbers/available?areacode=331');
 

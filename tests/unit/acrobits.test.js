@@ -1,5 +1,3 @@
-jest.mock('../../src/config', () => ({ signalwire: { space: 'pivot-tech' } }));
-
 const acrobits = require('../../src/integrations/acrobits');
 
 describe('acrobits.buildAccountXml', () => {
@@ -14,7 +12,7 @@ describe('acrobits.buildAccountXml', () => {
     expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
     expect(xml).toContain('<username>pivottech-abc</username>');
     expect(xml).toContain('<password>sip-secret-123</password>');
-    expect(xml).toContain('<domain>pivot-tech.sip.signalwire.com</domain>');
+    expect(xml).toContain('<domain>sip.telnyx.com</domain>');
     expect(xml).toContain('<port>5061</port>');
     expect(xml).toContain('<transport>TLS</transport>');
     expect(xml).toContain('<srtp>required</srtp>');

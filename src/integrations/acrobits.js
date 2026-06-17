@@ -5,8 +5,13 @@
  * This is the one place the plaintext SIP password is rendered into a response.
  * Callers must pass it in memory only; it is never logged or persisted here.
  */
-const config = require('../config');
 const { formatNational } = require('../utils/e164');
+
+// DECISION: Jim's migration note pointed at provisioningService.js, but the
+// provisioning XML domain is actually constructed here. Telnyx uses a single
+// shared SIP domain (no per-customer space like SignalWire), so this is now a
+// constant rather than derived from config.
+const SIP_DOMAIN = 'sip.telnyx.com';
 
 /** Escape the five XML special characters so values can't break the document. */
 function escapeXml(value) {
@@ -25,7 +30,7 @@ function escapeXml(value) {
  * @returns {string} XML document (Content-Type: application/xml)
  */
 function buildAccountXml({ sipUsername, sipPassword, phoneE164 }) {
-  const domain = `${config.signalwire.space}.sip.signalwire.com`;
+  const domain = SIP_DOMAIN;
   const displayName = formatNational(phoneE164);
 
   return [

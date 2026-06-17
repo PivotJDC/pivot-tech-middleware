@@ -18,7 +18,7 @@
 const crypto = require('crypto');
 const config = require('../config');
 const db = require('../db');
-const signalwire = require('../integrations/signalwire');
+const telnyx = require('../integrations/telnyx');
 const notificationService = require('./notificationService');
 const { areaCodeOf } = require('../utils/e164');
 const { logger } = require('../utils/logger');
@@ -99,9 +99,9 @@ async function completePort(client, port, data) {
     }
   }
 
-  // Assign the number to the 10DLC campaign on SignalWire.
+  // Assign the number to the 10DLC campaign on Telnyx.
   if (numberSid && signalwireCampaignId) {
-    await signalwire.assignNumberToCampaign(numberSid, signalwireCampaignId);
+    await telnyx.assignNumberToCampaign(numberSid, signalwireCampaignId);
   } else {
     logger.warn(
       {

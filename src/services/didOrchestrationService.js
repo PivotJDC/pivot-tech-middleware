@@ -1,28 +1,28 @@
 /**
- * DID orchestration — the SignalWire side of provisioning a new line.
+ * DID orchestration — the Telnyx side of provisioning a new line.
  *
- * assignDid() runs the full assignment sequence against SignalWire and returns
+ * assignDid() runs the full assignment sequence against Telnyx and returns
  * the resulting credentials. It performs NO database writes; the caller
  * (accountService) persists the account + did rows transactionally. Keeping all
- * the external side effects here, before any DB write, means a SignalWire
+ * the external side effects here, before any DB write, means a Telnyx
  * failure never leaves a half-written account.
  *
  * Sequence: pick area code (by market) -> search available numbers -> purchase
  * -> create SIP endpoint -> assign number to endpoint -> return credentials.
  */
 const nodeCrypto = require('crypto');
-const signalwire = require('../integrations/signalwire');
+const telnyx = require('../integrations/telnyx');
 const crypto = require('../utils/crypto');
 const { logger } = require('../utils/logger');
 const { errors, AppError } = require('../middleware/errorHandler');
 const MARKET_AREA_CODES = require('../config/markets');
 
-/** Pull the e164 string off a SignalWire search/number resource. */
+/** Pull the e164 string off a Telnyx search/number resource. */
 function numberOf(resource) {
   return resource.number || resource.e164;
 }
 
-/** Pull the id/sid off a SignalWire resource. */
+/** Pull the id/sid off a Telnyx resource. */
 function idOf(resource) {
   return resource.id || resource.sid;
 }
@@ -41,7 +41,7 @@ async function findAvailableNumber(market) {
   for (let i = 0; i < areaCodes.length; i += 1) {
     const areaCode = areaCodes[i];
     // eslint-disable-next-line no-await-in-loop
-    const results = await signalwire.searchAvailableNumbers(areaCode);
+    const results = await telnyx.searchAvailableNumbers(areaCode);
     if (results.length > 0) {
       // Surface when we landed on a fallback — a market whose primary area
       // code keeps coming up dry is an inventory signal ops should see.
@@ -82,24 +82,24 @@ async function findAvailableNumber(market) {
 async function assignDid(market) {
   const { e164, areaCode } = await findAvailableNumber(market);
 
-  const purchase = await signalwire.purchaseNumber(e164);
+  const purchase = await telnyx.purchaseNumber(e164);
   const signalwireSid = idOf(purchase);
 
   const sipUsername = `pivottech-${nodeCrypto.randomUUID()}`;
   const sipPassword = crypto.randomSecret();
-  const endpoint = await signalwire.createSipEndpoint({
+  const endpoint = await telnyx.createSipEndpoint({
     username: sipUsername,
     password: sipPassword,
     callerId: e164,
   });
   const sipEndpointId = idOf(endpoint);
 
-  await signalwire.assignNumberToEndpoint(signalwireSid, sipEndpointId);
+  await telnyx.assignNumberToEndpoint(signalwireSid, sipEndpointId);
 
   // Never log sipPassword (CLAUDE.md security rule #1).
   logger.info({
     market, areaCode, phoneE164: e164, sipEndpointId,
-  }, 'DID assigned on SignalWire');
+  }, 'DID assigned on Telnyx');
 
   return {
     phoneE164: e164, areaCode, signalwireSid, sipUsername, sipEndpointId, sipPassword,
@@ -113,7 +113,7 @@ async function assignDid(market) {
  */
 async function rotateSipPassword(sipEndpointId) {
   const sipPassword = crypto.randomSecret();
-  await signalwire.updateSipEndpoint(sipEndpointId, { password: sipPassword });
+  await telnyx.updateSipEndpoint(sipEndpointId, { password: sipPassword });
   return sipPassword;
 }
 

@@ -20,6 +20,9 @@ const CODE_STATUS = {
   PORT_ALREADY_PENDING: 409,
   PORT_SUBMISSION_FAILED: 502,
   TOKEN_EXPIRED: 401,
+  // TELNYX_ERROR is the migrated equivalent of SIGNALWIRE_ERROR; the latter is
+  // retained for the not-yet-migrated inbound webhook path.
+  TELNYX_ERROR: 502,
   SIGNALWIRE_ERROR: 502,
   INTERNAL_ERROR: 500,
 };

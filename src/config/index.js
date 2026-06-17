@@ -33,9 +33,12 @@ const REQUIRED_IN_PRODUCTION = [
   'JWT_PUBLIC_KEY',
   'ADMIN_JWT_SECRET',
   'ENCRYPTION_KEY',
-  'SIGNALWIRE_SPACE',
-  'SIGNALWIRE_PROJECT_ID',
-  'SIGNALWIRE_API_TOKEN',
+  // Telnyx is the outbound voice/SMS/number vendor (migrated from SignalWire).
+  'TELNYX_API_KEY',
+  'TELNYX_SIP_CONNECTION_ID',
+  'TELNYX_MESSAGING_PROFILE_ID',
+  // Still required: inbound webhook HMAC validation has not been migrated off
+  // SignalWire yet (webhookService.verifySignature). Tracked as Phase-2 work.
   'SIGNALWIRE_WEBHOOK_SECRET',
   'PROVISIONING_BASE_URL',
 ];
@@ -122,10 +125,16 @@ function buildConfig() {
 
     encryptionKey: process.env.ENCRYPTION_KEY || '',
 
+    // Outbound voice/SMS/number provisioning vendor.
+    telnyx: Object.freeze({
+      apiKey: process.env.TELNYX_API_KEY || '',
+      sipConnectionId: process.env.TELNYX_SIP_CONNECTION_ID || '',
+      messagingProfileId: process.env.TELNYX_MESSAGING_PROFILE_ID || '',
+    }),
+
+    // Retained only for inbound webhook HMAC validation (webhookService); the
+    // outbound SignalWire integration has been replaced by Telnyx.
     signalwire: Object.freeze({
-      space: process.env.SIGNALWIRE_SPACE || '',
-      projectId: process.env.SIGNALWIRE_PROJECT_ID || '',
-      apiToken: process.env.SIGNALWIRE_API_TOKEN || '',
       webhookSecret: process.env.SIGNALWIRE_WEBHOOK_SECRET || '',
     }),
 

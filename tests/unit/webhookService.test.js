@@ -1,11 +1,11 @@
 jest.mock('../../src/db');
-jest.mock('../../src/integrations/signalwire');
+jest.mock('../../src/integrations/telnyx');
 jest.mock('../../src/services/notificationService');
 jest.mock('../../src/config', () => ({ signalwire: { webhookSecret: 'whsec' } }));
 
 const crypto = require('crypto');
 const db = require('../../src/db');
-const signalwire = require('../../src/integrations/signalwire');
+const telnyx = require('../../src/integrations/telnyx');
 const notificationService = require('../../src/services/notificationService');
 const webhookService = require('../../src/services/webhookService');
 
@@ -76,7 +76,7 @@ describe('handlePortEvent — transitions', () => {
   it('completes a port: assigns campaign, upserts did, updates account, notifies', async () => {
     const client = clientFor(portRow); // status 'approved', no existing did
     db.withTransaction.mockImplementationOnce(async (fn) => fn(client));
-    signalwire.assignNumberToCampaign.mockResolvedValueOnce({});
+    telnyx.assignNumberToCampaign.mockResolvedValueOnce({});
     notificationService.notify.mockResolvedValueOnce({});
 
     const res = await webhookService.handlePortEvent({
@@ -85,7 +85,7 @@ describe('handlePortEvent — transitions', () => {
     });
 
     expect(res).toMatchObject({ handled: true, status: 'completed' });
-    expect(signalwire.assignNumberToCampaign).toHaveBeenCalledWith('nsid', 'sw-camp');
+    expect(telnyx.assignNumberToCampaign).toHaveBeenCalledWith('nsid', 'sw-camp');
     expect(client.query.mock.calls.some((c) => /INSERT INTO dids/.test(c[0]))).toBe(true);
     expect(client.query.mock.calls.some((c) => /UPDATE accounts SET phone_e164/.test(c[0]))).toBe(true);
     expect(notificationService.notify).toHaveBeenCalledWith({ id: 'acc-1' }, 'port.completed');
@@ -116,7 +116,7 @@ describe('handlePortEvent — idempotency / ordering', () => {
       type: 'port.completed', data: { port_id: 'swp1', number_sid: 'nsid' },
     });
     expect(res).toMatchObject({ handled: true, idempotent: true, status: 'completed' });
-    expect(signalwire.assignNumberToCampaign).not.toHaveBeenCalled();
+    expect(telnyx.assignNumberToCampaign).not.toHaveBeenCalled();
     expect(notificationService.notify).not.toHaveBeenCalled();
   });
 
