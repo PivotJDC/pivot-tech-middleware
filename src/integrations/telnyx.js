@@ -194,7 +194,21 @@ async function createSipEndpoint(params) {
   }));
 }
 
-/** Update a SIP credential — used to rotate fields at provisioning time. */
+/**
+ * Fetch an existing SIP credential. Telnyx returns the live sip_username and
+ * sip_password on GET (the credential password is retrievable, not write-once),
+ * which the provisioning flow uses to render the Acrobits XML/QR without ever
+ * storing the plaintext (CLAUDE.md security rule #3).
+ */
+async function getSipEndpoint(sipEndpointId) {
+  return unwrap(await request('GET', `/telephony_credentials/${sipEndpointId}`));
+}
+
+/**
+ * Update a SIP credential. NB: Telnyx telephony credentials are vendor-generated
+ * and their PASSWORD cannot be changed here — PATCH only accepts metadata
+ * (name, connection_id, tags, expires_at). Kept for those metadata updates.
+ */
 async function updateSipEndpoint(sipEndpointId, fields) {
   return unwrap(await request('PATCH', `/telephony_credentials/${sipEndpointId}`, fields));
 }
@@ -258,6 +272,7 @@ module.exports = {
   searchAvailableNumbers,
   purchaseNumber,
   createSipEndpoint,
+  getSipEndpoint,
   updateSipEndpoint,
   deleteSipEndpoint,
   assignNumberToEndpoint,

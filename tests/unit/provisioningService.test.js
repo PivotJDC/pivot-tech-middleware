@@ -32,7 +32,7 @@ describe('issueToken', () => {
   beforeEach(() => {
     token.generateProvisioningToken.mockReturnValue('raw-token');
     token.hashProvisioningToken.mockReturnValue('hash');
-    didOrchestration.rotateSipPassword.mockResolvedValue('qr-pw');
+    didOrchestration.getSipPassword.mockResolvedValue('qr-pw');
     crypto.hashPassword.mockResolvedValue('qr-hash');
     accountService.setSipPasswordHash.mockResolvedValue();
   });
@@ -48,14 +48,15 @@ describe('issueToken', () => {
     expect(result.qr_code_url).toMatch(/^data:image\/png;base64,/);
   });
 
-  it('builds the QR and deep link from the Acrobits csc: URI with rotated SIP creds', async () => {
+  it('builds the QR and deep link from the Acrobits csc: URI with the fetched SIP creds', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ expires_at: '2026-06-08T00:00:00Z' }] });
 
     const result = await provisioning.issueToken(account);
 
     expect(result.deep_link).toBe('csc:pivottech-abc:qr-pw@54873');
-    expect(didOrchestration.rotateSipPassword).toHaveBeenCalledWith('ep-1');
-    expect(accountService.setSipPasswordHash).toHaveBeenCalledWith('acc-1', 'qr-hash');
+    expect(didOrchestration.getSipPassword).toHaveBeenCalledWith('ep-1');
+    // Telnyx credentials are immutable: nothing is re-persisted at issuance.
+    expect(accountService.setSipPasswordHash).not.toHaveBeenCalled();
     // provisioning_url keeps the token flow — csc: is QR/deep-link only.
     expect(result.provisioning_url).toContain('token=raw-token');
   });
@@ -64,7 +65,7 @@ describe('issueToken', () => {
     await expect(provisioning.issueToken({ id: 'acc-1' }))
       .rejects.toMatchObject({ code: 'INTERNAL_ERROR' });
     expect(db.query).not.toHaveBeenCalled();
-    expect(didOrchestration.rotateSipPassword).not.toHaveBeenCalled();
+    expect(didOrchestration.getSipPassword).not.toHaveBeenCalled();
   });
 });
 
@@ -94,17 +95,16 @@ describe('validateAndConsumeToken', () => {
 });
 
 describe('generateAccountXml', () => {
-  it('rotates the SIP password, persists the hash, and builds XML', async () => {
-    didOrchestration.rotateSipPassword.mockResolvedValueOnce('new-pw');
-    crypto.hashPassword.mockResolvedValueOnce('new-hash');
-    accountService.setSipPasswordHash.mockResolvedValueOnce();
+  it('fetches the SIP password (no rotation) and builds XML with the Telnyx creds', async () => {
+    didOrchestration.getSipPassword.mockResolvedValueOnce('new-pw');
     acrobits.buildAccountXml.mockReturnValueOnce('<account/>');
 
     const xml = await provisioning.generateAccountXml(account);
 
     expect(xml).toBe('<account/>');
-    expect(didOrchestration.rotateSipPassword).toHaveBeenCalledWith('ep-1');
-    expect(accountService.setSipPasswordHash).toHaveBeenCalledWith('acc-1', 'new-hash');
+    expect(didOrchestration.getSipPassword).toHaveBeenCalledWith('ep-1');
+    // Immutable Telnyx credential — no re-hash/persist on the provisioning path.
+    expect(accountService.setSipPasswordHash).not.toHaveBeenCalled();
     expect(acrobits.buildAccountXml).toHaveBeenCalledWith({
       sipUsername: 'pivottech-abc',
       sipPassword: 'new-pw',
@@ -115,7 +115,7 @@ describe('generateAccountXml', () => {
   it('throws INTERNAL_ERROR when the account has no SIP endpoint', async () => {
     await expect(provisioning.generateAccountXml({ id: 'acc-1' }))
       .rejects.toMatchObject({ code: 'INTERNAL_ERROR' });
-    expect(didOrchestration.rotateSipPassword).not.toHaveBeenCalled();
+    expect(didOrchestration.getSipPassword).not.toHaveBeenCalled();
   });
 });
 
@@ -124,7 +124,7 @@ describe('provisionByToken', () => {
     token.hashProvisioningToken.mockReturnValue('hash');
     db.query.mockResolvedValueOnce({ rows: [{ account_id: 'acc-1' }] }); // consume
     accountService.getAccountById.mockResolvedValueOnce(account);
-    didOrchestration.rotateSipPassword.mockResolvedValueOnce('new-pw');
+    didOrchestration.getSipPassword.mockResolvedValueOnce('new-pw');
     crypto.hashPassword.mockResolvedValueOnce('new-hash');
     accountService.setSipPasswordHash.mockResolvedValueOnce();
     acrobits.buildAccountXml.mockReturnValueOnce('<account/>');
@@ -140,7 +140,7 @@ describe('reissueToken', () => {
     accountService.getAccountById.mockResolvedValueOnce(account);
     token.generateProvisioningToken.mockReturnValue('raw-2');
     token.hashProvisioningToken.mockReturnValue('hash-2');
-    didOrchestration.rotateSipPassword.mockResolvedValue('qr-pw');
+    didOrchestration.getSipPassword.mockResolvedValue('qr-pw');
     crypto.hashPassword.mockResolvedValue('qr-hash');
     accountService.setSipPasswordHash.mockResolvedValue();
     db.query.mockResolvedValueOnce({ rows: [{ expires_at: 'x' }] });

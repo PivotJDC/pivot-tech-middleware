@@ -15,22 +15,21 @@ const qrcode = require('qrcode');
 const db = require('../db');
 const config = require('../config');
 const token = require('../utils/token');
-const crypto = require('../utils/crypto');
 const acrobits = require('../integrations/acrobits');
 const accountService = require('./accountService');
 const didOrchestration = require('./didOrchestrationService');
 const { errors, AppError } = require('../middleware/errorHandler');
 
 /**
- * Rotate the account's SIP password on SignalWire and persist its bcrypt hash.
- * Returns the new plaintext, which the caller must hold in memory only for the
- * duration of building its response (CLAUDE.md security rule #3).
+ * Resolve the account's current plaintext SIP password for credential delivery.
+ *
+ * With Telnyx the credential is vendor-generated and immutable, so we fetch the
+ * existing password rather than rotating it; the bcrypt hash stored at account
+ * creation stays valid and there is nothing to re-persist. The plaintext is held
+ * in memory only for the duration of building the response (security rule #3).
  */
-async function rotateAndPersistSipPassword(account) {
-  const sipPassword = await didOrchestration.rotateSipPassword(account.sip_endpoint_id);
-  const sipPasswordHash = await crypto.hashPassword(sipPassword);
-  await accountService.setSipPasswordHash(account.id, sipPasswordHash);
-  return sipPassword;
+async function resolveSipPassword(account) {
+  return didOrchestration.getSipPassword(account.sip_endpoint_id);
 }
 
 /**
@@ -88,13 +87,10 @@ async function issueToken(account) {
     [account.id, tokenHash, ttlHours],
   );
 
-  // DECISION: the csc: QR must embed a LIVE SIP password, and we only ever
-  // store the bcrypt hash — so issuing links rotates the password right here.
-  // Consequence: the QR and the XML endpoint each rotate on use, so whichever
-  // path runs LAST holds the valid credentials; a device provisioned from the
-  // QR is invalidated if the XML URL is fetched afterward (and vice versa).
-  // One account, one delivery path per issuance.
-  const sipPassword = await rotateAndPersistSipPassword(account);
+  // The csc: QR embeds the LIVE SIP password. Telnyx credentials are stable
+  // (no rotation), so the QR and the XML endpoint now deliver the SAME valid
+  // credential — fetching one no longer invalidates the other.
+  const sipPassword = await resolveSipPassword(account);
   const cscUri = buildCscUri(account.sip_username, sipPassword);
 
   const links = await buildLinks(rawToken, cscUri);
@@ -133,10 +129,10 @@ async function validateAndConsumeToken(rawToken) {
 }
 
 /**
- * Assemble the Acrobits Account XML for an account, rotating the SIP password.
- * The new plaintext password is pushed to the SignalWire endpoint, its bcrypt
- * hash is persisted, and the plaintext is rendered into the XML — held only in
- * memory for the duration of this call.
+ * Assemble the Acrobits Account XML for an account. The account's current SIP
+ * password is fetched from Telnyx (credentials are immutable, so it is not
+ * rotated) and rendered into the XML — held only in memory for the duration of
+ * this call. The Telnyx-issued sip_username on the account is used as-is.
  * @returns {Promise<string>} XML document
  */
 async function generateAccountXml(account) {
@@ -146,7 +142,7 @@ async function generateAccountXml(account) {
       'Account is not ready for provisioning (DID assignment incomplete).',
     );
   }
-  const sipPassword = await rotateAndPersistSipPassword(account);
+  const sipPassword = await resolveSipPassword(account);
 
   return acrobits.buildAccountXml({
     sipUsername: account.sip_username,

@@ -12,7 +12,6 @@
  */
 const nodeCrypto = require('crypto');
 const telnyx = require('../integrations/telnyx');
-const crypto = require('../utils/crypto');
 const { logger } = require('../utils/logger');
 const { errors, AppError } = require('../middleware/errorHandler');
 const MARKET_AREA_CODES = require('../config/markets');
@@ -85,14 +84,18 @@ async function assignDid(market) {
   const purchase = await telnyx.purchaseNumber(e164);
   const signalwireSid = idOf(purchase);
 
-  const sipUsername = `pivottech-${nodeCrypto.randomUUID()}`;
-  const sipPassword = crypto.randomSecret();
+  // Telnyx auto-generates the SIP credentials; we only supply a recognizable
+  // name for the Telnyx portal. The credential's real sip_username/sip_password
+  // come back in the create response and are what the account actually uses —
+  // we must NOT substitute our own generated values (they wouldn't authenticate).
+  const credentialName = `pivottech-${nodeCrypto.randomUUID()}`;
   const endpoint = await telnyx.createSipEndpoint({
-    username: sipUsername,
-    password: sipPassword,
+    username: credentialName,
     callerId: e164,
   });
   const sipEndpointId = idOf(endpoint);
+  const sipUsername = endpoint.sip_username;
+  const sipPassword = endpoint.sip_password;
 
   await telnyx.assignNumberToEndpoint(signalwireSid, sipEndpointId);
 
@@ -107,18 +110,30 @@ async function assignDid(market) {
 }
 
 /**
- * Rotate the SIP endpoint's password and return the new plaintext. Used at
- * provisioning time so plaintext exists only in memory + the XML response.
- * @returns {Promise<string>} the new plaintext password
+ * Return the SIP endpoint's current plaintext password for provisioning.
+ *
+ * DECISION (Telnyx migration): Telnyx telephony credentials are vendor-generated
+ * and their password CANNOT be rotated — PATCH /telephony_credentials/{id} only
+ * updates metadata (name/connection_id/tags/expiry). So we no longer rotate at
+ * provisioning time; instead we fetch the existing credential (Telnyx returns
+ * sip_password on GET) and return it. The plaintext exists only in memory while
+ * the caller renders the Acrobits XML/QR, satisfying CLAUDE.md security rule #3
+ * without ever storing a recoverable copy.
+ *
+ * Formerly named rotateSipPassword; renamed because it no longer rotates.
+ * @returns {Promise<string>} the credential's current plaintext password
  */
-async function rotateSipPassword(sipEndpointId) {
-  const sipPassword = crypto.randomSecret();
-  await telnyx.updateSipEndpoint(sipEndpointId, { password: sipPassword });
-  return sipPassword;
+async function getSipPassword(sipEndpointId) {
+  logger.warn(
+    { sipEndpointId },
+    'Telnyx SIP credential passwords cannot be rotated; using the existing credential',
+  );
+  const credential = await telnyx.getSipEndpoint(sipEndpointId);
+  return credential.sip_password;
 }
 
 module.exports = {
   assignDid,
-  rotateSipPassword,
+  getSipPassword,
   findAvailableNumber,
 };

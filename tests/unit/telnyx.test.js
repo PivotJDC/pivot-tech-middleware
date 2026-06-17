@@ -105,6 +105,17 @@ describe('typed API calls', () => {
     expect(JSON.parse(init.body)).toEqual({ connection_id: 'conn-1' });
   });
 
+  it('getSipEndpoint GETs /telephony_credentials/{id} and returns the live credential', async () => {
+    global.fetch.mockResolvedValueOnce(ok({
+      data: { id: 'cred-1', sip_username: 'u', sip_password: 'live-pw' },
+    }));
+    const res = await telnyx.getSipEndpoint('cred-1');
+    expect(res).toEqual({ id: 'cred-1', sip_username: 'u', sip_password: 'live-pw' });
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.telnyx.com/v2/telephony_credentials/cred-1');
+    expect(init.method).toBe('GET');
+  });
+
   it('updateSipEndpoint PATCHes /telephony_credentials/{id}', async () => {
     global.fetch.mockResolvedValueOnce(ok({ data: { id: 'cred-1' } }));
     await telnyx.updateSipEndpoint('cred-1', { name: 'renamed' });

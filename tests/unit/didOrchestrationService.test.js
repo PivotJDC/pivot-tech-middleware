@@ -1,5 +1,4 @@
 jest.mock('../../src/integrations/telnyx');
-jest.mock('../../src/utils/crypto');
 jest.mock('../../src/utils/logger', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
   REDACT_PATHS: [],
@@ -7,19 +6,20 @@ jest.mock('../../src/utils/logger', () => ({
 
 const telnyx = require('../../src/integrations/telnyx');
 const { logger } = require('../../src/utils/logger');
-const crypto = require('../../src/utils/crypto');
 const did = require('../../src/services/didOrchestrationService');
 
 beforeEach(() => {
   jest.clearAllMocks();
-  crypto.randomSecret.mockReturnValue('generated-pw');
 });
 
 describe('assignDid', () => {
-  it('runs search -> purchase -> create endpoint -> assign and returns credentials', async () => {
+  it('runs search -> purchase -> create endpoint -> assign and returns Telnyx credentials', async () => {
     telnyx.searchAvailableNumbers.mockResolvedValueOnce([{ number: '+12085550100' }]);
     telnyx.purchaseNumber.mockResolvedValueOnce({ id: 'sid-1' });
-    telnyx.createSipEndpoint.mockResolvedValueOnce({ id: 'ep-1' });
+    // Telnyx auto-generates the real sip_username/sip_password.
+    telnyx.createSipEndpoint.mockResolvedValueOnce({
+      id: 'ep-1', sip_username: 'telnyx-user-1', sip_password: 'telnyx-pw-1',
+    });
     telnyx.assignNumberToEndpoint.mockResolvedValueOnce({});
 
     const cred = await did.assignDid('lewiston-id');
@@ -29,12 +29,16 @@ describe('assignDid', () => {
       areaCode: '208',
       signalwireSid: 'sid-1',
       sipEndpointId: 'ep-1',
-      sipPassword: 'generated-pw',
+      // The account uses Telnyx's returned credentials, not self-generated ones.
+      sipUsername: 'telnyx-user-1',
+      sipPassword: 'telnyx-pw-1',
     });
-    expect(cred.sipUsername).toMatch(/^pivottech-/);
+    // We still pass a recognizable credential name, but never a password (Telnyx generates it).
     expect(telnyx.createSipEndpoint).toHaveBeenCalledWith(
-      expect.objectContaining({ callerId: '+12085550100', password: 'generated-pw' }),
+      expect.objectContaining({ callerId: '+12085550100' }),
     );
+    expect(telnyx.createSipEndpoint.mock.calls[0][0].username).toMatch(/^pivottech-/);
+    expect(telnyx.createSipEndpoint.mock.calls[0][0]).not.toHaveProperty('password');
     expect(telnyx.assignNumberToEndpoint).toHaveBeenCalledWith('sid-1', 'ep-1');
   });
 
@@ -94,12 +98,14 @@ describe('assignDid', () => {
   });
 });
 
-describe('rotateSipPassword', () => {
-  it('generates a new password and pushes it to the endpoint', async () => {
-    crypto.randomSecret.mockReturnValueOnce('new-pw');
-    telnyx.updateSipEndpoint.mockResolvedValueOnce({});
-    const pw = await did.rotateSipPassword('ep-1');
-    expect(pw).toBe('new-pw');
-    expect(telnyx.updateSipEndpoint).toHaveBeenCalledWith('ep-1', { password: 'new-pw' });
+describe('getSipPassword', () => {
+  it('fetches the existing Telnyx credential and returns its current password', async () => {
+    telnyx.getSipEndpoint.mockResolvedValueOnce({ sip_username: 'telnyx-user-1', sip_password: 'telnyx-pw-1' });
+    const pw = await did.getSipPassword('ep-1');
+    expect(pw).toBe('telnyx-pw-1');
+    expect(telnyx.getSipEndpoint).toHaveBeenCalledWith('ep-1');
+    // Telnyx can't rotate credential passwords — make sure we don't try.
+    expect(telnyx.updateSipEndpoint).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
   });
 });
