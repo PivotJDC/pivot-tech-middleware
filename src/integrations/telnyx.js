@@ -169,10 +169,6 @@ async function purchaseNumber(e164) {
     phone_numbers: [{ phone_number: e164 }],
   }));
 
-  // TEMP DEBUG (remove once the prod number-order shape is confirmed): log the
-  // full order response so we can verify the phone_numbers[] structure/ids.
-  logger.info({ telnyxNumberOrder: order }, 'Telnyx number order response');
-
   const phoneNumber = (order && Array.isArray(order.phone_numbers) && order.phone_numbers[0]) || {};
   const number = phoneNumber.phone_number || e164;
   return {
