@@ -67,19 +67,27 @@ describe('request retry policy', () => {
 });
 
 describe('typed API calls', () => {
-  it('purchaseNumber posts a number order and surfaces the phone-number id', async () => {
+  it('purchaseNumber posts a number order and uses the E.164 as the id (not the order-line id)', async () => {
     global.fetch.mockResolvedValueOnce(ok({
-      data: { id: 'order-1', phone_numbers: [{ id: 'pn-1', phone_number: '+12085550100' }] },
+      data: { id: 'order-1', phone_numbers: [{ id: 'pn-line-1', phone_number: '+12085550100' }] },
     }));
     const res = await telnyx.purchaseNumber('+12085550100');
-    // id is the phone number's id (used later as the /phone_numbers/{id} path param).
-    expect(res.id).toBe('pn-1');
+    // The order-line id ('pn-line-1') and order id ('order-1') 404 on
+    // /phone_numbers/{id}; the E.164 number is the correct path identifier.
+    expect(res.id).toBe('+12085550100');
     expect(res.number).toBe('+12085550100');
 
     const [url, init] = global.fetch.mock.calls[0];
     expect(url).toBe('https://api.telnyx.com/v2/number_orders');
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body)).toEqual({ phone_numbers: [{ phone_number: '+12085550100' }] });
+  });
+
+  it('assignNumberToEndpoint PATCHes /phone_numbers/{e164} with the literal + (no encoding)', async () => {
+    global.fetch.mockResolvedValueOnce(ok({ data: {} }));
+    await telnyx.assignNumberToEndpoint('+12085550100', 'cred-1');
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.telnyx.com/v2/phone_numbers/+12085550100');
   });
 
   it('createSipEndpoint posts telephony_credentials with connection_id + name', async () => {

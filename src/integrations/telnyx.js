@@ -154,23 +154,34 @@ async function searchAvailableNumbers(areaCode, options = {}) {
 
 /**
  * Purchase a phone number via a Telnyx number order. Returns a resource whose
- * `id` is the purchased PHONE NUMBER's id (not the order id), because callers
- * use that id later as the path param for assignNumberToEndpoint /
- * assignNumberToCampaign (PATCH /phone_numbers/{id}).
- * DECISION: Telnyx number_orders returns the order with a nested
- * `phone_numbers[]`; we surface the first phone number's id as the canonical
- * id so the existing `idOf(resource)` extraction yields the right value.
+ * `id` is the +E.164 number itself, because that is the identifier callers feed
+ * into PATCH /phone_numbers/{id} for assignNumberToEndpoint / number management.
+ *
+ * DECISION: PATCH/GET/DELETE /v2/phone_numbers/{id} accepts the +E.164 number
+ * directly in the path (per Telnyx docs). The `id` nested in a number order's
+ * `phone_numbers[]` is the ORDER-LINE sub-resource id — a DIFFERENT resource
+ * from the phone number — so using it on /phone_numbers/{id} returns 404 (the
+ * original bug). The E.164 is also the only identifier we reliably have right
+ * after ordering (the order is async), so we key off it.
  */
 async function purchaseNumber(e164) {
-  const data = unwrap(await request('POST', '/number_orders', {
+  const order = unwrap(await request('POST', '/number_orders', {
     phone_numbers: [{ phone_number: e164 }],
   }));
-  const phoneNumber = (data && Array.isArray(data.phone_numbers) && data.phone_numbers[0]) || {};
+
+  // TEMP DEBUG (remove once the prod number-order shape is confirmed): log the
+  // full order response so we can verify the phone_numbers[] structure/ids.
+  logger.info({ telnyxNumberOrder: order }, 'Telnyx number order response');
+
+  const phoneNumber = (order && Array.isArray(order.phone_numbers) && order.phone_numbers[0]) || {};
+  const number = phoneNumber.phone_number || e164;
   return {
-    ...data,
+    ...order,
     ...phoneNumber,
-    id: phoneNumber.id || (data && data.id),
-    number: phoneNumber.phone_number || e164,
+    // id MUST be the E.164 (used as the /phone_numbers/{id} path param), not the
+    // order id or the order-line phone_numbers[].id.
+    id: number,
+    number,
   };
 }
 
