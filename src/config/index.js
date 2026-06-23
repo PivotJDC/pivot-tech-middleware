@@ -37,6 +37,11 @@ const REQUIRED_IN_PRODUCTION = [
   'TELNYX_API_KEY',
   'TELNYX_SIP_CONNECTION_ID',
   'TELNYX_MESSAGING_PROFILE_ID',
+  // BICS SIMforThings — cellular data / eSIM vendor. Credentials are required
+  // in production; the plan/APN/roaming ids are still pending from BICS support
+  // so they are intentionally NOT required to boot.
+  'BICS_USERNAME',
+  'BICS_PASSWORD',
   // Still required: inbound webhook HMAC validation has not been migrated off
   // SignalWire yet (webhookService.verifySignature). Tracked as Phase-2 work.
   'SIGNALWIRE_WEBHOOK_SECRET',
@@ -130,6 +135,18 @@ function buildConfig() {
       apiKey: process.env.TELNYX_API_KEY || '',
       sipConnectionId: process.env.TELNYX_SIP_CONNECTION_ID || '',
       messagingProfileId: process.env.TELNYX_MESSAGING_PROFILE_ID || '',
+    }),
+
+    // Cellular data / eSIM vendor (BICS SIMforThings). planId / apnGroupId /
+    // roamingProfileId are pending from BICS support — default to empty so the
+    // app boots; createEndpoint falls back to these config values.
+    bics: Object.freeze({
+      username: process.env.BICS_USERNAME || '',
+      password: process.env.BICS_PASSWORD || '',
+      baseUrl: process.env.BICS_BASE_URL || 'https://sft.bics.com/api',
+      planId: process.env.BICS_PLAN_ID || '',
+      apnGroupId: process.env.BICS_APN_GROUP_ID || '',
+      roamingProfileId: process.env.BICS_ROAMING_PROFILE_ID || '',
     }),
 
     // Retained only for inbound webhook HMAC validation (webhookService); the

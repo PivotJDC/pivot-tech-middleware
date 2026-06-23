@@ -24,6 +24,8 @@ const CODE_STATUS = {
   // retained for the not-yet-migrated inbound webhook path.
   TELNYX_ERROR: 502,
   SIGNALWIRE_ERROR: 502,
+  // BICS SIMforThings (cellular data / eSIM vendor) API failure.
+  BICS_ERROR: 502,
   INTERNAL_ERROR: 500,
 };
 
