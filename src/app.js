@@ -25,6 +25,7 @@ const authRouter = require('./routes/v1/auth');
 const didsRouter = require('./routes/v1/dids');
 const provisionRouter = require('./routes/v1/provision');
 const webhooksRouter = require('./routes/v1/webhooks');
+const billingRouter = require('./routes/v1/billing');
 const adminRouter = require('./routes/admin');
 
 // Browser origins always allowed, regardless of environment. Production custom
@@ -121,6 +122,7 @@ function createApp() {
   app.use('/v1/numbers', didsRouter);
   app.use('/v1/provision', provisionRouter);
   app.use('/v1/webhooks', webhooksRouter);
+  app.use('/v1/billing', billingRouter);
   app.use('/admin', adminRouter);
 
   // 404 + centralized error envelope (CLAUDE.md "Error Response Format").
