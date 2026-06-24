@@ -421,9 +421,9 @@
     <!-- ZONE 6: VENDOR / PROVIDER LAYER (bottom) -->
     <!-- ============================================================ -->
     <mxCell id="vendor_bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce4ec;strokeColor=#c62828;strokeWidth=2;verticalAlign=top;" vertex="1" parent="1">
-      <mxGeometry x="40" y="1200" width="2220" height="280" as="geometry" />
+      <mxGeometry x="40" y="1200" width="2220" height="340" as="geometry" />
     </mxCell>
-    <mxCell id="vendor_label" value="VENDOR / PROVIDER LAYER — External Services (shared across all tenants in MVNE mode)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1;fontColor=#c62828;" vertex="1" parent="1">
+    <mxCell id="vendor_label" value="VENDOR / PROVIDER LAYER — External Services + Device Store (shared across all tenants)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1;fontColor=#c62828;" vertex="1" parent="1">
       <mxGeometry x="55" y="1205" width="800" height="24" as="geometry" />
     </mxCell>
 
@@ -593,71 +593,71 @@
     <!-- LEGEND -->
     <!-- ============================================================ -->
     <mxCell id="legend_bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#9e9e9e;strokeWidth=1;" vertex="1" parent="1">
-      <mxGeometry x="40" y="1510" width="1620" height="70" as="geometry" />
+      <mxGeometry x="40" y="1570" width="1620" height="70" as="geometry" />
     </mxCell>
     <mxCell id="legend_title" value="LEGEND" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=11;fontStyle=1;" vertex="1" parent="1">
-      <mxGeometry x="55" y="1515" width="100" height="16" as="geometry" />
+      <mxGeometry x="55" y="1575" width="100" height="16" as="geometry" />
     </mxCell>
 
     <mxCell id="leg1" value="" style="rounded=1;fillColor=#66bb6a;strokeColor=#2e7d32;" vertex="1" parent="1">
-      <mxGeometry x="55" y="1540" width="18" height="14" as="geometry" />
+      <mxGeometry x="55" y="1600" width="18" height="14" as="geometry" />
     </mxCell>
     <mxCell id="leg1t" value="Phase 1 — LIVE" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=9;" vertex="1" parent="1">
-      <mxGeometry x="80" y="1540" width="100" height="14" as="geometry" />
+      <mxGeometry x="80" y="1600" width="100" height="14" as="geometry" />
     </mxCell>
 
     <mxCell id="leg2" value="" style="rounded=1;fillColor=#ef9a9a;strokeColor=#c62828;dashed=1;strokeWidth=2;" vertex="1" parent="1">
-      <mxGeometry x="200" y="1540" width="18" height="14" as="geometry" />
+      <mxGeometry x="200" y="1600" width="18" height="14" as="geometry" />
     </mxCell>
     <mxCell id="leg2t" value="Phase 2 — MVNE Multi-Tenant (★)" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=9;" vertex="1" parent="1">
-      <mxGeometry x="225" y="1540" width="180" height="14" as="geometry" />
+      <mxGeometry x="225" y="1600" width="180" height="14" as="geometry" />
     </mxCell>
 
     <mxCell id="leg3" value="" style="rounded=1;fillColor=#ffcc80;strokeColor=#c62828;dashed=1;strokeWidth=2;" vertex="1" parent="1">
-      <mxGeometry x="420" y="1540" width="18" height="14" as="geometry" />
+      <mxGeometry x="420" y="1600" width="18" height="14" as="geometry" />
     </mxCell>
     <mxCell id="leg3t" value="New DB tables (Phase 2)" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=9;" vertex="1" parent="1">
-      <mxGeometry x="445" y="1540" width="140" height="14" as="geometry" />
+      <mxGeometry x="445" y="1600" width="140" height="14" as="geometry" />
     </mxCell>
 
     <mxCell id="leg4" value="" style="rounded=1;fillColor=#fff9c4;strokeColor=#f57f17;dashed=1;" vertex="1" parent="1">
-      <mxGeometry x="600" y="1540" width="18" height="14" as="geometry" />
+      <mxGeometry x="600" y="1600" width="18" height="14" as="geometry" />
     </mxCell>
     <mxCell id="leg4t" value="Pending Implementation" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=9;" vertex="1" parent="1">
-      <mxGeometry x="625" y="1540" width="130" height="14" as="geometry" />
+      <mxGeometry x="625" y="1600" width="130" height="14" as="geometry" />
     </mxCell>
 
     <mxCell id="leg5" value="" style="rounded=1;fillColor=#e3f2fd;strokeColor=#1565c0;" vertex="1" parent="1">
-      <mxGeometry x="770" y="1540" width="18" height="14" as="geometry" />
+      <mxGeometry x="770" y="1600" width="18" height="14" as="geometry" />
     </mxCell>
     <mxCell id="leg5t" value="Customer-facing" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=9;" vertex="1" parent="1">
-      <mxGeometry x="795" y="1540" width="100" height="14" as="geometry" />
+      <mxGeometry x="795" y="1600" width="100" height="14" as="geometry" />
     </mxCell>
 
     <mxCell id="leg6" value="" style="rounded=1;fillColor=#37474f;strokeColor=#263238;" vertex="1" parent="1">
-      <mxGeometry x="910" y="1540" width="18" height="14" as="geometry" />
+      <mxGeometry x="910" y="1600" width="18" height="14" as="geometry" />
     </mxCell>
     <mxCell id="leg6t" value="Admin/Ops (internal)" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=9;" vertex="1" parent="1">
-      <mxGeometry x="935" y="1540" width="120" height="14" as="geometry" />
+      <mxGeometry x="935" y="1600" width="120" height="14" as="geometry" />
     </mxCell>
 
     <mxCell id="leg7" value="" style="rounded=1;fillColor=#fff3e0;strokeColor=#e65100;" vertex="1" parent="1">
-      <mxGeometry x="1070" y="1540" width="18" height="14" as="geometry" />
+      <mxGeometry x="1070" y="1600" width="18" height="14" as="geometry" />
     </mxCell>
     <mxCell id="leg7t" value="AWS Infrastructure" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=9;" vertex="1" parent="1">
-      <mxGeometry x="1095" y="1540" width="110" height="14" as="geometry" />
+      <mxGeometry x="1095" y="1600" width="110" height="14" as="geometry" />
     </mxCell>
 
     <mxCell id="leg8" value="" style="rounded=1;fillColor=#fce4ec;strokeColor=#c62828;" vertex="1" parent="1">
-      <mxGeometry x="1220" y="1540" width="18" height="14" as="geometry" />
+      <mxGeometry x="1220" y="1600" width="18" height="14" as="geometry" />
     </mxCell>
     <mxCell id="leg8t" value="External Vendors" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=9;" vertex="1" parent="1">
-      <mxGeometry x="1245" y="1540" width="100" height="14" as="geometry" />
+      <mxGeometry x="1245" y="1600" width="100" height="14" as="geometry" />
     </mxCell>
 
     <!-- Revenue model -->
     <mxCell id="rev_label" value="REVENUE: $25/mo Unlimited 30 (throttled) | $25/mo Unlimited 30 Plus ($2/GB overage) | $10/mo Starter ($2/GB overage) · BICS waiver expires ~March 2027 · Target: 3,000 subs" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontStyle=2;fontColor=#424242;" vertex="1" parent="1">
-      <mxGeometry x="55" y="1560" width="1580" height="14" as="geometry" />
+      <mxGeometry x="55" y="1620" width="1580" height="14" as="geometry" />
     </mxCell>
 
     <mxCell id="ocs_bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#2e7d32;strokeWidth=1;" vertex="1" parent="1">
@@ -683,6 +683,28 @@
     </mxCell>
     <mxCell id="tbl_usage" value="usage_records&#xa;id · account_id · endpoint_id&#xa;data_total_mb · overage_mb&#xa;overage_charge · polled_at" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#2e7d32;fontSize=9;align=left;spacingLeft=4;verticalAlign=top;" vertex="1" parent="1">
       <mxGeometry x="1120" y="1085" width="150" height="52" as="geometry" />
+    </mxCell>
+
+    <mxCell id="t5store_bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#e65100;strokeWidth=1;" vertex="1" parent="1">
+      <mxGeometry x="60" y="1420" width="700" height="55" as="geometry" />
+    </mxCell>
+    <mxCell id="t5store_label" value="Telgoo5 — Device Store Only (no BSS subscribers)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=10;fontStyle=1;fontColor=#e65100;" vertex="1" parent="1">
+      <mxGeometry x="75" y="1422" width="400" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="t5store_catalog" value="Device Catalog&#xa;Phones · Tablets&#xa;Accessories" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe0b2;strokeColor=#e65100;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="75" y="1440" width="120" height="30" as="geometry" />
+    </mxCell>
+    <mxCell id="t5store_order" value="Order Mgmt&#xa;Purchase · Payment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe0b2;strokeColor=#e65100;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="210" y="1440" width="120" height="30" as="geometry" />
+    </mxCell>
+    <mxCell id="t5store_fulfill" value="Fulfillment&#xa;Shipping · Returns&#xa;Warranty" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe0b2;strokeColor=#e65100;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="345" y="1440" width="120" height="30" as="geometry" />
+    </mxCell>
+    <mxCell id="t5store_note" value="Iframe or redirect from&#xa;mymobilitynet.io — no subscriber&#xa;data flows to Telgoo5 BSS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff9c4;strokeColor=#f57f17;fontSize=9;fontStyle=2;" vertex="1" parent="1">
+      <mxGeometry x="480" y="1438" width="170" height="34" as="geometry" />
+    </mxCell>
+    <mxCell id="device_store_link" value="Need a phone?&#xa;→ Telgoo5 Device Store&#xa;(iframe / redirect)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#e65100;fontSize=10;dashed=1;" vertex="1" parent="1">
+      <mxGeometry x="595" y="510" width="115" height="60" as="geometry" />
     </mxCell>
   </root>
 </mxGraphModel>
