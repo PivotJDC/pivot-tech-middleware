@@ -4,6 +4,7 @@ jest.mock('../../src/config', () => ({
     username: 'svc-user',
     password: 'svc-pass',
     baseUrl: 'https://sft.bics.com/api',
+    targetAccountId: '',
     planId: 'plan-1',
     apnGroupId: 'apn-1',
     roamingProfileId: 'roam-1',
@@ -95,6 +96,27 @@ describe('authentication and token caching', () => {
   it('throws BICS_ERROR when login itself fails', async () => {
     global.fetch.mockResolvedValueOnce(status(403, 'forbidden'));
     await expect(bics.authenticate()).rejects.toMatchObject({ code: 'BICS_ERROR' });
+  });
+
+  it('omits targetAccountId from the login body when not configured', async () => {
+    global.fetch.mockResolvedValueOnce(loginOk('tok-1'));
+    await bics.authenticate();
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body).toEqual({ username: 'svc-user', password: 'svc-pass' });
+    expect(body).not.toHaveProperty('targetAccountId');
+  });
+
+  it('includes targetAccountId (support access) when configured', async () => {
+    // bics reads config at call time; mutate the freshly-required mock instance.
+    // eslint-disable-next-line global-require
+    require('../../src/config').bics.targetAccountId = 'child-99';
+    global.fetch.mockResolvedValueOnce(loginOk('tok-1'));
+    await bics.authenticate();
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toEqual({
+      username: 'svc-user',
+      password: 'svc-pass',
+      targetAccountId: 'child-99',
+    });
   });
 });
 

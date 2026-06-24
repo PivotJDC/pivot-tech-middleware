@@ -102,9 +102,17 @@ async function sendWithRetry(method, url, init) {
 /**
  * Authenticate against BICS and cache the AccessToken in memory.
  * Re-callable to force a refresh; returns the token string.
+ *
+ * When config.bics.targetAccountId is set we authenticate with "support access"
+ * (reseller) semantics — the targetAccountId scopes the session to a child
+ * enterprise account. Omitted entirely when not configured.
  */
 async function authenticate() {
   const url = `${baseUrl()}/login`;
+  const supportAccess = Boolean(config.bics.targetAccountId);
+  logger.info({ supportAccess }, supportAccess
+    ? 'BICS authenticating with support access (reseller → child account)'
+    : 'BICS authenticating');
   const res = await sendWithRetry('POST', url, {
     method: 'POST',
     headers: {
@@ -114,6 +122,9 @@ async function authenticate() {
     body: JSON.stringify({
       username: config.bics.username,
       password: config.bics.password,
+      ...(config.bics.targetAccountId && {
+        targetAccountId: config.bics.targetAccountId,
+      }),
     }),
   });
 

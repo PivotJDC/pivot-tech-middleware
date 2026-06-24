@@ -144,6 +144,9 @@ function buildConfig() {
       username: process.env.BICS_USERNAME || '',
       password: process.env.BICS_PASSWORD || '',
       baseUrl: process.env.BICS_BASE_URL || 'https://sft.bics.com/api',
+      // Enterprise child account for "support access" (reseller) auth. Optional
+      // — not every deployment authenticates into a child account.
+      targetAccountId: process.env.BICS_TARGET_ACCOUNT_ID || '',
       planId: process.env.BICS_PLAN_ID || '',
       apnGroupId: process.env.BICS_APN_GROUP_ID || '',
       roamingProfileId: process.env.BICS_ROAMING_PROFILE_ID || '',
