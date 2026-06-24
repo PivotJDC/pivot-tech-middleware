@@ -12,7 +12,9 @@ const didOrchestration = require('./didOrchestrationService');
 const crypto = require('../utils/crypto');
 const { logger } = require('../utils/logger');
 
-const PLANS = ['unlimited_25'];
+// Plan slugs the dashboard offers; must stay in sync with lib/plans.ts there.
+// unlimited_25 remains the default (see validatePlan / CLAUDE.md).
+const PLANS = ['starter_10', 'unlimited_25', 'unlimited_25_plus'];
 const STATUSES = ['pending', 'active', 'suspended', 'cancelled'];
 
 // Allowed status transitions. An account can always be cancelled; it cannot

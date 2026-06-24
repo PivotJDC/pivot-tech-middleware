@@ -102,6 +102,42 @@ describe('createAccount', () => {
     expect(db.query).not.toHaveBeenCalled();
     expect(didOrchestration.assignDid).not.toHaveBeenCalled();
   });
+
+  it.each(['starter_10', 'unlimited_25', 'unlimited_25_plus'])(
+    'accepts the %s plan slug and persists it',
+    async (plan) => {
+      db.query.mockResolvedValueOnce({ rows: [] }); // email pre-check
+      didOrchestration.assignDid.mockResolvedValueOnce(credentials);
+      crypto.hashPassword.mockResolvedValueOnce('hashed-pw');
+      let insertedPlan;
+      db.withTransaction.mockImplementationOnce(async (fn) => {
+        const client = {
+          query: jest.fn()
+            .mockImplementationOnce((_sql, params) => {
+              // INSERT account — params order: (email, market, plan, ...)
+              [, , insertedPlan] = params;
+              return { rows: [{ ...baseRow, plan }] };
+            })
+            .mockResolvedValueOnce({ rows: [] }), // INSERT did
+        };
+        return fn(client);
+      });
+
+      const result = await accountService.createAccount({
+        email: 'a@b.co', market: 'lewiston-id', plan,
+      });
+      expect(insertedPlan).toBe(plan);
+      expect(result.plan).toBe(plan);
+    },
+  );
+
+  it('rejects an unknown plan slug before any work', async () => {
+    await expect(accountService.createAccount({
+      email: 'a@b.co', market: 'lewiston-id', plan: 'bogus_plan',
+    })).rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'plan' });
+    expect(db.query).not.toHaveBeenCalled();
+    expect(didOrchestration.assignDid).not.toHaveBeenCalled();
+  });
 });
 
 describe('getAccountByEmail', () => {
