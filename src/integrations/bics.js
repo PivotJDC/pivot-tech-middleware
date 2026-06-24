@@ -139,8 +139,14 @@ async function authenticate() {
  * for empty/204). Transparently re-authenticates and replays once on a 401
  * (expired token). Throws BICS_ERROR on client errors, transport exhaustion,
  * or a business-failure envelope (Response.resultCode !== "0").
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.skipEnvelopeCheck] - when true, do NOT throw on a
+ *   non-"0" top-level resultCode. Used by the action endpoints whose
+ *   success/failure is decided by the inner resultParam.resultCode (and which
+ *   treat some "failure" codes, e.g. "already active", as idempotent success).
  */
-async function request(method, path, body) {
+async function request(method, path, body, opts = {}) {
   if (!cachedToken) await authenticate();
 
   const url = `${baseUrl()}${path}`;
@@ -175,7 +181,8 @@ async function request(method, path, body) {
 
   // Business-failure envelope: resultCode "0" = success, "1" = failure.
   const envelope = payload && payload.Response;
-  if (envelope && envelope.resultCode !== undefined && envelope.resultCode !== '0') {
+  if (!opts.skipEnvelopeCheck
+    && envelope && envelope.resultCode !== undefined && envelope.resultCode !== '0') {
     const rp = envelope.resultParam || {};
     logger.error({
       method, path, resultCode: rp.resultCode, resultDescription: rp.resultDescription,
@@ -197,6 +204,34 @@ function envelopeRows(payload) {
     && payload.Response.responseParam
     && payload.Response.responseParam.rows;
   return Array.isArray(rows) ? rows : [];
+}
+
+/** Pull `Response.responseParam` out of an envelope, safely ({} if absent). */
+function envelopeResponseParam(payload) {
+  return (payload && payload.Response && payload.Response.responseParam) || {};
+}
+
+/** Pull `Response.resultParam` out of an envelope, safely ({} if absent). */
+function envelopeResultParam(payload) {
+  return (payload && payload.Response && payload.Response.resultParam) || {};
+}
+
+/**
+ * Validate a BICS action response by its inner resultParam.resultCode against
+ * the documented success codes. Logs + throws BICS_ERROR otherwise. Returns the
+ * resultParam so callers can read its code/description.
+ */
+function assertResultCode(action, endPointId, payload, okCodes) {
+  const rp = envelopeResultParam(payload);
+  if (okCodes.includes(rp.resultCode)) return rp;
+  logger.error({
+    action, endPointId, resultCode: rp.resultCode, resultDescription: rp.resultDescription,
+  }, 'BICS action failed');
+  throw new AppError(
+    'BICS_ERROR',
+    `BICS ${action} failed for endpoint ${endPointId}: ${rp.resultDescription || rp.resultCode || 'unknown error'}.`,
+    { status: 502 },
+  );
 }
 
 // --- Typed API surface ---
@@ -268,44 +303,99 @@ async function createEndpoint({
 }
 
 /**
- * Activate a data endpoint.
- * TODO(BICS): confirm the exact path/payload with BICS support — tentatively
- * `POST /Endpoint - Activate`. Stubbed so callers fail loudly rather than hit
- * an unconfirmed endpoint.
+ * Activate a data endpoint. Idempotent by design: BICS resultCode
+ *   5014 = activated, 2507 = already active
+ * both resolve. 6420 (SIM not attached) and any other code throw BICS_ERROR.
+ * Returns the responseParam.
  */
 async function activateEndpoint(endPointId) {
-  // TODO(BICS): wire to the confirmed activation endpoint.
-  throw new AppError(
-    'BICS_ERROR',
-    `activateEndpoint(${endPointId}) is not yet implemented — pending BICS API path confirmation.`,
-    { status: 502 },
+  const payload = await request(
+    'POST',
+    '/EndPointActivation',
+    { Request: { endPointId } },
+    { skipEnvelopeCheck: true },
   );
+  // 5014 = newly activated, 2507 = already active (treat as success).
+  assertResultCode('activateEndpoint', endPointId, payload, ['5014', '2507']);
+  return envelopeResponseParam(payload);
 }
 
 /**
- * Fetch usage statistics for a data endpoint.
- * TODO(BICS): confirm the exact path with BICS support. Stubbed.
+ * Change an endpoint's lifecycle state.
+ * @param {string} endPointId
+ * @param {'A'|'S'|'AI'} lifeCycle - Active, Suspend, Active-Inventory.
+ * @param {'1'|'2'|'3'} [reason='1'] - 1 System, 2 Dunning/non-payment, 3 CSR.
+ * Success resultCode 5017 or 9003. Returns the responseParam, which includes
+ * currentStatus and previousStatus.
  */
-async function getEndpointStatistics(endPointId) {
-  // TODO(BICS): wire to the confirmed statistics endpoint.
-  throw new AppError(
-    'BICS_ERROR',
-    `getEndpointStatistics(${endPointId}) is not yet implemented — pending BICS API path confirmation.`,
-    { status: 502 },
+async function changeEndpointStatus(endPointId, lifeCycle, reason = '1') {
+  const payload = await request(
+    'POST',
+    '/EndPointLifeCycleChange',
+    { Request: { endPointId, requestParam: { lifeCycle, reason } } },
+    { skipEnvelopeCheck: true },
   );
+  assertResultCode('changeEndpointStatus', endPointId, payload, ['5017', '9003']);
+  return envelopeResponseParam(payload);
+}
+
+/** Suspend an endpoint (lifeCycle "S"). reason defaults to "1" (System). */
+async function suspendEndpoint(endPointId, reason = '1') {
+  return changeEndpointStatus(endPointId, 'S', reason);
+}
+
+/** Resume an endpoint (lifeCycle "A"). reason defaults to "1" (System). */
+async function resumeEndpoint(endPointId, reason = '1') {
+  return changeEndpointStatus(endPointId, 'A', reason);
 }
 
 /**
- * Change an endpoint's status (suspend / resume).
- * TODO(BICS): confirm the exact path/payload with BICS support. Stubbed.
+ * Fetch usage statistics for an endpoint over a date range.
+ * @param {string} endPointId
+ * @param {string} fromDate - YYYYMMDD
+ * @param {string} toDate - YYYYMMDD
+ * Returns Response.responseParam directly:
+ *   dataUsage      - list of daily records
+ *   dataTotalUsage - { uplink, downlink, totalVolume, totalCost } (MB, 3 dp)
+ *   smsUsage, smsTotalUsage
  */
-async function changeEndpointStatus(endPointId, status) {
-  // TODO(BICS): wire to the confirmed status-change endpoint.
-  throw new AppError(
-    'BICS_ERROR',
-    `changeEndpointStatus(${endPointId}, ${status}) is not yet implemented — pending BICS API path confirmation.`,
-    { status: 502 },
+async function getEndpointStatistics(endPointId, fromDate, toDate) {
+  const params = new URLSearchParams({
+    endPointId,
+    from_date: fromDate,
+    to_date: toDate,
+  });
+  const payload = await request('GET', `/GetStatistics?${params.toString()}`);
+  return envelopeResponseParam(payload);
+}
+
+/**
+ * Update an endpoint's usage threshold (in MB). planId falls back to config.
+ * @param {string} endPointId
+ * @param {{ threshold: string, counterId: string, planId?: string, uniqueId: string }} params
+ * Success resultCode 3005. Returns the responseParam.
+ */
+async function updateThreshold(endPointId, {
+  threshold, counterId, planId, uniqueId,
+} = {}) {
+  const payload = await request(
+    'POST',
+    '/UpdateThreshold',
+    {
+      Request: {
+        endPointId,
+        requestParam: {
+          planId: planId || config.bics.planId,
+          counterId,
+          uniqueId,
+          threshold,
+        },
+      },
+    },
+    { skipEnvelopeCheck: true },
   );
+  assertResultCode('updateThreshold', endPointId, payload, ['3005']);
+  return envelopeResponseParam(payload);
 }
 
 module.exports = {
@@ -315,8 +405,11 @@ module.exports = {
   getNextAvailableEsim,
   createEndpoint,
   activateEndpoint,
-  getEndpointStatistics,
   changeEndpointStatus,
+  suspendEndpoint,
+  resumeEndpoint,
+  getEndpointStatistics,
+  updateThreshold,
   // exposed for tests
   request,
 };

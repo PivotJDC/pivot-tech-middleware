@@ -32,6 +32,24 @@ function envOk(responseParam, resultCode = '0') {
 function status(code, bodyText = '') {
   return { ok: code >= 200 && code < 300, status: code, text: async () => bodyText };
 }
+// An action response keyed by the inner resultParam.resultCode. `topResultCode`
+// defaults to "1" to prove the action endpoints decide success/failure from the
+// inner code (skipEnvelopeCheck), not the top-level envelope.
+function actionRes(resultCode, {
+  responseParam = {}, resultDescription = '', topResultCode = '1',
+} = {}) {
+  return {
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({
+      Response: {
+        resultCode: topResultCode,
+        resultParam: { resultCode, resultDescription },
+        responseParam,
+      },
+    }),
+  };
+}
 
 beforeEach(() => {
   jest.resetModules();
@@ -263,10 +281,157 @@ describe('error handling', () => {
     expect(await bics.fetchSimInventory()).toEqual([]);
     expect(global.fetch).toHaveBeenCalledTimes(3);
   });
+});
 
-  it('unimplemented endpoint stubs throw BICS_ERROR', async () => {
-    await expect(bics.activateEndpoint('ep-1')).rejects.toMatchObject({ code: 'BICS_ERROR' });
-    await expect(bics.getEndpointStatistics('ep-1')).rejects.toMatchObject({ code: 'BICS_ERROR' });
-    await expect(bics.changeEndpointStatus('ep-1', 'suspended')).rejects.toMatchObject({ code: 'BICS_ERROR' });
+describe('activateEndpoint', () => {
+  it('POSTs /EndPointActivation and resolves on resultCode 5014', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk())
+      .mockResolvedValueOnce(actionRes('5014', { topResultCode: '0', responseParam: { endPointId: 'ep-1' } }));
+
+    const res = await bics.activateEndpoint('ep-1');
+    expect(res).toEqual({ endPointId: 'ep-1' });
+
+    const [url, init] = global.fetch.mock.calls[1];
+    expect(url).toBe('https://sft.bics.com/api/EndPointActivation');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ Request: { endPointId: 'ep-1' } });
+  });
+
+  it('treats 2507 (already active) as an idempotent success', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk())
+      .mockResolvedValueOnce(actionRes('2507', { resultDescription: 'already active' }));
+    await expect(bics.activateEndpoint('ep-1')).resolves.toEqual({});
+  });
+
+  it('throws BICS_ERROR on 6420 (SIM not attached)', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk())
+      .mockResolvedValueOnce(actionRes('6420', { resultDescription: 'SIM not attached' }));
+    await expect(bics.activateEndpoint('ep-1')).rejects.toMatchObject({ code: 'BICS_ERROR', status: 502 });
+  });
+});
+
+describe('changeEndpointStatus / suspend / resume', () => {
+  it('suspends with lifeCycle "S" and the given reason, returning status fields', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk())
+      .mockResolvedValueOnce(actionRes('5017', {
+        responseParam: { currentStatus: 'Suspended', previousStatus: 'Active' },
+      }));
+
+    const res = await bics.changeEndpointStatus('ep-1', 'S', '2');
+    expect(res).toEqual({ currentStatus: 'Suspended', previousStatus: 'Active' });
+
+    const [url, init] = global.fetch.mock.calls[1];
+    expect(url).toBe('https://sft.bics.com/api/EndPointLifeCycleChange');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      Request: { endPointId: 'ep-1', requestParam: { lifeCycle: 'S', reason: '2' } },
+    });
+  });
+
+  it('accepts resultCode 9003 as success', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk())
+      .mockResolvedValueOnce(actionRes('9003', { responseParam: { currentStatus: 'Active' } }));
+    await expect(bics.changeEndpointStatus('ep-1', 'A')).resolves.toEqual({ currentStatus: 'Active' });
+  });
+
+  it('throws BICS_ERROR on an unrecognized result code', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk())
+      .mockResolvedValueOnce(actionRes('4001', { resultDescription: 'invalid transition' }));
+    await expect(bics.changeEndpointStatus('ep-1', 'S')).rejects.toMatchObject({ code: 'BICS_ERROR' });
+  });
+
+  it('suspendEndpoint maps to lifeCycle "S" and defaults reason "1"', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk())
+      .mockResolvedValueOnce(actionRes('5017', { responseParam: { currentStatus: 'Suspended' } }));
+    await bics.suspendEndpoint('ep-1');
+    expect(JSON.parse(global.fetch.mock.calls[1][1].body)).toEqual({
+      Request: { endPointId: 'ep-1', requestParam: { lifeCycle: 'S', reason: '1' } },
+    });
+  });
+
+  it('resumeEndpoint maps to lifeCycle "A" and forwards an explicit reason', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk())
+      .mockResolvedValueOnce(actionRes('5017', { responseParam: { currentStatus: 'Active' } }));
+    await bics.resumeEndpoint('ep-1', '3');
+    expect(JSON.parse(global.fetch.mock.calls[1][1].body)).toEqual({
+      Request: { endPointId: 'ep-1', requestParam: { lifeCycle: 'A', reason: '3' } },
+    });
+  });
+});
+
+describe('getEndpointStatistics', () => {
+  it('GETs /GetStatistics with the date range and returns the parsed responseParam', async () => {
+    const responseParam = {
+      dataUsage: [{ date: '20260601', totalVolume: '12.500' }],
+      dataTotalUsage: {
+        uplink: '5.250', downlink: '120.750', totalVolume: '126.000', totalCost: '0.378',
+      },
+      smsUsage: [],
+      smsTotalUsage: { count: '0' },
+    };
+    global.fetch
+      .mockResolvedValueOnce(loginOk())
+      .mockResolvedValueOnce(envOk(responseParam));
+
+    const res = await bics.getEndpointStatistics('ep-1', '20260601', '20260630');
+    expect(res.dataTotalUsage).toEqual({
+      uplink: '5.250', downlink: '120.750', totalVolume: '126.000', totalCost: '0.378',
+    });
+    expect(res.dataUsage).toHaveLength(1);
+
+    const [url, init] = global.fetch.mock.calls[1];
+    expect(init.method).toBe('GET');
+    expect(decodeURIComponent(url)).toBe(
+      'https://sft.bics.com/api/GetStatistics?endPointId=ep-1&from_date=20260601&to_date=20260630',
+    );
+  });
+});
+
+describe('updateThreshold', () => {
+  it('POSTs /UpdateThreshold with the BICS Request envelope', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk())
+      .mockResolvedValueOnce(actionRes('3005'));
+
+    await bics.updateThreshold('ep-1', {
+      threshold: '30720', counterId: 'c-1', planId: 'plan-9', uniqueId: 'u-1',
+    });
+
+    const [url, init] = global.fetch.mock.calls[1];
+    expect(url).toBe('https://sft.bics.com/api/UpdateThreshold');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      Request: {
+        endPointId: 'ep-1',
+        requestParam: {
+          planId: 'plan-9', counterId: 'c-1', uniqueId: 'u-1', threshold: '30720',
+        },
+      },
+    });
+  });
+
+  it('defaults planId from config when omitted', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk())
+      .mockResolvedValueOnce(actionRes('3005'));
+    await bics.updateThreshold('ep-1', { threshold: '1024', counterId: 'c-1', uniqueId: 'u-1' });
+    expect(JSON.parse(global.fetch.mock.calls[1][1].body).Request.requestParam.planId).toBe('plan-1');
+  });
+
+  it('throws BICS_ERROR when the result code is not 3005', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk())
+      .mockResolvedValueOnce(actionRes('9999', { resultDescription: 'rejected' }));
+    await expect(bics.updateThreshold('ep-1', {
+      threshold: '1', counterId: 'c', uniqueId: 'u',
+    })).rejects.toMatchObject({ code: 'BICS_ERROR' });
   });
 });
