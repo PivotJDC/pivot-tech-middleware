@@ -40,7 +40,11 @@ describe('POST /v1/voice/inbound', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/application\/xml/);
-    expect(res.text).toContain('<Dial>sip:pivottech-abc@sip.telnyx.com</Dial>');
+    expect(res.text).toContain('<Sip>sip:pivottech-abc@sip.telnyx.com</Sip>');
+    // Dial carries the ring timeout, answerOnBridge, and the caller's number.
+    expect(res.text).toContain('timeout="30"');
+    expect(res.text).toContain('answerOnBridge="true"');
+    expect(res.text).toContain('callerId="+12085550142"');
     expect(res.text).not.toContain('<Reject');
     expect(voiceService.lookupByCalledNumber).toHaveBeenCalledWith('+12085550100');
   });
@@ -82,7 +86,7 @@ describe('POST /v1/voice/inbound', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/application\/xml/);
-    expect(res.text).toContain('<Dial>sip:pivottech-abc@sip.telnyx.com</Dial>');
+    expect(res.text).toContain('<Sip>sip:pivottech-abc@sip.telnyx.com</Sip>');
     expect(voiceService.lookupByCalledNumber).toHaveBeenCalledWith('+12085550100');
   });
 
@@ -106,7 +110,7 @@ describe('POST /v1/voice/inbound', () => {
       .send({ To: '+12085550100', From: '+12085550142', CallControlId: 'cc-1' });
 
     expect(res.status).toBe(200);
-    expect(res.text).toContain('<Dial>sip:pivottech-xyz@sip.telnyx.com</Dial>');
+    expect(res.text).toContain('<Sip>sip:pivottech-xyz@sip.telnyx.com</Sip>');
   });
 
   it('normalizes a number whose URL-encoded "+" arrived as a space', async () => {
@@ -121,7 +125,7 @@ describe('POST /v1/voice/inbound', () => {
       .send('To=+12085550100&From=+12085550142&CallSid=CA9');
 
     expect(res.status).toBe(200);
-    expect(res.text).toContain('<Dial>sip:pivottech-abc@sip.telnyx.com</Dial>');
+    expect(res.text).toContain('<Sip>sip:pivottech-abc@sip.telnyx.com</Sip>');
     // The space-mangled number is normalized back to E.164 before lookup.
     expect(voiceService.lookupByCalledNumber).toHaveBeenCalledWith('+12085550100');
   });

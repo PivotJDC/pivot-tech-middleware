@@ -39,12 +39,20 @@ function normalizePhone(raw) {
   return cleaned.startsWith('+') ? cleaned : `+${cleaned}`;
 }
 
-/** TeXML that bridges the call to the subscriber's SIP credential. */
-function dialXml(sipUsername) {
+/**
+ * TeXML that bridges the call to the subscriber's SIP credential.
+ * - timeout="30": give the dialer time to ring (the default can be very short).
+ * - answerOnBridge="true": the caller hears the remote ringing instead of
+ *   silence until the dialer answers.
+ * - callerId: the original PSTN caller's number, so it shows on the device.
+ */
+function dialXml(sipUsername, from) {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<Response>',
-    `  <Dial>sip:${escapeXml(sipUsername)}@${SIP_DOMAIN}</Dial>`,
+    `  <Dial timeout="30" answerOnBridge="true" callerId="${escapeXml(from || '')}">`,
+    `    <Sip>sip:${escapeXml(sipUsername)}@${SIP_DOMAIN}</Sip>`,
+    '  </Dial>',
     '</Response>',
     '',
   ].join('\n');
@@ -83,7 +91,7 @@ router.all(
     );
 
     res.type('application/xml').status(200);
-    res.send(active ? dialXml(match.sip_username) : rejectXml());
+    res.send(active ? dialXml(match.sip_username, from) : rejectXml());
   }),
 );
 
