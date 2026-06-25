@@ -404,7 +404,8 @@ function buildUpdate(id, updates) {
  * Update mutable account fields (email and/or status). Status changes are
  * validated against the state machine and stamp activated_at / cancelled_at.
  * @param {string} id
- * @param {{ email?: string, status?: string }} patch
+ * @param {{ email?: string, status?: string, sip_username?: string,
+ *           sip_endpoint_id?: string }} patch
  */
 async function updateAccount(id, patch = {}) {
   const current = await getAccountById(id); // throws NOT_FOUND / VALIDATION_ERROR
@@ -412,6 +413,15 @@ async function updateAccount(id, patch = {}) {
 
   if (patch.email !== undefined) {
     updates.email = normalizeEmail(patch.email);
+  }
+
+  // SIP routing fields (admin "update_sip"). Plain string columns — the
+  // plaintext SIP password is never set here (it's bcrypt-hashed elsewhere).
+  if (patch.sip_username !== undefined) {
+    updates.sip_username = patch.sip_username;
+  }
+  if (patch.sip_endpoint_id !== undefined) {
+    updates.sip_endpoint_id = patch.sip_endpoint_id;
   }
 
   if (patch.status !== undefined && patch.status !== current.status) {

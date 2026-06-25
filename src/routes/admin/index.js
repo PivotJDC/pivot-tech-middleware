@@ -86,10 +86,27 @@ router.patch(
       return;
     }
 
+    if (action === 'update_sip') {
+      const { sip_username: sipUsername, sip_endpoint_id: sipEndpointId } = req.body || {};
+      if (sipUsername === undefined && sipEndpointId === undefined) {
+        throw errors.validation('sip_username or sip_endpoint_id is required.', 'sip_username');
+      }
+      const account = await accountService.updateAccount(id, {
+        sip_username: sipUsername,
+        sip_endpoint_id: sipEndpointId,
+      });
+      logger.info(
+        { adminId: req.admin.id, accountId: id },
+        'admin updated SIP credentials',
+      );
+      res.json(account);
+      return;
+    }
+
     const targetStatus = STATUS_FOR_ACTION[action];
     if (!targetStatus) {
       throw errors.validation(
-        'Unsupported action. Expected one of: retry_bics, activate, suspend, cancel.',
+        'Unsupported action. Expected one of: retry_bics, update_sip, activate, suspend, cancel.',
         'action',
       );
     }

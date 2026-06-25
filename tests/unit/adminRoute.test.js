@@ -107,6 +107,27 @@ describe('admin API', () => {
     expect(accountService.transitionStatus).toHaveBeenCalledWith('a1', 'cancelled');
   });
 
+  it('PATCH /admin/accounts/:id action=update_sip updates the SIP credentials', async () => {
+    accountService.updateAccount.mockResolvedValueOnce({
+      id: 'a1', sip_username: 'pivottech-new', sip_endpoint_id: 'ep-new',
+    });
+    const res = await request(app)
+      .patch('/admin/accounts/a1')
+      .send({ action: 'update_sip', sip_username: 'pivottech-new', sip_endpoint_id: 'ep-new' });
+    expect(res.status).toBe(200);
+    expect(accountService.updateAccount).toHaveBeenCalledWith('a1', {
+      sip_username: 'pivottech-new', sip_endpoint_id: 'ep-new',
+    });
+    expect(res.body.sip_username).toBe('pivottech-new');
+  });
+
+  it('PATCH /admin/accounts/:id action=update_sip requires at least one SIP field', async () => {
+    const res = await request(app).patch('/admin/accounts/a1').send({ action: 'update_sip' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.field).toBe('sip_username');
+    expect(accountService.updateAccount).not.toHaveBeenCalled();
+  });
+
   it('PATCH /admin/accounts/:id rejects an unsupported action', async () => {
     const res = await request(app).patch('/admin/accounts/a1').send({ action: 'nope' });
     expect(res.status).toBe(400);

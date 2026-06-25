@@ -419,6 +419,20 @@ describe('updateAccount status machine', () => {
     await expect(accountService.updateAccount(baseRow.id, {}))
       .rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
   });
+
+  it('updates sip_username and sip_endpoint_id', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [baseRow] }) // current
+      .mockResolvedValueOnce({ rows: [{ ...baseRow, sip_username: 'u2', sip_endpoint_id: 'ep2' }] });
+    const result = await accountService.updateAccount(baseRow.id, {
+      sip_username: 'u2', sip_endpoint_id: 'ep2',
+    });
+    const [sql, values] = db.query.mock.calls[1];
+    expect(sql).toMatch(/sip_username = \$1/);
+    expect(sql).toMatch(/sip_endpoint_id = \$2/);
+    expect(values).toEqual(['u2', 'ep2', baseRow.id]);
+    expect(result.sip_username).toBe('u2');
+  });
 });
 
 describe('serializeAccount', () => {
