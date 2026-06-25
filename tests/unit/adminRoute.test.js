@@ -74,6 +74,39 @@ describe('admin API', () => {
     expect(res.body.esim.iccid).toBe('icc-1');
   });
 
+  it('PATCH /admin/accounts/:id action=activate transitions a pending account to active', async () => {
+    accountService.getAccountById.mockResolvedValueOnce({ id: 'a1', status: 'pending' });
+    accountService.transitionStatus.mockResolvedValueOnce({ id: 'a1', status: 'active' });
+    const res = await request(app).patch('/admin/accounts/a1').send({ action: 'activate' });
+    expect(res.status).toBe(200);
+    expect(accountService.transitionStatus).toHaveBeenCalledWith('a1', 'active');
+    expect(res.body.status).toBe('active');
+  });
+
+  it('PATCH /admin/accounts/:id action=activate is rejected when not pending', async () => {
+    accountService.getAccountById.mockResolvedValueOnce({ id: 'a1', status: 'active' });
+    const res = await request(app).patch('/admin/accounts/a1').send({ action: 'activate' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.field).toBe('action');
+    expect(accountService.transitionStatus).not.toHaveBeenCalled();
+  });
+
+  it('PATCH /admin/accounts/:id action=suspend transitions to suspended', async () => {
+    accountService.transitionStatus.mockResolvedValueOnce({ id: 'a1', status: 'suspended' });
+    const res = await request(app).patch('/admin/accounts/a1').send({ action: 'suspend' });
+    expect(res.status).toBe(200);
+    expect(accountService.transitionStatus).toHaveBeenCalledWith('a1', 'suspended');
+    // suspend does not pre-fetch the account.
+    expect(accountService.getAccountById).not.toHaveBeenCalled();
+  });
+
+  it('PATCH /admin/accounts/:id action=cancel transitions to cancelled', async () => {
+    accountService.transitionStatus.mockResolvedValueOnce({ id: 'a1', status: 'cancelled' });
+    const res = await request(app).patch('/admin/accounts/a1').send({ action: 'cancel' });
+    expect(res.status).toBe(200);
+    expect(accountService.transitionStatus).toHaveBeenCalledWith('a1', 'cancelled');
+  });
+
   it('PATCH /admin/accounts/:id rejects an unsupported action', async () => {
     const res = await request(app).patch('/admin/accounts/a1').send({ action: 'nope' });
     expect(res.status).toBe(400);

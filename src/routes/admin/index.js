@@ -62,17 +62,53 @@ router.patch(
   }),
 );
 
+// Status transitions a given admin action maps to. transitionStatus enforces
+// the state machine (legal transitions) and stamps activated_at / cancelled_at.
+const STATUS_FOR_ACTION = {
+  activate: 'active', // pending -> active (extra pending-only guard below)
+  suspend: 'suspended', // active -> suspended
+  cancel: 'cancelled', // any (non-terminal) -> cancelled
+};
+
 router.patch(
   '/accounts/:id',
   asyncHandler(async (req, res) => {
     const { action } = req.body || {};
-    if (action !== 'retry_bics') {
-      throw errors.validation('Unsupported action. Expected action="retry_bics".', 'action');
+    const { id } = req.params;
+
+    if (action === 'retry_bics') {
+      const account = await accountService.retryBicsProvisioning(id);
+      logger.info(
+        { adminId: req.admin.id, accountId: id },
+        'admin retried BICS eSIM provisioning',
+      );
+      res.json(account);
+      return;
     }
-    const account = await accountService.retryBicsProvisioning(req.params.id);
+
+    const targetStatus = STATUS_FOR_ACTION[action];
+    if (!targetStatus) {
+      throw errors.validation(
+        'Unsupported action. Expected one of: retry_bics, activate, suspend, cancel.',
+        'action',
+      );
+    }
+
+    // "activate" is restricted to pending accounts — reactivating a suspended
+    // line is intentionally not this action (it would need a separate flow).
+    if (action === 'activate') {
+      const current = await accountService.getAccountById(id); // throws NOT_FOUND
+      if (current.status !== 'pending') {
+        throw errors.validation('activate is only allowed from pending status.', 'action');
+      }
+    }
+
+    const account = await accountService.transitionStatus(id, targetStatus);
     logger.info(
-      { adminId: req.admin.id, accountId: req.params.id },
-      'admin retried BICS eSIM provisioning',
+      {
+        adminId: req.admin.id, accountId: id, action, newStatus: targetStatus,
+      },
+      'admin account status transition',
     );
     res.json(account);
   }),
