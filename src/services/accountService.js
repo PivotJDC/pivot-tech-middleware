@@ -36,11 +36,20 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Sentinel meaning "set this column to SQL NOW()" in a dynamic update.
 const NOW = Symbol('NOW');
 
-/** Strip internal/secret columns before returning an account to a client. */
+/**
+ * Strip internal/secret columns before returning an account to a client.
+ * parent_account_id and line_label pass through as plain columns. For primary
+ * accounts (parent_account_id NULL) we expose line_count — the number of child
+ * lines — taken from a `line_count` column when the query provides it (a
+ * correlated subquery), defaulting to 0.
+ */
 function serializeAccount(row) {
   if (!row) return row;
   // eslint-disable-next-line camelcase, no-unused-vars
-  const { sip_password_hash, ...safe } = row;
+  const { sip_password_hash: _sipHash, line_count: lineCount, ...safe } = row;
+  if (safe.parent_account_id == null) {
+    safe.line_count = lineCount != null ? Number(lineCount) : 0;
+  }
   return safe;
 }
 
@@ -182,18 +191,44 @@ async function provisionAndPersistEsim(account) {
  * a race. The plaintext SIP password from orchestration is hashed (bcrypt) and
  * never stored in the clear — it will be rotated and surfaced at provision time.
  *
- * @param {{ email: string, market: string, plan?: string }} input
+ * Multi-line: when `parent_email` is supplied, the new account is a child line
+ * under that primary account. Child lines share the primary's email (so the
+ * email-uniqueness pre-check is skipped) but still get their own DID, eSIM, and
+ * provisioning. parent_email pointing at no primary account is rejected.
+ *
+ * @param {{ email: string, market: string, plan?: string,
+ *           parent_email?: string, line_label?: string }} input
  * @returns {Promise<object>} the created account (serialized)
  */
 async function createAccount(input = {}) {
   const email = normalizeEmail(input.email);
   const market = validateMarket(input.market);
   const plan = validatePlan(input.plan);
+  const lineLabel = input.line_label ? String(input.line_label).trim().slice(0, 50) : null;
 
-  // Pre-check to avoid purchasing a DID for an email that already exists.
-  const existing = await db.query('SELECT id FROM accounts WHERE email = $1', [email]);
-  if (existing.rows.length > 0) {
-    throw errors.conflict('An account with this email already exists.', 'email');
+  let parentAccountId = null;
+  if (input.parent_email) {
+    // Child line: resolve the primary account. Skip the email-uniqueness
+    // pre-check — child lines share the primary's email by design.
+    const parentEmail = normalizeEmail(input.parent_email);
+    const parent = await db.query(
+      'SELECT id FROM accounts WHERE email = $1 AND parent_account_id IS NULL',
+      [parentEmail],
+    );
+    if (parent.rows.length === 0) {
+      throw errors.notFound('No primary account found for that parent_email.');
+    }
+    parentAccountId = parent.rows[0].id;
+  } else {
+    // Primary signup: avoid purchasing a DID for an email that already has a
+    // primary account (children sharing the email don't count).
+    const existing = await db.query(
+      'SELECT id FROM accounts WHERE email = $1 AND parent_account_id IS NULL',
+      [email],
+    );
+    if (existing.rows.length > 0) {
+      throw errors.conflict('An account with this email already exists.', 'email');
+    }
   }
 
   // External provisioning (SignalWire). Throws DID_UNAVAILABLE / SIGNALWIRE_ERROR.
@@ -204,8 +239,9 @@ async function createAccount(input = {}) {
     const account = await db.withTransaction(async (client) => {
       const inserted = await client.query(
         `INSERT INTO accounts
-           (email, market, plan, phone_e164, sip_username, sip_endpoint_id, sip_password_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+           (email, market, plan, phone_e164, sip_username, sip_endpoint_id,
+            sip_password_hash, parent_account_id, line_label)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
         [
           email,
@@ -215,6 +251,8 @@ async function createAccount(input = {}) {
           credentials.sipUsername,
           credentials.sipEndpointId,
           sipPasswordHash,
+          parentAccountId,
+          lineLabel,
         ],
       );
       const accountId = inserted.rows[0].id;
@@ -233,8 +271,10 @@ async function createAccount(input = {}) {
     });
 
     logger.info(
-      { accountId: account.id, market, areaCode: credentials.areaCode },
-      'account created and DID assigned',
+      {
+        accountId: account.id, market, areaCode: credentials.areaCode, parentAccountId,
+      },
+      parentAccountId ? 'child line created and DID assigned' : 'account created and DID assigned',
     );
 
     // Best-effort BICS eSIM provisioning. A failure here does NOT roll back the
@@ -266,10 +306,17 @@ async function setSipPasswordHash(id, hash) {
   await db.query('UPDATE accounts SET sip_password_hash = $1 WHERE id = $2', [hash, id]);
 }
 
+// Correlated child-line count, so serializeAccount can expose line_count on
+// primary accounts without a second round-trip.
+const LINE_COUNT_SELECT = '(SELECT COUNT(*) FROM accounts c WHERE c.parent_account_id = a.id)::int AS line_count';
+
 /** Fetch a full account by id, or throw NOT_FOUND. */
 async function getAccountById(id) {
   assertUuid(id);
-  const { rows } = await db.query('SELECT * FROM accounts WHERE id = $1', [id]);
+  const { rows } = await db.query(
+    `SELECT a.*, ${LINE_COUNT_SELECT} FROM accounts a WHERE a.id = $1`,
+    [id],
+  );
   if (rows.length === 0) {
     throw errors.notFound('Account not found.');
   }
@@ -277,17 +324,37 @@ async function getAccountById(id) {
 }
 
 /**
- * Look up an account by email (used for MVP token issuance). Returns the full
- * account or throws NOT_FOUND. Email is matched case-insensitively via the
- * normalized (lowercased) stored value.
+ * Look up the PRIMARY account by email (used for MVP token issuance). Child
+ * lines share the primary's email, so this scopes to parent_account_id IS NULL.
+ * Returns the full account or throws NOT_FOUND.
  */
 async function getAccountByEmail(rawEmail) {
   const email = normalizeEmail(rawEmail);
-  const { rows } = await db.query('SELECT * FROM accounts WHERE email = $1', [email]);
+  const { rows } = await db.query(
+    `SELECT a.*, ${LINE_COUNT_SELECT}
+       FROM accounts a
+      WHERE a.email = $1 AND a.parent_account_id IS NULL`,
+    [email],
+  );
   if (rows.length === 0) {
     throw errors.notFound('No account found for that email.');
   }
   return serializeAccount(rows[0]);
+}
+
+/**
+ * Return all child lines under a primary account (the customer dashboard's
+ * "manage lines" view and the billing roll-up consume this).
+ * @param {string} accountId - the primary account id.
+ * @returns {Promise<object[]>} serialized child accounts (empty if none).
+ */
+async function getAccountLines(accountId) {
+  assertUuid(accountId);
+  const { rows } = await db.query(
+    'SELECT * FROM accounts WHERE parent_account_id = $1 ORDER BY created_at',
+    [accountId],
+  );
+  return rows.map(serializeAccount);
 }
 
 /** Lightweight status projection for the app onboarding poll. */
@@ -409,6 +476,7 @@ module.exports = {
   createAccount,
   getAccountById,
   getAccountByEmail,
+  getAccountLines,
   getAccountStatus,
   updateAccount,
   transitionStatus,

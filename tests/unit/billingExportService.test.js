@@ -153,13 +153,14 @@ describe('exportToCsv', () => {
     const lines = csv.split('\n');
 
     expect(lines[0]).toBe(
-      'action,external_billing_id,account_id,email,phone,plan,billing_period,'
-      + 'base_charge,data_total_mb,plan_cap_mb,overage_mb,overage_gb,overage_rate,'
-      + 'overage_charge,total_charge,bics_endpoint_id,bics_iccid',
+      'action,external_billing_id,account_id,parent_account_id,email,phone,plan,'
+      + 'billing_period,base_charge,data_total_mb,plan_cap_mb,overage_mb,overage_gb,'
+      + 'overage_rate,overage_charge,total_charge,bics_endpoint_id,bics_iccid',
     );
     // action is the first column.
     expect(lines[0].split(',')[0]).toBe('action');
-    expect(lines[1].startsWith('append,gaiia-1,acc-1,')).toBe(true);
+    // append, gaiia-1, acc-1, then an empty parent_account_id field.
+    expect(lines[1].startsWith('append,gaiia-1,acc-1,,')).toBe(true);
     // comma-bearing email is quoted.
     expect(lines[1]).toContain('"weird,name@x.co"');
   });
@@ -170,8 +171,40 @@ describe('exportToCsv', () => {
     });
     const csv = await billing.exportToCsv(2026, 7);
     const dataRow = csv.split('\n')[1];
-    // action="create", then an empty external_billing_id field.
-    expect(dataRow.startsWith('create,,acc-1,')).toBe(true);
+    // action="create", empty external_billing_id, acc-1, empty parent_account_id.
+    expect(dataRow.startsWith('create,,acc-1,,')).toBe(true);
+  });
+});
+
+describe('multi-line billing roll-up', () => {
+  it('rolls a child line up under the primary external_billing_id', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [
+        // primary, billed to gaiia-1
+        row({
+          account_id: 'primary-1',
+          external_billing_id: 'gaiia-1',
+          parent_account_id: null,
+        }),
+        // child line under primary-1 (its own DID/usage, no billing id of its own)
+        row({
+          account_id: 'child-1',
+          external_billing_id: null,
+          parent_account_id: 'primary-1',
+          parent_external_billing_id: 'gaiia-1',
+          parent_external_billing_provider: 'gaiia',
+        }),
+      ],
+    });
+
+    const out = await billing.generateMonthlyExport(2026, 7);
+    const child = out.records.find((r) => r.accountId === 'child-1');
+
+    expect(child.parentAccountId).toBe('primary-1');
+    // Charges consolidate under the primary's billing account.
+    expect(child.externalBillingId).toBe('gaiia-1');
+    expect(child.externalBillingProvider).toBe('gaiia');
+    expect(child.action).toBe('append');
   });
 });
 

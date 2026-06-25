@@ -26,8 +26,12 @@ const router = express.Router();
 router.post(
   '/',
   asyncHandler(async (req, res) => {
-    const { email, market, plan } = req.body || {};
-    const account = await accountService.createAccount({ email, market, plan });
+    const {
+      email, market, plan, parent_email: parentEmail, line_label: lineLabel,
+    } = req.body || {};
+    const account = await accountService.createAccount({
+      email, market, plan, parent_email: parentEmail, line_label: lineLabel,
+    });
     // Drop raw_token from the response — the URL/QR/deep link already embed it.
     const { raw_token: rawToken, ...provisioning } = await provisioningService.issueToken(account);
     res.status(201).json({ ...account, provisioning });

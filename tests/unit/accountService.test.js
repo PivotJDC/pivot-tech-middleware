@@ -273,6 +273,82 @@ describe('retryBicsProvisioning', () => {
   });
 });
 
+describe('multi-line (family plan)', () => {
+  it('creates a child line under an existing primary with its own DID + eSIM', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'parent-1' }] }); // parent lookup
+    didOrchestration.assignDid.mockResolvedValueOnce(credentials);
+    crypto.hashPassword.mockResolvedValueOnce('hashed-pw');
+    let insertedParams;
+    db.withTransaction.mockImplementationOnce(async (fn) => {
+      const client = {
+        query: jest.fn()
+          .mockImplementationOnce((_sql, params) => {
+            insertedParams = params;
+            return { rows: [{ ...baseRow, parent_account_id: 'parent-1', line_label: 'Kid 1' }] };
+          })
+          .mockResolvedValueOnce({ rows: [] }), // INSERT did
+      };
+      return fn(client);
+    });
+    wireBicsSuccess('icc-2', 'ep-2');
+    db.query.mockResolvedValueOnce({
+      rows: [{
+        ...baseRow, parent_account_id: 'parent-1', line_label: 'Kid 1', bics_provisioned: true,
+      }],
+    }); // eSIM UPDATE
+
+    const result = await accountService.createAccount({
+      email: 'jane@example.com',
+      market: 'lewiston-id',
+      parent_email: 'jane@example.com',
+      line_label: 'Kid 1',
+    });
+
+    // Parent resolved against primary accounts only; uniqueness pre-check skipped.
+    expect(db.query.mock.calls[0][0]).toMatch(/parent_account_id IS NULL/);
+    // Child line still gets its own DID and eSIM.
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id');
+    expect(bics.getNextAvailableEsim).toHaveBeenCalled();
+    // parent_account_id ($8) and line_label ($9) persisted.
+    expect(insertedParams[7]).toBe('parent-1');
+    expect(insertedParams[8]).toBe('Kid 1');
+    expect(result.parent_account_id).toBe('parent-1');
+    expect(result.esim.endpointId).toBe('ep-2');
+  });
+
+  it('rejects a child line when parent_email has no primary account', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] }); // parent lookup: none
+    await expect(accountService.createAccount({
+      email: 'x@y.co', market: 'lewiston-id', parent_email: 'missing@y.co',
+    })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    // No DID purchased for an invalid parent.
+    expect(didOrchestration.assignDid).not.toHaveBeenCalled();
+  });
+
+  describe('getAccountLines', () => {
+    it('returns the child lines under a primary', async () => {
+      db.query.mockResolvedValueOnce({
+        rows: [
+          { ...baseRow, id: '22222222-2222-4222-8222-222222222222', parent_account_id: baseRow.id },
+          { ...baseRow, id: '33333333-3333-4333-8333-333333333333', parent_account_id: baseRow.id },
+        ],
+      });
+      const lines = await accountService.getAccountLines(baseRow.id);
+      expect(lines).toHaveLength(2);
+      expect(lines[0].parent_account_id).toBe(baseRow.id);
+      expect(lines[0]).not.toHaveProperty('sip_password_hash');
+      expect(db.query.mock.calls[0][0]).toMatch(/parent_account_id = \$1/);
+      expect(db.query.mock.calls[0][1]).toEqual([baseRow.id]);
+    });
+
+    it('rejects an invalid uuid without querying', async () => {
+      await expect(accountService.getAccountLines('nope'))
+        .rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+      expect(db.query).not.toHaveBeenCalled();
+    });
+  });
+});
+
 describe('getAccountByEmail', () => {
   it('returns a serialized account', async () => {
     db.query.mockResolvedValueOnce({ rows: [baseRow] });
@@ -351,5 +427,20 @@ describe('serializeAccount', () => {
   });
   it('passes through null', () => {
     expect(accountService.serializeAccount(null)).toBeNull();
+  });
+  it('exposes line_count for a primary account (from the query column)', () => {
+    const result = accountService.serializeAccount({ ...baseRow, parent_account_id: null, line_count: '3' });
+    expect(result.line_count).toBe(3);
+  });
+  it('defaults line_count to 0 for a primary with no count column', () => {
+    expect(accountService.serializeAccount(baseRow).line_count).toBe(0);
+  });
+  it('omits line_count for a child line and exposes parent_account_id/line_label', () => {
+    const result = accountService.serializeAccount({
+      ...baseRow, parent_account_id: 'parent-1', line_label: 'Kid 1',
+    });
+    expect(result).not.toHaveProperty('line_count');
+    expect(result.parent_account_id).toBe('parent-1');
+    expect(result.line_label).toBe('Kid 1');
   });
 });

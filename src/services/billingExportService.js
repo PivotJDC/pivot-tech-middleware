@@ -60,12 +60,22 @@ function monthRange(year, month) {
   };
 }
 
-// Columns selected for every billing query (usage_records joined to accounts).
+// Columns selected for every billing query (usage_records joined to accounts,
+// with a LEFT JOIN to the parent so child-line charges can roll up under the
+// primary's billing account — see JOIN_CLAUSE).
 const SELECT_COLUMNS = `
   ur.account_id, ur.endpoint_id, ur.data_total_mb, ur.plan_cap_mb,
   ur.overage_mb, ur.overage_charge,
   a.email, a.phone_e164, a.plan, a.status,
-  a.external_billing_id, a.external_billing_provider, a.bics_iccid
+  a.external_billing_id, a.external_billing_provider, a.bics_iccid,
+  a.parent_account_id,
+  p.external_billing_id AS parent_external_billing_id,
+  p.external_billing_provider AS parent_external_billing_provider
+`;
+
+const JOIN_CLAUSE = `
+  JOIN accounts a ON a.id = ur.account_id
+  LEFT JOIN accounts p ON p.id = a.parent_account_id
 `;
 
 /** Map a joined usage+account row into a billing record. */
@@ -74,17 +84,26 @@ function buildRecord(row, period) {
   const baseCharge = PLAN_PRICES[plan] || 0;
   const overageMb = num(row.overage_mb);
   const overageCharge = round2(num(row.overage_charge));
-  const externalBillingId = row.external_billing_id || null;
+  const parentAccountId = row.parent_account_id || null;
+  // Child lines roll up under the primary's external billing id/provider so the
+  // downstream system consolidates the family's charges onto one account.
+  const externalBillingId = parentAccountId
+    ? (row.parent_external_billing_id || null)
+    : (row.external_billing_id || null);
+  const externalBillingProvider = parentAccountId
+    ? (row.parent_external_billing_provider || null)
+    : (row.external_billing_provider || null);
 
   return {
     accountId: row.account_id,
+    parentAccountId,
     email: row.email,
     phoneE164: row.phone_e164,
     plan,
     status: row.status,
     billingPeriod: period,
     externalBillingId,
-    externalBillingProvider: row.external_billing_provider || null,
+    externalBillingProvider,
     action: externalBillingId ? 'append' : 'create',
     baseCharge,
     dataTotalMb: num(row.data_total_mb),
@@ -114,7 +133,7 @@ async function generateMonthlyExport(year, month) {
   const result = await db.query(
     `SELECT ${SELECT_COLUMNS}
        FROM usage_records ur
-       JOIN accounts a ON a.id = ur.account_id
+       ${JOIN_CLAUSE}
       WHERE ur.period_start >= $1 AND ur.period_start < $2
       ORDER BY a.email`,
     [start, end],
@@ -142,6 +161,7 @@ const CSV_COLUMNS = [
   ['action', (r) => r.action],
   ['external_billing_id', (r) => r.externalBillingId],
   ['account_id', (r) => r.accountId],
+  ['parent_account_id', (r) => r.parentAccountId],
   ['email', (r) => r.email],
   ['phone', (r) => r.phoneE164],
   ['plan', (r) => r.plan],
@@ -191,7 +211,7 @@ async function getAccountBillingSummary(accountId, year, month) {
   const result = await db.query(
     `SELECT ${SELECT_COLUMNS}
        FROM usage_records ur
-       JOIN accounts a ON a.id = ur.account_id
+       ${JOIN_CLAUSE}
       WHERE ur.account_id = $1
         AND ur.period_start >= $2 AND ur.period_start < $3
       LIMIT 1`,
