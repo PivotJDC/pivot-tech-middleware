@@ -26,6 +26,7 @@ const didsRouter = require('./routes/v1/dids');
 const provisionRouter = require('./routes/v1/provision');
 const webhooksRouter = require('./routes/v1/webhooks');
 const messagesRouter = require('./routes/v1/messages');
+const voiceRouter = require('./routes/v1/voice');
 const billingRouter = require('./routes/v1/billing');
 const adminRouter = require('./routes/admin');
 
@@ -95,6 +96,8 @@ function createApp() {
     limit: '1mb',
     verify: (req, res, buf) => { req.rawBody = buf; },
   }));
+  // Telnyx TeXML voice webhooks post form-urlencoded bodies.
+  app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
   // Liveness probe for the App Runner health check: answers 200 as long as the
   // process is up and the event loop is serving — no dependency checks, so a
@@ -124,6 +127,7 @@ function createApp() {
   app.use('/v1/provision', provisionRouter);
   app.use('/v1/webhooks', webhooksRouter);
   app.use('/v1/messages', messagesRouter);
+  app.use('/v1/voice', voiceRouter);
   app.use('/v1/billing', billingRouter);
   app.use('/admin', adminRouter);
 
