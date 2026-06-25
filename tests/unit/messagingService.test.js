@@ -1,6 +1,7 @@
 jest.mock('../../src/db');
 jest.mock('../../src/integrations/telnyx');
 jest.mock('../../src/services/accountService');
+jest.mock('../../src/services/pushService');
 jest.mock('../../src/utils/logger', () => ({
   logger: {
     info: () => {}, warn: () => {}, error: () => {},

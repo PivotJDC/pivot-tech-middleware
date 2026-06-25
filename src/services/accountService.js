@@ -343,6 +343,20 @@ async function getAccountByEmail(rawEmail) {
 }
 
 /**
+ * Look up an account by SIP username, returning the RAW row (including
+ * sip_password_hash) for credential checks — the Acrobits messaging web
+ * services authenticate with the SIP username + password. Internal use only;
+ * the result must never be returned to a client unserialized.
+ * @param {string} username
+ * @returns {Promise<object|null>}
+ */
+async function lookupBySipUsername(username) {
+  if (!username) return null;
+  const { rows } = await db.query('SELECT * FROM accounts WHERE sip_username = $1', [username]);
+  return rows[0] || null;
+}
+
+/**
  * Return all child lines under a primary account (the customer dashboard's
  * "manage lines" view and the billing roll-up consume this).
  * @param {string} accountId - the primary account id.
@@ -477,6 +491,7 @@ module.exports = {
   getAccountById,
   getAccountByEmail,
   getAccountLines,
+  lookupBySipUsername,
   getAccountStatus,
   updateAccount,
   transitionStatus,

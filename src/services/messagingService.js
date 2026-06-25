@@ -11,6 +11,7 @@
 const db = require('../db');
 const telnyx = require('../integrations/telnyx');
 const accountService = require('./accountService');
+const pushService = require('./pushService');
 const { errors } = require('../middleware/errorHandler');
 const { logger } = require('../utils/logger');
 
@@ -107,7 +108,9 @@ async function handleInboundMessage(payload = {}) {
     [accountId, from, to, body, mediaUrls, telnyxMessageId],
   );
   logger.info({ accountId, telnyxMessageId }, 'inbound message stored');
-  // TODO: send a push notification (APNs/FCM) to the device for this account.
+  // Wake the Acrobits app so it fetches the new message (best-effort; never
+  // throws, so a push failure can't break inbound storage).
+  await pushService.sendMessageNotification(accountId, rows[0]);
   return rows[0];
 }
 
@@ -153,6 +156,42 @@ async function getConversation(accountId, otherNumber, opts = {}) {
     params,
   );
   return rows;
+}
+
+/**
+ * Messages of one direction created after a given message id (its created_at
+ * watermark). Returned oldest-first so the Acrobits app appends them in order.
+ * With no/unknown lastId, returns the most recent window (capped) chronologically.
+ */
+async function getDirectionSince(accountId, direction, lastId) {
+  const params = [accountId, direction];
+  let where = 'account_id = $1 AND direction = $2';
+  if (lastId) {
+    params.push(lastId);
+    where += ` AND created_at > (SELECT created_at FROM messages WHERE id = $${params.length})`;
+  }
+  const { rows } = await db.query(
+    `SELECT * FROM (
+       SELECT * FROM messages WHERE ${where} ORDER BY created_at DESC LIMIT 200
+     ) recent ORDER BY created_at ASC`,
+    params,
+  );
+  return rows;
+}
+
+/**
+ * Fetch new inbound + outbound messages for the Acrobits app's polling endpoint.
+ * @param {string} accountId
+ * @param {string} [lastReceivedId] - last inbound sms_id the app has.
+ * @param {string} [lastSentId] - last outbound sms_id the app has.
+ * @returns {Promise<{ received: object[], sent: object[] }>}
+ */
+async function fetchForAcrobits(accountId, lastReceivedId, lastSentId) {
+  const [received, sent] = await Promise.all([
+    getDirectionSince(accountId, 'inbound', lastReceivedId),
+    getDirectionSince(accountId, 'outbound', lastSentId),
+  ]);
+  return { received, sent };
 }
 
 /**
@@ -210,6 +249,7 @@ module.exports = {
   handleInboundMessage,
   getMessages,
   getConversation,
+  fetchForAcrobits,
   updateMessageStatus,
   handleMessagingWebhook,
 };

@@ -1,0 +1,174 @@
+/**
+ * Acrobits Cloud Softphone messaging web services (mounted at /v1/acrobits).
+ *
+ * Acrobits does messaging over HTTP (not SIP/SIMPLE): the app calls these
+ * endpoints using URL templates configured in the Acrobits provider portal.
+ * This is an adapter layer that translates Acrobits' params/XML to/from our
+ * messagingService + pushService.
+ *
+ *   GET|POST /v1/acrobits/send         send an outbound message
+ *   GET      /v1/acrobits/fetch        poll for new received/sent messages
+ *   POST     /v1/acrobits/push-token   register the app's push token
+ *
+ * Auth is by SIP username + password (the same credentials provisioned into the
+ * app). All responses are Acrobits-flavored XML; errors return non-2xx with
+ * <response><message>...</message></response>.
+ */
+const express = require('express');
+const accountService = require('../../services/accountService');
+const messagingService = require('../../services/messagingService');
+const pushService = require('../../services/pushService');
+const crypto = require('../../utils/crypto');
+const { asyncHandler } = require('../../middleware/errorHandler');
+
+const router = express.Router();
+
+/** Escape the five XML special characters so values can't break the document. */
+function escapeXml(value) {
+  return String(value == null ? '' : value).replace(/[<>&'"]/g, (ch) => ({
+    '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;',
+  }[ch]));
+}
+
+/** Format a created_at value (pg Date or string) as ISO-8601. */
+function fmtDate(value) {
+  if (value instanceof Date) return value.toISOString();
+  return String(value == null ? '' : value);
+}
+
+function sendOkXml(smsId) {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<response>\n  <sms_id>${escapeXml(smsId)}</sms_id>\n</response>\n`;
+}
+
+function errorXml(message) {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<response>\n  <message>${escapeXml(message)}</message>\n</response>\n`;
+}
+
+function okXml() {
+  return '<?xml version="1.0" encoding="UTF-8"?>\n<response>\n  <status>ok</status>\n</response>\n';
+}
+
+/** Render one <sms> block. `peerField` is sms_from (received) or sms_to (sent). */
+function smsXml(m, peerField, peerNumber) {
+  return [
+    '    <sms>',
+    `      <sms_id>${escapeXml(m.id)}</sms_id>`,
+    `      <${peerField}>${escapeXml(peerNumber)}</${peerField}>`,
+    `      <body>${escapeXml(m.body)}</body>`,
+    `      <sending_date>${escapeXml(fmtDate(m.created_at))}</sending_date>`,
+    '      <content_type>text/plain</content_type>',
+    `      <stream_id>${escapeXml(peerNumber)}</stream_id>`,
+    '    </sms>',
+  ].join('\n');
+}
+
+function fetchXml(received, sent) {
+  const recv = received.map((m) => smsXml(m, 'sms_from', m.from_number)).join('\n');
+  const snt = sent.map((m) => smsXml(m, 'sms_to', m.to_number)).join('\n');
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<response>',
+    '  <received_smss>',
+    recv,
+    '  </received_smss>',
+    '  <sent_smss>',
+    snt,
+    '  </sent_smss>',
+    '</response>',
+    '',
+  ].filter((line) => line !== '').join('\n');
+}
+
+/** Merge query + body so handlers work for both GET and POST templates. */
+function params(req) {
+  return { ...req.query, ...(req.body || {}) };
+}
+
+/**
+ * Resolve + authenticate the account from SIP username (+ password when the
+ * caller supplies one). Returns the raw account row, or null on failure.
+ */
+async function authAcrobits(p) {
+  const account = await accountService.lookupBySipUsername(p.username);
+  if (!account) return null;
+  if (p.password) {
+    const ok = account.sip_password_hash
+      ? await crypto.verifyPassword(p.password, account.sip_password_hash)
+      : false;
+    if (!ok) return null;
+  }
+  return account;
+}
+
+function sendXml(res, status, xml) {
+  res.status(status).type('application/xml').send(xml);
+}
+
+// --- Send (GET or POST) ---
+async function sendHandler(req, res) {
+  const p = params(req);
+  const account = await authAcrobits(p);
+  if (!account) {
+    sendXml(res, 403, errorXml('Authentication failed.'));
+    return;
+  }
+  try {
+    const message = await messagingService.sendMessage(account.id, {
+      to: p.sms_to,
+      body: p.sms_body,
+    });
+    sendXml(res, 200, sendOkXml(message.id));
+  } catch (err) {
+    const status = err && err.status >= 400 ? err.status : 500;
+    sendXml(res, status, errorXml((err && err.message) || 'Failed to send message.'));
+  }
+}
+router.get('/send', asyncHandler(sendHandler));
+router.post('/send', asyncHandler(sendHandler));
+
+// --- Fetch (poll for new messages) ---
+router.get(
+  '/fetch',
+  asyncHandler(async (req, res) => {
+    const p = params(req);
+    const account = await authAcrobits(p);
+    if (!account) {
+      sendXml(res, 403, errorXml('Authentication failed.'));
+      return;
+    }
+    const { received, sent } = await messagingService.fetchForAcrobits(
+      account.id,
+      p.last_id,
+      p.last_sent_id,
+    );
+    sendXml(res, 200, fetchXml(received, sent));
+  }),
+);
+
+// --- Push token registration ---
+router.post(
+  '/push-token',
+  asyncHandler(async (req, res) => {
+    const p = params(req);
+    const account = await authAcrobits(p);
+    if (!account) {
+      sendXml(res, 403, errorXml('Authentication failed.'));
+      return;
+    }
+    try {
+      await pushService.registerToken(account.id, {
+        deviceToken: p.device_token,
+        selector: p.selector,
+        appId: p.app_id,
+        platform: p.platform,
+        deviceId: p.device_id,
+      });
+      sendXml(res, 200, okXml());
+    } catch (err) {
+      const status = err && err.status >= 400 ? err.status : 500;
+      sendXml(res, status, errorXml((err && err.message) || 'Failed to register push token.'));
+    }
+  }),
+);
+
+module.exports = router;
