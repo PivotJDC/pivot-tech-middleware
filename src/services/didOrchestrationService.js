@@ -99,7 +99,11 @@ async function assignDid(market) {
   const sipUsername = endpoint.sip_username;
   const sipPassword = endpoint.sip_password;
 
-  await telnyx.assignNumberToEndpoint(signalwireSid, sipEndpointId);
+  // Do NOT assign the number to the SIP connection here: provisionPhoneNumber
+  // already pointed the number's voice connection at the TeXML app (for inbound
+  // call routing). Assigning the SIP connection (assignNumberToEndpoint) would
+  // overwrite that connection_id and break inbound calls. Outbound calls route
+  // via the SIP credential's own connection, not the number's connection_id.
 
   // Never log sipPassword (CLAUDE.md security rule #1).
   logger.info({

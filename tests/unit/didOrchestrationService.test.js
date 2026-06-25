@@ -20,7 +20,6 @@ describe('assignDid', () => {
     telnyx.createSipEndpoint.mockResolvedValueOnce({
       id: 'ep-1', sip_username: 'telnyx-user-1', sip_password: 'telnyx-pw-1',
     });
-    telnyx.assignNumberToEndpoint.mockResolvedValueOnce({});
 
     const cred = await did.assignDid('lewiston-id');
 
@@ -39,7 +38,9 @@ describe('assignDid', () => {
     );
     expect(telnyx.createSipEndpoint.mock.calls[0][0].username).toMatch(/^pivottech-/);
     expect(telnyx.createSipEndpoint.mock.calls[0][0]).not.toHaveProperty('password');
-    expect(telnyx.assignNumberToEndpoint).toHaveBeenCalledWith('sid-1', 'ep-1');
+    // The number's connection_id stays on the TeXML app (set by
+    // provisionPhoneNumber); we must NOT reassign it to the SIP connection.
+    expect(telnyx.assignNumberToEndpoint).not.toHaveBeenCalled();
   });
 
   it('throws VALIDATION_ERROR for an unknown market', async () => {
@@ -73,7 +74,6 @@ describe('assignDid', () => {
       .mockResolvedValueOnce([{ number: '+13315550100' }]); // 331 has one
     telnyx.provisionPhoneNumber.mockResolvedValueOnce({ id: 'sid-3' });
     telnyx.createSipEndpoint.mockResolvedValueOnce({ id: 'ep-3' });
-    telnyx.assignNumberToEndpoint.mockResolvedValueOnce({});
 
     await did.assignDid('kendall-il');
 
@@ -90,7 +90,6 @@ describe('assignDid', () => {
       .mockResolvedValueOnce([{ number: '+13315550100' }]); // 331 has one
     telnyx.provisionPhoneNumber.mockResolvedValueOnce({ id: 'sid-2' });
     telnyx.createSipEndpoint.mockResolvedValueOnce({ id: 'ep-2' });
-    telnyx.assignNumberToEndpoint.mockResolvedValueOnce({});
 
     const cred = await did.assignDid('kendall-il');
     expect(cred.areaCode).toBe('331');
