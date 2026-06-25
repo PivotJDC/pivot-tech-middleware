@@ -15,7 +15,7 @@ beforeEach(() => {
 describe('assignDid', () => {
   it('runs search -> purchase -> create endpoint -> assign and returns Telnyx credentials', async () => {
     telnyx.searchAvailableNumbers.mockResolvedValueOnce([{ number: '+12085550100' }]);
-    telnyx.purchaseNumber.mockResolvedValueOnce({ id: 'sid-1' });
+    telnyx.provisionPhoneNumber.mockResolvedValueOnce({ id: 'sid-1' });
     // Telnyx auto-generates the real sip_username/sip_password.
     telnyx.createSipEndpoint.mockResolvedValueOnce({
       id: 'ep-1', sip_username: 'telnyx-user-1', sip_password: 'telnyx-pw-1',
@@ -71,7 +71,7 @@ describe('assignDid', () => {
     telnyx.searchAvailableNumbers
       .mockResolvedValueOnce([]) // 630 empty
       .mockResolvedValueOnce([{ number: '+13315550100' }]); // 331 has one
-    telnyx.purchaseNumber.mockResolvedValueOnce({ id: 'sid-3' });
+    telnyx.provisionPhoneNumber.mockResolvedValueOnce({ id: 'sid-3' });
     telnyx.createSipEndpoint.mockResolvedValueOnce({ id: 'ep-3' });
     telnyx.assignNumberToEndpoint.mockResolvedValueOnce({});
 
@@ -88,7 +88,7 @@ describe('assignDid', () => {
     telnyx.searchAvailableNumbers
       .mockResolvedValueOnce([]) // 630 empty
       .mockResolvedValueOnce([{ number: '+13315550100' }]); // 331 has one
-    telnyx.purchaseNumber.mockResolvedValueOnce({ id: 'sid-2' });
+    telnyx.provisionPhoneNumber.mockResolvedValueOnce({ id: 'sid-2' });
     telnyx.createSipEndpoint.mockResolvedValueOnce({ id: 'ep-2' });
     telnyx.assignNumberToEndpoint.mockResolvedValueOnce({});
 

@@ -28,13 +28,14 @@ function escapeXml(value) {
 }
 
 /**
- * Normalize a phone number from a Telnyx form-urlencoded body. URL encoding
- * turns the leading "+" of an E.164 number into a space, so strip whitespace
- * and re-add the "+" before we look the number up.
+ * Normalize a phone number from a Telnyx webhook. URL encoding mangles the
+ * leading "+" of an E.164 number — in a form body it decodes to a space, and in
+ * a query string it may arrive as the literal "%2B" — so handle both, then
+ * re-add the "+" before we look the number up.
  */
 function normalizePhone(raw) {
   if (!raw) return raw;
-  const cleaned = raw.replace(/\s/g, '');
+  const cleaned = String(raw).replace(/%2B/gi, '+').replace(/\s/g, '');
   return cleaned.startsWith('+') ? cleaned : `+${cleaned}`;
 }
 
@@ -60,15 +61,16 @@ function rejectXml() {
   ].join('\n');
 }
 
-// Inbound call routing. Always 200 + XML.
-router.post(
+// Inbound call routing. Always 200 + XML. Telnyx TeXML may call this with GET
+// (params in the query string) or POST (form body), so handle both and merge.
+router.all(
   '/inbound',
   asyncHandler(async (req, res) => {
-    const body = req.body || {};
-    // URL-encoded "+" arrives as a space; normalize back to E.164 before lookup.
-    const to = normalizePhone(body.To || body.to);
-    const from = normalizePhone(body.From || body.from);
-    const callId = body.CallSid || body.CallControlId || body.call_control_id || null;
+    const params = { ...req.query, ...req.body };
+    // URL-encoded "+" arrives as a space (body) or %2B (query); normalize both.
+    const to = normalizePhone(params.To || params.to);
+    const from = normalizePhone(params.From || params.from);
+    const callId = params.CallSid || params.CallControlId || params.call_control_id || null;
 
     const match = await voiceService.lookupByCalledNumber(to);
     const active = !!match && match.status === 'active';

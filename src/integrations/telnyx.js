@@ -181,6 +181,40 @@ async function purchaseNumber(e164) {
   };
 }
 
+// Per-number routing defaults — the live MobilityNet TeXML voice application +
+// messaging profile. Read at call time (not module load) and overridable via
+// config/env so suites that mock a minimal config don't break.
+const DEFAULT_TEXML_VOICE_CONNECTION_ID = '2990188126548264846';
+const DEFAULT_MESSAGING_PROFILE_ID = '40019ed1-1614-4b43-9fa1-2b2386aa810b';
+
+/**
+ * Provision a freshly-purchased number for service: buy it, then route inbound
+ * voice to our TeXML application (so POST/GET /v1/voice/inbound fires) and
+ * attach the messaging profile (so SMS/MMS work). Returns the purchase resource
+ * whose `id` is the +E.164 number.
+ *
+ * The voice/messaging settings are per-number sub-resources on Telnyx:
+ *   PATCH /phone_numbers/{id}/voice     { connection_id }
+ *   PATCH /phone_numbers/{id}/messaging { messaging_profile_id }
+ */
+async function provisionPhoneNumber(e164) {
+  const telnyxCfg = config.telnyx || {};
+  const voiceConnectionId = telnyxCfg.texmlConnectionId || DEFAULT_TEXML_VOICE_CONNECTION_ID;
+  const messagingProfileId = telnyxCfg.messagingProfileId || DEFAULT_MESSAGING_PROFILE_ID;
+
+  const purchase = await purchaseNumber(e164);
+  const { id } = purchase;
+
+  await request('PATCH', `/phone_numbers/${id}/voice`, {
+    connection_id: voiceConnectionId,
+  });
+  await request('PATCH', `/phone_numbers/${id}/messaging`, {
+    messaging_profile_id: messagingProfileId,
+  });
+
+  return purchase;
+}
+
 /**
  * Create a SIP credential set on Telnyx. Telnyx auto-generates the SIP
  * username/password tied to TELNYX_SIP_CONNECTION_ID — the `password`/`callerId`
@@ -300,6 +334,7 @@ async function sendMessage({
 module.exports = {
   searchAvailableNumbers,
   purchaseNumber,
+  provisionPhoneNumber,
   createSipEndpoint,
   getSipEndpoint,
   updateSipEndpoint,

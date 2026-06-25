@@ -72,6 +72,31 @@ describe('POST /v1/voice/inbound', () => {
     expect(res.text).not.toContain('<Dial>');
   });
 
+  it('handles a GET webhook with params in the query string', async () => {
+    voiceService.lookupByCalledNumber.mockResolvedValueOnce({
+      account_id: 'a1', sip_username: 'pivottech-abc', status: 'active',
+    });
+    const res = await request(app)
+      .get('/v1/voice/inbound')
+      .query({ To: '+12085550100', From: '+12085550142', CallSid: 'CA-get' });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/xml/);
+    expect(res.text).toContain('<Dial>sip:pivottech-abc@sip.telnyx.com</Dial>');
+    expect(voiceService.lookupByCalledNumber).toHaveBeenCalledWith('+12085550100');
+  });
+
+  it('normalizes a query "To" whose + arrived as %2B', async () => {
+    voiceService.lookupByCalledNumber.mockResolvedValueOnce({
+      account_id: 'a1', sip_username: 'pivottech-abc', status: 'active',
+    });
+    // Raw query string with a literal %2B (defensive: handled even if not pre-decoded).
+    const res = await request(app)
+      .get('/v1/voice/inbound?To=%2B12085550100&From=%2B12085550142&CallSid=CA-enc');
+    expect(res.status).toBe(200);
+    expect(voiceService.lookupByCalledNumber).toHaveBeenCalledWith('+12085550100');
+  });
+
   it('also accepts a JSON body', async () => {
     voiceService.lookupByCalledNumber.mockResolvedValueOnce({
       account_id: 'a1', sip_username: 'pivottech-xyz', status: 'active',

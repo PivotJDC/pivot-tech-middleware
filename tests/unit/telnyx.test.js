@@ -83,6 +83,31 @@ describe('typed API calls', () => {
     expect(JSON.parse(init.body)).toEqual({ phone_numbers: [{ phone_number: '+12085550100' }] });
   });
 
+  it('provisionPhoneNumber purchases then assigns the TeXML voice connection + messaging profile', async () => {
+    global.fetch
+      .mockResolvedValueOnce(ok({
+        data: { id: 'order-1', phone_numbers: [{ phone_number: '+12085550100' }] },
+      })) // purchase
+      .mockResolvedValueOnce(ok({ data: {} })) // PATCH /voice
+      .mockResolvedValueOnce(ok({ data: {} })); // PATCH /messaging
+
+    const res = await telnyx.provisionPhoneNumber('+12085550100');
+    expect(res.id).toBe('+12085550100');
+
+    const { calls } = global.fetch.mock;
+    expect(calls[0][0]).toBe('https://api.telnyx.com/v2/number_orders');
+
+    // Voice → TeXML application connection.
+    expect(calls[1][0]).toBe('https://api.telnyx.com/v2/phone_numbers/+12085550100/voice');
+    expect(calls[1][1].method).toBe('PATCH');
+    expect(JSON.parse(calls[1][1].body)).toEqual({ connection_id: '2990188126548264846' });
+
+    // Messaging → messaging profile (from config in tests: 'mp-1').
+    expect(calls[2][0]).toBe('https://api.telnyx.com/v2/phone_numbers/+12085550100/messaging');
+    expect(calls[2][1].method).toBe('PATCH');
+    expect(JSON.parse(calls[2][1].body)).toEqual({ messaging_profile_id: 'mp-1' });
+  });
+
   it('assignNumberToEndpoint PATCHes /phone_numbers/{e164} with the literal + (no encoding)', async () => {
     global.fetch.mockResolvedValueOnce(ok({ data: {} }));
     await telnyx.assignNumberToEndpoint('+12085550100', 'cred-1');

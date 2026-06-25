@@ -81,7 +81,9 @@ async function findAvailableNumber(market) {
 async function assignDid(market) {
   const { e164, areaCode } = await findAvailableNumber(market);
 
-  const purchase = await telnyx.purchaseNumber(e164);
+  // Purchase + route inbound voice to the TeXML app + attach the messaging
+  // profile (so inbound calls hit /v1/voice/inbound and SMS/MMS work).
+  const purchase = await telnyx.provisionPhoneNumber(e164);
   const signalwireSid = idOf(purchase);
 
   // Telnyx auto-generates the SIP credentials; we only supply a recognizable
