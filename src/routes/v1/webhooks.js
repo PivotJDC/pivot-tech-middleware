@@ -3,17 +3,20 @@
  *
  *   POST /v1/webhooks/port         SignalWire port lifecycle events
  *   POST /v1/webhooks/signalwire   general SignalWire events (calls, SMS/MMS)
+ *   POST /v1/webhooks/messaging    Telnyx messaging events (inbound + delivery)
  *
- * Every request must carry a valid HMAC-SHA256 signature (CLAUDE.md rule #5);
- * invalid signatures are rejected 403 before any processing. The raw body for
- * the HMAC is captured by the express.json verify hook in app.js (req.rawBody).
+ * SignalWire requests must carry a valid HMAC-SHA256 signature (CLAUDE.md rule
+ * #5); invalid signatures are rejected 403 before any processing. The raw body
+ * for the HMAC is captured by the express.json verify hook in app.js
+ * (req.rawBody).
  *
- * On success we return 200 so SignalWire does not retry. A thrown error becomes
- * a 500 via the error handler, which lets SignalWire retry transient failures —
+ * On success we return 200 so the vendor does not retry. A thrown error becomes
+ * a 500 via the error handler, which lets the vendor retry transient failures —
  * safe because the handlers are idempotent.
  */
 const express = require('express');
 const webhookService = require('../../services/webhookService');
+const messagingService = require('../../services/messagingService');
 const { asyncHandler, errors } = require('../../middleware/errorHandler');
 const { logger } = require('../../utils/logger');
 
@@ -45,6 +48,26 @@ router.post(
   asyncHandler(async (req, res) => {
     const result = await webhookService.handleSignalwireEvent(req.body || {});
     res.status(200).json({ received: true, ...result });
+  }),
+);
+
+// Telnyx messaging events: inbound messages + delivery status. We always return
+// 200 immediately so Telnyx doesn't retry; processing errors are logged, not
+// surfaced.
+// TODO(security): verify the Telnyx Ed25519 signature
+// (telnyx-signature-ed25519 + telnyx-timestamp headers) against the Telnyx
+// public key before processing. Telnyx uses Ed25519, not the SignalWire HMAC
+// scheme above, so it needs the public key wired into config first.
+router.post(
+  '/messaging',
+  asyncHandler(async (req, res) => {
+    try {
+      const result = await messagingService.handleMessagingWebhook(req.body || {});
+      res.status(200).json({ received: true, ...result });
+    } catch (err) {
+      logger.error({ err: err.message }, 'messaging webhook processing error');
+      res.status(200).json({ received: true });
+    }
   }),
 );
 

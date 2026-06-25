@@ -25,6 +25,7 @@ const authRouter = require('./routes/v1/auth');
 const didsRouter = require('./routes/v1/dids');
 const provisionRouter = require('./routes/v1/provision');
 const webhooksRouter = require('./routes/v1/webhooks');
+const messagesRouter = require('./routes/v1/messages');
 const billingRouter = require('./routes/v1/billing');
 const adminRouter = require('./routes/admin');
 
@@ -122,6 +123,7 @@ function createApp() {
   app.use('/v1/numbers', didsRouter);
   app.use('/v1/provision', provisionRouter);
   app.use('/v1/webhooks', webhooksRouter);
+  app.use('/v1/messages', messagesRouter);
   app.use('/v1/billing', billingRouter);
   app.use('/admin', adminRouter);
 

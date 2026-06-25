@@ -275,6 +275,28 @@ async function sendSms({ from, to, text }) {
   }));
 }
 
+/**
+ * Send an SMS or MMS via Telnyx Messaging. MMS is just an SMS with media_urls.
+ * @param {object} params
+ * @param {string} params.from - sender E.164.
+ * @param {string} params.to - recipient E.164.
+ * @param {string} [params.body] - message text (may be empty for media-only MMS).
+ * @param {string[]} [params.mediaUrls] - public media URLs (MMS).
+ * @param {string} [params.messagingProfileId] - overrides the config default.
+ * @returns {Promise<object>} the Telnyx message resource ({ id, to, from, ... }).
+ */
+async function sendMessage({
+  from, to, body, mediaUrls, messagingProfileId,
+}) {
+  return unwrap(await request('POST', '/messages', {
+    from,
+    to,
+    text: body || '',
+    media_urls: mediaUrls || [],
+    messaging_profile_id: messagingProfileId || config.telnyx.messagingProfileId,
+  }));
+}
+
 module.exports = {
   searchAvailableNumbers,
   purchaseNumber,
@@ -286,6 +308,7 @@ module.exports = {
   assignNumberToCampaign,
   submitPort,
   sendSms,
+  sendMessage,
   // exposed for tests
   request,
 };
