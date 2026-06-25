@@ -27,6 +27,17 @@ function escapeXml(value) {
   }[ch]));
 }
 
+/**
+ * Normalize a phone number from a Telnyx form-urlencoded body. URL encoding
+ * turns the leading "+" of an E.164 number into a space, so strip whitespace
+ * and re-add the "+" before we look the number up.
+ */
+function normalizePhone(raw) {
+  if (!raw) return raw;
+  const cleaned = raw.replace(/\s/g, '');
+  return cleaned.startsWith('+') ? cleaned : `+${cleaned}`;
+}
+
 /** TeXML that bridges the call to the subscriber's SIP credential. */
 function dialXml(sipUsername) {
   return [
@@ -54,8 +65,9 @@ router.post(
   '/inbound',
   asyncHandler(async (req, res) => {
     const body = req.body || {};
-    const to = body.To || body.to;
-    const from = body.From || body.from;
+    // URL-encoded "+" arrives as a space; normalize back to E.164 before lookup.
+    const to = normalizePhone(body.To || body.to);
+    const from = normalizePhone(body.From || body.from);
     const callId = body.CallSid || body.CallControlId || body.call_control_id || null;
 
     const match = await voiceService.lookupByCalledNumber(to);

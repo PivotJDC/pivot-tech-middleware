@@ -83,6 +83,23 @@ describe('POST /v1/voice/inbound', () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain('<Dial>sip:pivottech-xyz@sip.telnyx.com</Dial>');
   });
+
+  it('normalizes a number whose URL-encoded "+" arrived as a space', async () => {
+    voiceService.lookupByCalledNumber.mockResolvedValueOnce({
+      account_id: 'a1', sip_username: 'pivottech-abc', status: 'active',
+    });
+    // Raw form body: a literal "+" in urlencoded decodes to a space, so the
+    // route receives "To= 12085550100" — exactly what Telnyx sends.
+    const res = await request(app)
+      .post('/v1/voice/inbound')
+      .type('form')
+      .send('To=+12085550100&From=+12085550142&CallSid=CA9');
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<Dial>sip:pivottech-abc@sip.telnyx.com</Dial>');
+    // The space-mangled number is normalized back to E.164 before lookup.
+    expect(voiceService.lookupByCalledNumber).toHaveBeenCalledWith('+12085550100');
+  });
 });
 
 describe('POST /v1/voice/status', () => {
