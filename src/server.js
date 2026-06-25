@@ -48,6 +48,7 @@ let logger;
 let config;
 let db;
 let cache;
+let runMigrations;
 let server;
 let shuttingDown = false;
 
@@ -113,9 +114,29 @@ async function shutdown(signal) {
   }, 10000).unref();
 }
 
+/**
+ * Apply database migrations at startup. Never fatal: a failure (DB unreachable,
+ * a bad migration) is logged as a warning and the server starts anyway — the
+ * existing schema is enough to serve health checks and already-deployed routes,
+ * and /health will report the DB state. Idempotent (already-applied migrations
+ * are skipped), so a transient failure self-heals on the next deploy/restart.
+ */
+async function applyMigrations() {
+  try {
+    await runMigrations();
+    logger.info('Migrations complete');
+  } catch (err) {
+    logger.warn(
+      { err: { message: err.message, stack: err.stack } },
+      'Migrations failed at startup; starting anyway with the existing schema',
+    );
+  }
+}
+
 async function start() {
   logger.info({ env: config.env, port: config.port }, 'starting pivot-tech-middleware');
 
+  await applyMigrations();
   await verifyConnectivity();
 
   const app = createApp();
@@ -157,6 +178,7 @@ async function bootstrap() {
     config = require('./config');
     db = require('./db');
     cache = require('./cache');
+    ({ run: runMigrations } = require('./db/migrate'));
     /* eslint-enable global-require */
   } catch (err) {
     logFatalToStdout('module load (check required environment variables)', err);

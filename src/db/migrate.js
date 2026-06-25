@@ -78,8 +78,15 @@ async function run() {
   }
 }
 
-run().catch((err) => {
-  // eslint-disable-next-line no-console
-  console.error(err.message);
-  process.exit(1);
-});
+// Run as a CLI (`npm run migrate`) but stay importable: when required from
+// server.js we want only the exported run(), with no auto-execution and no
+// process.exit on failure (the server decides how to handle a failed migration).
+if (require.main === module) {
+  run().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { run };
