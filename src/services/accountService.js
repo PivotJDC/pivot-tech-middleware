@@ -9,8 +9,12 @@
 const db = require('../db');
 const { errors } = require('../middleware/errorHandler');
 const didOrchestration = require('./didOrchestrationService');
+const bics = require('../integrations/bics');
 const crypto = require('../utils/crypto');
 const { logger } = require('../utils/logger');
+
+// Customer-facing message when the eSIM step fails but the account is kept.
+const BICS_RETRY_MESSAGE = 'BICS provisioning failed — retry from admin';
 
 // Plan slugs the dashboard offers; must stay in sync with lib/plans.ts there.
 // unlimited_25 remains the default (see validatePlan / CLAUDE.md).
@@ -80,6 +84,94 @@ function assertTransition(from, to) {
 }
 
 /**
+ * Pull the new endpoint id out of a BICS CreateEndPoint response envelope. The
+ * exact shape isn't contractually pinned, so check the likely locations.
+ * Returns null if not present (the caller falls back to the linked SIM record).
+ */
+function extractEndpointId(createResult) {
+  const rp = createResult && createResult.Response && createResult.Response.responseParam;
+  if (!rp) return null;
+  if (rp.endPointId && rp.endPointId !== '-') return rp.endPointId;
+  if (Array.isArray(rp.rows) && rp.rows[0] && rp.rows[0].endPointId) {
+    return rp.rows[0].endPointId;
+  }
+  return null;
+}
+
+/**
+ * Provision a BICS eSIM for an account: grab an available ICCID, create + link
+ * the endpoint, activate it, and read back the eSIM activation code. Throws on
+ * any BICS failure (caller decides whether to swallow or surface).
+ *
+ * @param {{ id: string }} account
+ * @returns {Promise<{ iccid, endpointId, activationCode, smDpAddress }>}
+ */
+async function provisionEsim(account) {
+  const iccid = await bics.getNextAvailableEsim();
+  const createResult = await bics.createEndpoint({
+    name: `mobilitynet-${account.id.slice(0, 8)}`,
+    iccid,
+    // planId / apnGroupId / roamingProfileId default from config inside bics.
+  });
+
+  let endpointId = extractEndpointId(createResult);
+  if (!endpointId) {
+    // CreateEndPoint didn't surface the id; the now-linked SIM record carries it.
+    const linked = await bics.fetchSimByIccid(iccid);
+    endpointId = linked && linked.endPointId && linked.endPointId !== '-'
+      ? linked.endPointId
+      : null;
+  }
+  if (!endpointId) {
+    throw new Error('BICS createEndpoint returned no endPointId');
+  }
+
+  await bics.activateEndpoint(endpointId);
+
+  const sim = await bics.fetchSimByIccid(iccid);
+  const activation = (sim && sim.activationCode) || {};
+  return {
+    iccid,
+    endpointId,
+    activationCode: activation.textQrCode || null,
+    // BICS spells the field smDpPlusAdress (sic); expose it as smDpAddress.
+    smDpAddress: activation.smDpPlusAdress || null,
+  };
+}
+
+/**
+ * Attempt eSIM provisioning and persist the result. Best-effort: a BICS failure
+ * is logged and swallowed (the account + DID are already created), leaving
+ * bics_provisioned=false for a later retry. Returns the (possibly updated)
+ * account row plus the esim payload / error for the response.
+ */
+async function provisionAndPersistEsim(account) {
+  try {
+    const esim = await provisionEsim(account);
+    const { rows } = await db.query(
+      `UPDATE accounts
+          SET bics_endpoint_id = $1, bics_iccid = $2, bics_provisioned = true
+        WHERE id = $3
+      RETURNING *`,
+      [esim.endpointId, esim.iccid, account.id],
+    );
+    logger.info(
+      { accountId: account.id, iccid: esim.iccid, endpointId: esim.endpointId },
+      'BICS eSIM provisioned',
+    );
+    return { account: rows[0] || account, esim };
+  } catch (err) {
+    // Do NOT roll back: the Telnyx DID is already purchased and the account row
+    // exists. Flag for retry instead.
+    logger.error(
+      { accountId: account.id, err: err.message },
+      'BICS eSIM provisioning failed; account kept, retry needed',
+    );
+    return { account, esim: null, esimError: BICS_RETRY_MESSAGE };
+  }
+}
+
+/**
  * Create a new account in 'pending' status, provisioning its DID + SIP endpoint
  * in the same call (CLAUDE.md DoD #1: DID assigned at creation).
  *
@@ -144,7 +236,16 @@ async function createAccount(input = {}) {
       { accountId: account.id, market, areaCode: credentials.areaCode },
       'account created and DID assigned',
     );
-    return serializeAccount(account);
+
+    // Best-effort BICS eSIM provisioning. A failure here does NOT roll back the
+    // account (the Telnyx DID is already purchased) — bics_provisioned stays
+    // false and the eSIM can be retried from the admin API.
+    const { account: finalAccount, esim, esimError } = await provisionAndPersistEsim(account);
+
+    const result = serializeAccount(finalAccount);
+    result.esim = esim;
+    if (esimError) result.esim_error = esimError;
+    return result;
   } catch (err) {
     if (err.code === '23505') {
       // Lost the email race after orchestration; the purchased DID is now
@@ -267,6 +368,43 @@ async function transitionStatus(id, status) {
   return updateAccount(id, { status });
 }
 
+/**
+ * Re-run BICS eSIM provisioning for an account whose initial attempt failed
+ * (admin retry action). Unlike createAccount's best-effort path, a failure here
+ * is surfaced to the caller so the admin sees it. Rejects if the account is
+ * already provisioned.
+ * @param {string} id
+ * @returns {Promise<object>} the updated account plus its esim payload.
+ */
+async function retryBicsProvisioning(id) {
+  assertUuid(id);
+  const { rows } = await db.query('SELECT * FROM accounts WHERE id = $1', [id]);
+  if (rows.length === 0) {
+    throw errors.notFound('Account not found.');
+  }
+  const account = rows[0];
+  if (account.bics_provisioned) {
+    throw errors.validation('BICS eSIM is already provisioned for this account.', 'action');
+  }
+
+  // Surface failures (BICS_ERROR) to the admin rather than swallowing them.
+  const esim = await provisionEsim(account);
+  const { rows: updated } = await db.query(
+    `UPDATE accounts
+        SET bics_endpoint_id = $1, bics_iccid = $2, bics_provisioned = true
+      WHERE id = $3
+    RETURNING *`,
+    [esim.endpointId, esim.iccid, id],
+  );
+  logger.info(
+    { accountId: id, iccid: esim.iccid, endpointId: esim.endpointId },
+    'BICS eSIM provisioning retried',
+  );
+  const result = serializeAccount(updated[0]);
+  result.esim = esim;
+  return result;
+}
+
 module.exports = {
   createAccount,
   getAccountById,
@@ -274,6 +412,7 @@ module.exports = {
   getAccountStatus,
   updateAccount,
   transitionStatus,
+  retryBicsProvisioning,
   setSipPasswordHash,
   serializeAccount,
   // exported for tests / reuse

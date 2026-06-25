@@ -62,6 +62,25 @@ describe('admin API', () => {
     expect(accountService.transitionStatus).not.toHaveBeenCalled();
   });
 
+  it('PATCH /admin/accounts/:id with action=retry_bics re-runs eSIM provisioning', async () => {
+    accountService.retryBicsProvisioning.mockResolvedValueOnce({
+      id: 'a1', bics_provisioned: true, esim: { iccid: 'icc-1', endpointId: 'ep-1' },
+    });
+    const res = await request(app)
+      .patch('/admin/accounts/a1')
+      .send({ action: 'retry_bics' });
+    expect(res.status).toBe(200);
+    expect(accountService.retryBicsProvisioning).toHaveBeenCalledWith('a1');
+    expect(res.body.esim.iccid).toBe('icc-1');
+  });
+
+  it('PATCH /admin/accounts/:id rejects an unsupported action', async () => {
+    const res = await request(app).patch('/admin/accounts/a1').send({ action: 'nope' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.field).toBe('action');
+    expect(accountService.retryBicsProvisioning).not.toHaveBeenCalled();
+  });
+
   it('POST /admin/accounts/:id/provision/reissue returns a new token', async () => {
     provisioningService.reissueToken.mockResolvedValueOnce({ raw_token: 'rt', provisioning_url: 'u' });
     const res = await request(app).post('/admin/accounts/a1/provision/reissue').send({});

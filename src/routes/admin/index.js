@@ -7,6 +7,7 @@
  *   GET   /admin/accounts                       list (filters: status, market, from, to)
  *   GET   /admin/accounts/:id                   full detail
  *   PATCH /admin/accounts/:id/status            force status (reason, audit-logged)
+ *   PATCH /admin/accounts/:id                    action: "retry_bics" — re-run eSIM provisioning
  *   POST  /admin/accounts/:id/provision/reissue new provisioning token + QR
  *   GET   /admin/dids                           inventory (filters: market, status, area_code)
  *   GET   /admin/ports                          port requests (filters: status, carrier)
@@ -56,6 +57,22 @@ router.patch(
         adminId: req.admin.id, accountId: req.params.id, newStatus: status, reason: reason || null,
       },
       'admin forced account status change',
+    );
+    res.json(account);
+  }),
+);
+
+router.patch(
+  '/accounts/:id',
+  asyncHandler(async (req, res) => {
+    const { action } = req.body || {};
+    if (action !== 'retry_bics') {
+      throw errors.validation('Unsupported action. Expected action="retry_bics".', 'action');
+    }
+    const account = await accountService.retryBicsProvisioning(req.params.id);
+    logger.info(
+      { adminId: req.admin.id, accountId: req.params.id },
+      'admin retried BICS eSIM provisioning',
     );
     res.json(account);
   }),

@@ -1,5 +1,6 @@
 jest.mock('../../src/db');
 jest.mock('../../src/services/didOrchestrationService');
+jest.mock('../../src/integrations/bics');
 jest.mock('../../src/utils/crypto');
 jest.mock('../../src/utils/logger', () => ({
   logger: { info: () => {}, warn: () => {}, error: () => {} },
@@ -8,6 +9,7 @@ jest.mock('../../src/utils/logger', () => ({
 
 const db = require('../../src/db');
 const didOrchestration = require('../../src/services/didOrchestrationService');
+const bics = require('../../src/integrations/bics');
 const crypto = require('../../src/utils/crypto');
 const accountService = require('../../src/services/accountService');
 
@@ -21,9 +23,30 @@ const baseRow = {
   sip_username: 'pivottech-abc',
   sip_endpoint_id: 'ep-1',
   sip_password_hash: 'bcrypt$secret',
+  bics_endpoint_id: null,
+  bics_iccid: null,
+  bics_provisioned: false,
   activated_at: null,
   cancelled_at: null,
 };
+
+// A successful BICS eSIM provisioning chain (getNextAvailableEsim ->
+// createEndpoint -> activateEndpoint -> fetchSimByIccid).
+function wireBicsSuccess(iccid = 'icc-1', endpointId = 'ep-bics-1') {
+  bics.getNextAvailableEsim.mockResolvedValueOnce(iccid);
+  bics.createEndpoint.mockResolvedValueOnce({
+    Response: { responseParam: { endPointId: endpointId } },
+  });
+  bics.activateEndpoint.mockResolvedValueOnce({});
+  bics.fetchSimByIccid.mockResolvedValueOnce({
+    endPointId: endpointId,
+    activationCode: {
+      textQrCode: 'LPA:1$thales3.prod.ondemandconnectivity.com$MATCH-1',
+      smDpPlusAdress: 'thales3.prod.ondemandconnectivity.com',
+      matchingId: 'MATCH-1',
+    },
+  });
+}
 
 const credentials = {
   phoneE164: '+12085550100',
@@ -39,6 +62,10 @@ beforeEach(() => {
   db.withTransaction.mockReset();
   didOrchestration.assignDid.mockReset();
   crypto.hashPassword.mockReset();
+  bics.getNextAvailableEsim.mockReset();
+  bics.createEndpoint.mockReset();
+  bics.activateEndpoint.mockReset();
+  bics.fetchSimByIccid.mockReset();
 });
 
 describe('createAccount', () => {
@@ -137,6 +164,112 @@ describe('createAccount', () => {
     })).rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'plan' });
     expect(db.query).not.toHaveBeenCalled();
     expect(didOrchestration.assignDid).not.toHaveBeenCalled();
+  });
+
+  it('happy path: provisions DID and eSIM, returns the activation code', async () => {
+    wireHappyPath();
+    wireBicsSuccess('icc-1', 'ep-bics-1');
+    // The post-provisioning UPDATE returns the row with BICS fields set.
+    db.query.mockResolvedValueOnce({
+      rows: [{
+        ...baseRow, bics_endpoint_id: 'ep-bics-1', bics_iccid: 'icc-1', bics_provisioned: true,
+      }],
+    });
+
+    const result = await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id' });
+
+    expect(bics.getNextAvailableEsim).toHaveBeenCalled();
+    expect(bics.createEndpoint).toHaveBeenCalledWith(
+      expect.objectContaining({ name: `mobilitynet-${baseRow.id.slice(0, 8)}`, iccid: 'icc-1' }),
+    );
+    expect(bics.activateEndpoint).toHaveBeenCalledWith('ep-bics-1');
+    expect(result.esim).toEqual({
+      iccid: 'icc-1',
+      endpointId: 'ep-bics-1',
+      activationCode: 'LPA:1$thales3.prod.ondemandconnectivity.com$MATCH-1',
+      smDpAddress: 'thales3.prod.ondemandconnectivity.com',
+    });
+    expect(result).not.toHaveProperty('esim_error');
+    expect(result.bics_provisioned).toBe(true);
+    // UPDATE persists endpoint id, iccid, and the provisioned flag.
+    const updateCall = db.query.mock.calls.find(([sql]) => /UPDATE accounts/.test(sql));
+    expect(updateCall[1]).toEqual(['ep-bics-1', 'icc-1', baseRow.id]);
+  });
+
+  it('BICS failure: account still created with esim=null and bics_provisioned=false', async () => {
+    wireHappyPath();
+    bics.getNextAvailableEsim.mockResolvedValueOnce('icc-1');
+    bics.createEndpoint.mockResolvedValueOnce({ Response: { responseParam: { endPointId: 'ep-1' } } });
+    bics.activateEndpoint.mockRejectedValueOnce(
+      Object.assign(new Error('SIM not attached'), { code: 'BICS_ERROR' }),
+    );
+
+    const result = await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id' });
+
+    // Account is kept (DID already purchased) — no rollback.
+    expect(result.id).toBe(baseRow.id);
+    expect(result.esim).toBeNull();
+    expect(result.esim_error).toBe('BICS provisioning failed — retry from admin');
+    expect(result.bics_provisioned).toBe(false);
+    // No UPDATE ran (provisioning failed before persistence).
+    expect(db.query.mock.calls.some(([sql]) => /UPDATE accounts/.test(sql))).toBe(false);
+  });
+
+  it('eSIM pool exhaustion does not roll back the account', async () => {
+    wireHappyPath();
+    bics.getNextAvailableEsim.mockRejectedValueOnce(
+      Object.assign(new Error('No available eSIMs in the BICS pool.'), { code: 'BICS_ERROR' }),
+    );
+
+    const result = await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id' });
+
+    expect(result.id).toBe(baseRow.id);
+    expect(result.esim).toBeNull();
+    expect(result.esim_error).toBe('BICS provisioning failed — retry from admin');
+    expect(bics.createEndpoint).not.toHaveBeenCalled();
+  });
+});
+
+describe('retryBicsProvisioning', () => {
+  it('re-runs provisioning for an unprovisioned account and persists the eSIM', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ ...baseRow, bics_provisioned: false }] }) // SELECT
+      .mockResolvedValueOnce({
+        rows: [{
+          ...baseRow, bics_endpoint_id: 'ep-bics-1', bics_iccid: 'icc-1', bics_provisioned: true,
+        }],
+      }); // UPDATE RETURNING
+    wireBicsSuccess('icc-1', 'ep-bics-1');
+
+    const result = await accountService.retryBicsProvisioning(baseRow.id);
+
+    expect(result.bics_provisioned).toBe(true);
+    expect(result.esim.endpointId).toBe('ep-bics-1');
+    expect(result.esim.activationCode).toMatch(/^LPA:1\$/);
+    const updateCall = db.query.mock.calls.find(([sql]) => /UPDATE accounts/.test(sql));
+    expect(updateCall[1]).toEqual(['ep-bics-1', 'icc-1', baseRow.id]);
+  });
+
+  it('rejects when the account is already provisioned', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ ...baseRow, bics_provisioned: true }] });
+    await expect(accountService.retryBicsProvisioning(baseRow.id))
+      .rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'action' });
+    expect(bics.getNextAvailableEsim).not.toHaveBeenCalled();
+  });
+
+  it('throws NOT_FOUND for a missing account', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await expect(accountService.retryBicsProvisioning(baseRow.id))
+      .rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('surfaces a BICS failure to the caller (no swallow on retry)', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ ...baseRow, bics_provisioned: false }] });
+    bics.getNextAvailableEsim.mockRejectedValueOnce(
+      Object.assign(new Error('pool exhausted'), { code: 'BICS_ERROR' }),
+    );
+    await expect(accountService.retryBicsProvisioning(baseRow.id))
+      .rejects.toMatchObject({ code: 'BICS_ERROR' });
   });
 });
 
