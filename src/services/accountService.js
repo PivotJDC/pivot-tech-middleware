@@ -43,11 +43,13 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const NOW = Symbol('NOW');
 
 /**
- * Strip internal/secret columns before returning an account to a client.
- * parent_account_id and line_label pass through as plain columns. For primary
- * accounts (parent_account_id NULL) we expose line_count — the number of child
- * lines — taken from a `line_count` column when the query provides it (a
- * correlated subquery), defaulting to 0.
+ * Strip internal/secret columns before returning an account to a client. Only
+ * sip_password_hash is removed; every other column passes through, so the
+ * billing/broadband/promo and Telgoo5 fields (external_billing_provider,
+ * broadband_provider, broadband_account_id, promo_code, telgoo5_customer_id,
+ * telgoo5_enrollment_id) are all included. For primary accounts
+ * (parent_account_id NULL) we expose line_count — the number of child lines —
+ * from a `line_count` query column (correlated subquery), defaulting to 0.
  */
 function serializeAccount(row) {
   if (!row) return row;

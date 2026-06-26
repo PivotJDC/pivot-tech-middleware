@@ -538,6 +538,27 @@ describe('serializeAccount', () => {
   it('passes through null', () => {
     expect(accountService.serializeAccount(null)).toBeNull();
   });
+  it('passes through billing/broadband/promo and telgoo5 fields', () => {
+    const row = {
+      ...baseRow,
+      external_billing_provider: 'gaiia',
+      broadband_provider: 'fox',
+      broadband_account_id: '99',
+      promo_code: 'FOX-99',
+      telgoo5_customer_id: 'C1',
+      telgoo5_enrollment_id: 'E1',
+    };
+    const result = accountService.serializeAccount(row);
+    expect(result).toMatchObject({
+      external_billing_provider: 'gaiia',
+      broadband_provider: 'fox',
+      broadband_account_id: '99',
+      promo_code: 'FOX-99',
+      telgoo5_customer_id: 'C1',
+      telgoo5_enrollment_id: 'E1',
+    });
+    expect(result).not.toHaveProperty('sip_password_hash');
+  });
   it('exposes line_count for a primary account (from the query column)', () => {
     const result = accountService.serializeAccount({ ...baseRow, parent_account_id: null, line_count: '3' });
     expect(result.line_count).toBe(3);

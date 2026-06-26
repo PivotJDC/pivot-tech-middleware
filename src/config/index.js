@@ -158,6 +158,18 @@ function buildConfig() {
       webhookSecret: process.env.SIGNALWIRE_WEBHOOK_SECRET || '',
     }),
 
+    // Telgoo5 BSS — standalone-mobile billing/enrollment vendor (vCare API).
+    // Credentials pending; everything is built to work once these are set.
+    telgoo5: Object.freeze({
+      baseUrl: process.env.TELGOO5_BASE_URL || 'https://www.vcareapi.com:8080',
+      vendorId: process.env.TELGOO5_VENDOR_ID || '',
+      username: process.env.TELGOO5_USERNAME || '',
+      password: process.env.TELGOO5_PASSWORD || '',
+      pin: process.env.TELGOO5_PIN || '',
+      agentId: process.env.TELGOO5_AGENT_ID || '',
+      carrier: process.env.TELGOO5_CARRIER || '',
+    }),
+
     // Broadband partner API keys (Fox / Confluence) — validated against the
     // partner_key sent on /v1/partner requests. Empty by default so a missing
     // secret never authorizes a partner.
