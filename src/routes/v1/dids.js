@@ -12,7 +12,6 @@
 const express = require('express');
 const telnyx = require('../../integrations/telnyx');
 const e164 = require('../../utils/e164');
-const { isLaunchedAreaCode } = require('../../utils/markets');
 const { errors, asyncHandler } = require('../../middleware/errorHandler');
 
 const router = express.Router();
@@ -41,11 +40,10 @@ router.get(
       areacode, max_results: maxRaw, contains, starts_with: startsWith, ends_with: endsWith,
     } = req.query;
 
+    // Any valid 3-digit US area code is accepted; if Telnyx has no numbers the
+    // response is simply an empty list (no launched-market restriction).
     if (!areacode || !/^\d{3}$/.test(areacode)) {
       throw errors.validation('A 3-digit area code is required.', 'areacode');
-    }
-    if (!isLaunchedAreaCode(areacode)) {
-      throw errors.validation('Area code not available in any launched market.', 'areacode');
     }
 
     const results = await telnyx.searchAvailableNumbers(areacode, {

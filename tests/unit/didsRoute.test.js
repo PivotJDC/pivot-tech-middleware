@@ -77,13 +77,13 @@ describe('GET /v1/numbers/available', () => {
     expect(telnyx.searchAvailableNumbers).not.toHaveBeenCalled();
   });
 
-  it('400s when the area code is not in any launched market', async () => {
-    const res = await request(app).get('/v1/numbers/available?areacode=212');
+  it('accepts a non-launched area code (e.g. 303) and returns Telnyx results', async () => {
+    telnyx.searchAvailableNumbers.mockResolvedValueOnce([{ number: '+13035550100' }]);
+    const res = await request(app).get('/v1/numbers/available?areacode=303');
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatchObject({ code: 'VALIDATION_ERROR', field: 'areacode' });
-    expect(res.body.error.message).toMatch(/not available in any launched market/i);
-    expect(telnyx.searchAvailableNumbers).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(telnyx.searchAvailableNumbers).toHaveBeenCalledWith('303', expect.anything());
+    expect(res.body.numbers[0].e164).toBe('+13035550100');
   });
 
   it('returns an empty list when Telnyx has no matches', async () => {

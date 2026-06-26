@@ -56,12 +56,18 @@ describe('POST /v1/accounts', () => {
     expect(provisioningService.issueToken).not.toHaveBeenCalled();
   });
 
-  it('rejects an unlaunched market before calling the service', async () => {
+  it('forwards a request with no market (any US area code is allowed)', async () => {
+    accountService.createAccount.mockResolvedValueOnce({ id: 'acc-2', status: 'active' });
+    provisioningService.issueToken.mockResolvedValueOnce({
+      raw_token: 't', provisioning_url: 'u', qr_code_url: 'data:image/png;base64,AAAA', deep_link: 'u',
+    });
     const res = await request(app)
       .post('/v1/accounts')
-      .send({ email: 'a@b.co', market: 'atlantis' });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatchObject({ code: 'VALIDATION_ERROR', field: 'market' });
-    expect(accountService.createAccount).not.toHaveBeenCalled();
+      .send({ email: 'a@b.co', phone_e164: '+13035550100' });
+    expect(res.status).toBe(201);
+    // market is optional now; createAccount defaults it to "direct".
+    expect(accountService.createAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ email: 'a@b.co', phone_e164: '+13035550100' }),
+    );
   });
 });

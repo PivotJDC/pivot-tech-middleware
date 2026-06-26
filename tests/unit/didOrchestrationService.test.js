@@ -43,9 +43,23 @@ describe('assignDid', () => {
     expect(telnyx.assignNumberToEndpoint).not.toHaveBeenCalled();
   });
 
-  it('throws VALIDATION_ERROR for an unknown market', async () => {
+  it('throws VALIDATION_ERROR for an unknown market with no requested area code', async () => {
     await expect(did.assignDid('atlantis')).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
     expect(telnyx.searchAvailableNumbers).not.toHaveBeenCalled();
+  });
+
+  it('searches the requested area code for a "direct"/unlaunched market (e.g. 303)', async () => {
+    telnyx.searchAvailableNumbers.mockResolvedValueOnce([{ number: '+13035550100' }]);
+    telnyx.provisionPhoneNumber.mockResolvedValueOnce({ id: 'sid-303' });
+    telnyx.createSipEndpoint.mockResolvedValueOnce({
+      id: 'ep-303', sip_username: 'u-303', sip_password: 'p-303',
+    });
+
+    const cred = await did.assignDid('direct', '303');
+
+    expect(telnyx.searchAvailableNumbers).toHaveBeenCalledWith('303');
+    expect(cred.areaCode).toBe('303');
+    expect(cred.phoneE164).toBe('+13035550100');
   });
 
   it('tries each area code and throws DID_UNAVAILABLE when none have numbers', async () => {

@@ -11,7 +11,12 @@ const { errors } = require('../middleware/errorHandler');
 const didOrchestration = require('./didOrchestrationService');
 const bics = require('../integrations/bics');
 const crypto = require('../utils/crypto');
+const e164 = require('../utils/e164');
 const { logger } = require('../utils/logger');
+
+// Market used when a number is outside any launched market — customers can pick
+// any US area code, so we don't gate on market membership.
+const DEFAULT_MARKET = 'direct';
 
 // Customer-facing message when the eSIM step fails but the account is kept.
 const BICS_RETRY_MESSAGE = 'BICS provisioning failed — retry from admin';
@@ -58,14 +63,6 @@ function normalizeEmail(value) {
     throw errors.validation('A valid email is required.', 'email');
   }
   return value.trim().toLowerCase();
-}
-
-function validateMarket(value) {
-  // Markets are config-driven (CLAUDE.md), so we validate shape, not membership.
-  if (typeof value !== 'string' || value.trim() === '') {
-    throw errors.validation('market is required.', 'market');
-  }
-  return value.trim();
 }
 
 function validatePlan(value) {
@@ -202,9 +199,20 @@ async function provisionAndPersistEsim(account) {
  */
 async function createAccount(input = {}) {
   const email = normalizeEmail(input.email);
-  const market = validateMarket(input.market);
+  // Market is optional. Any US area code is allowed; default to "direct" for
+  // numbers outside a launched market (didOrchestration searches by area code).
+  const market = (typeof input.market === 'string' && input.market.trim())
+    ? input.market.trim()
+    : DEFAULT_MARKET;
   const plan = validatePlan(input.plan);
   const lineLabel = input.line_label ? String(input.line_label).trim().slice(0, 50) : null;
+
+  // For a "direct"/unlaunched market, derive the search area code from the
+  // chosen (new) or ported number so we can still find a DID in that area code.
+  const sourceNumber = input.phone_e164 || (input.port && input.port.number_e164) || null;
+  const requestedAreaCode = sourceNumber && e164.isE164(sourceNumber)
+    ? e164.areaCodeOf(sourceNumber)
+    : null;
 
   let parentAccountId = null;
   if (input.parent_email) {
@@ -232,7 +240,7 @@ async function createAccount(input = {}) {
   }
 
   // External provisioning (SignalWire). Throws DID_UNAVAILABLE / SIGNALWIRE_ERROR.
-  const credentials = await didOrchestration.assignDid(market);
+  const credentials = await didOrchestration.assignDid(market, requestedAreaCode);
   const sipPasswordHash = await crypto.hashPassword(credentials.sipPassword);
 
   try {

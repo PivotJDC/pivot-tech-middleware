@@ -27,13 +27,26 @@ function idOf(resource) {
 }
 
 /**
- * Find the first available number across a market's configured area codes.
+ * Find the first available number for a market.
+ * - Launched markets use their configured area codes (in order).
+ * - "direct"/unlaunched markets (no config) search the requestedAreaCode, so a
+ *   customer can pick any US area code.
+ * @param {string} market
+ * @param {string|null} [requestedAreaCode] - area code to search for direct markets.
  * @returns {Promise<{ e164: string, areaCode: string }>}
  */
-async function findAvailableNumber(market) {
-  const areaCodes = MARKET_AREA_CODES[market];
+async function findAvailableNumber(market, requestedAreaCode = null) {
+  let areaCodes = MARKET_AREA_CODES[market];
   if (!areaCodes || areaCodes.length === 0) {
-    throw errors.validation(`No area codes configured for market: ${market}.`, 'market');
+    // Not a launched market — search the requested area code as-is.
+    if (requestedAreaCode) {
+      areaCodes = [requestedAreaCode];
+    } else {
+      throw errors.validation(
+        `No area code available for market "${market}". Provide a phone number or a launched market.`,
+        'market',
+      );
+    }
   }
 
   // Try each area code in order; sequential by design (stop at first hit).
@@ -78,8 +91,8 @@ async function findAvailableNumber(market) {
  *   sipUsername: string, sipEndpointId: string, sipPassword: string
  * }>}
  */
-async function assignDid(market) {
-  const { e164, areaCode } = await findAvailableNumber(market);
+async function assignDid(market, requestedAreaCode = null) {
+  const { e164, areaCode } = await findAvailableNumber(market, requestedAreaCode);
 
   // Purchase + route inbound voice to the TeXML app + attach the messaging
   // profile (so inbound calls hit /v1/voice/inbound and SMS/MMS work).

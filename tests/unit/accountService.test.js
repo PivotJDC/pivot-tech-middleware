@@ -91,7 +91,7 @@ describe('createAccount', () => {
       market: 'lewiston-id',
     });
 
-    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id');
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null);
     expect(crypto.hashPassword).toHaveBeenCalledWith('plaintext-pw');
     expect(result.id).toBe(baseRow.id);
     expect(result).not.toHaveProperty('sip_password_hash');
@@ -261,6 +261,15 @@ describe('createAccount', () => {
     );
     expect(updateCall).toBeTruthy();
   });
+
+  it('accepts a non-launched area code: defaults market to "direct" and searches that area code', async () => {
+    wireHappyPath();
+
+    await accountService.createAccount({ email: 'a@b.co', phone_e164: '+13035550100' });
+
+    // No market provided -> "direct"; area code derived from the chosen number.
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('direct', '303');
+  });
 });
 
 describe('retryBicsProvisioning', () => {
@@ -340,7 +349,7 @@ describe('multi-line (family plan)', () => {
     // Parent resolved against primary accounts only; uniqueness pre-check skipped.
     expect(db.query.mock.calls[0][0]).toMatch(/parent_account_id IS NULL/);
     // Child line still gets its own DID and eSIM.
-    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id');
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null);
     expect(bics.getNextAvailableEsim).toHaveBeenCalled();
     // parent_account_id ($8) and line_label ($9) persisted.
     expect(insertedParams[7]).toBe('parent-1');

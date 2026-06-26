@@ -13,9 +13,8 @@
 const express = require('express');
 const accountService = require('../../services/accountService');
 const provisioningService = require('../../services/provisioningService');
-const { isValidMarket } = require('../../utils/markets');
 const { authenticate, requireSelf } = require('../../middleware/auth');
-const { asyncHandler, errors } = require('../../middleware/errorHandler');
+const { asyncHandler } = require('../../middleware/errorHandler');
 
 const router = express.Router();
 
@@ -29,13 +28,18 @@ router.post(
   asyncHandler(async (req, res) => {
     const {
       email, market, plan, parent_email: parentEmail, line_label: lineLabel,
+      phone_e164: phoneE164, port,
     } = req.body || {};
-    // Reject markets we haven't launched before purchasing anything downstream.
-    if (!isValidMarket(market)) {
-      throw errors.validation('Market not available in any launched market.', 'market');
-    }
+    // market is optional — any US area code is allowed; createAccount defaults
+    // it to "direct" and derives the search area code from the chosen number.
     const account = await accountService.createAccount({
-      email, market, plan, parent_email: parentEmail, line_label: lineLabel,
+      email,
+      market,
+      plan,
+      parent_email: parentEmail,
+      line_label: lineLabel,
+      phone_e164: phoneE164,
+      port,
     });
     // Drop raw_token from the response — the URL/QR/deep link already embed it.
     const { raw_token: rawToken, ...provisioning } = await provisioningService.issueToken(account);
