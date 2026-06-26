@@ -170,6 +170,72 @@ describe('getPlans', () => {
   });
 });
 
+describe('getPaymentDetails', () => {
+  it('sends the payment_details body and maps the quote + tax breakup', async () => {
+    global.fetch
+      .mockResolvedValueOnce(authResp('tok-1'))
+      .mockResolvedValueOnce(resp({
+        token: 'tok-2',
+        data: {
+          total_actual_amount: '25.00',
+          total_tax: '2.50',
+          total_amount: '27.50',
+          total_activation_fee: '5.00',
+          total_shipping_amount: '0.00',
+          total_processing_fee: '0.30',
+          total_discount: '0.00',
+          state: 'ID',
+          plan: {
+            tax_breakup: [
+              { name: 'State Tax', amount: '1.50' },
+              { name: 'E911', amount: '1.00' },
+            ],
+          },
+        },
+      }));
+
+    const q = await telgoo5.getPaymentDetails({
+      zipCode: '83501', planId: 'P1', enrollmentId: 'E1', numberOfLines: 1,
+    });
+
+    expect(q).toEqual({
+      planAmount: '25.00',
+      tax: '2.50',
+      totalAmount: '27.50',
+      taxBreakup: [
+        { name: 'State Tax', amount: '1.50' },
+        { name: 'E911', amount: '1.00' },
+      ],
+      activationFee: '5.00',
+      shippingAmount: '0.00',
+      processingFee: '0.30',
+      totalDiscount: '0.00',
+      state: 'ID',
+    });
+
+    const body = JSON.parse(global.fetch.mock.calls[1][1].body);
+    expect(body.action).toBe('payment_details');
+    expect(body.payment_type).toBe('NEW_SIGNUP');
+    expect(body.payment_method).toBe('CREDIT_CARD');
+    expect(body.plan_id).toEqual([{ id: 'P1', no_of_months: '1' }]);
+    expect(body.enrollment_id).toBe('E1');
+    // chained the auth token onto this call.
+    expect(global.fetch.mock.calls[1][1].headers.token).toBe('tok-1');
+  });
+
+  it('defaults tax breakup to [] and enrollment_id to "" when absent', async () => {
+    global.fetch
+      .mockResolvedValueOnce(authResp('tok-1'))
+      .mockResolvedValueOnce(resp({ token: 'tok-2', data: { total_amount: '27.50' } }));
+    const q = await telgoo5.getPaymentDetails({ zipCode: '83501', planId: 99 });
+    expect(q.taxBreakup).toEqual([]);
+    expect(q.totalAmount).toBe('27.50');
+    const body = JSON.parse(global.fetch.mock.calls[1][1].body);
+    expect(body.plan_id).toEqual([{ id: '99', no_of_months: '1' }]);
+    expect(body.enrollment_id).toBe('');
+  });
+});
+
 describe('makePayment', () => {
   it('sends credit-card fields and maps the result', async () => {
     global.fetch

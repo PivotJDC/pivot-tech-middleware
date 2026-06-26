@@ -24,13 +24,22 @@ const input = {
 beforeEach(() => {
   db.query.mockReset();
   telgoo5.checkServiceAvailability.mockReset();
+  telgoo5.getPaymentDetails.mockReset();
   telgoo5.makePayment.mockReset();
   telgoo5.createCustomer.mockReset();
 });
 
+const QUOTE = {
+  planAmount: '25.00',
+  tax: '2.50',
+  totalAmount: '27.50',
+  taxBreakup: [{ name: 'State Tax', amount: '1.50' }],
+};
+
 describe('enrollSubscriber', () => {
-  it('runs availability -> payment -> customer and records the ids', async () => {
+  it('runs availability -> payment_details -> payment -> customer and records the ids', async () => {
     telgoo5.checkServiceAvailability.mockResolvedValueOnce({ enrollmentId: 'E1', zipCode: '83501' });
+    telgoo5.getPaymentDetails.mockResolvedValueOnce(QUOTE);
     telgoo5.makePayment.mockResolvedValueOnce({ orderId: 'O1' });
     telgoo5.createCustomer.mockResolvedValueOnce([{ custId: 'C1', enrollmentId: 'E1' }]);
     db.query.mockResolvedValueOnce({ rows: [] }); // UPDATE accounts
@@ -39,6 +48,9 @@ describe('enrollSubscriber', () => {
 
     expect(r).toEqual({ custId: 'C1', enrollmentId: 'E1', orderId: 'O1' });
     expect(telgoo5.checkServiceAvailability).toHaveBeenCalledWith('83501');
+    expect(telgoo5.getPaymentDetails).toHaveBeenCalledWith(expect.objectContaining({
+      zipCode: '83501', planId: 'P1', enrollmentId: 'E1', paymentType: 'NEW_SIGNUP',
+    }));
     expect(telgoo5.makePayment).toHaveBeenCalledWith(expect.objectContaining({
       enrollmentId: 'E1', planId: 'P1', email: 'jane@x.co', numberOfLines: 1,
     }));
@@ -53,6 +65,7 @@ describe('enrollSubscriber', () => {
 
   it('propagates a payment failure and does not create a customer', async () => {
     telgoo5.checkServiceAvailability.mockResolvedValueOnce({ enrollmentId: 'E1', zipCode: '83501' });
+    telgoo5.getPaymentDetails.mockResolvedValueOnce(QUOTE);
     telgoo5.makePayment.mockRejectedValueOnce(
       Object.assign(new Error('card declined'), { code: 'TELGOO5_ERROR' }),
     );
@@ -70,6 +83,7 @@ describe('syncAccountToTelgoo5 (best-effort)', () => {
       .mockResolvedValueOnce({ rows: [account] }) // SELECT account
       .mockResolvedValueOnce({ rows: [] }); // UPDATE (inside enrollSubscriber)
     telgoo5.checkServiceAvailability.mockResolvedValueOnce({ enrollmentId: 'E1', zipCode: '83501' });
+    telgoo5.getPaymentDetails.mockResolvedValueOnce(QUOTE);
     telgoo5.makePayment.mockResolvedValueOnce({ orderId: 'O1' });
     telgoo5.createCustomer.mockResolvedValueOnce([{ custId: 'C1', enrollmentId: 'E1' }]);
 

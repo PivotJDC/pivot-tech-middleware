@@ -217,6 +217,43 @@ function paymentFields(paymentMethod, cardDetails = {}) {
 }
 
 /**
+ * Get a payment quote (amounts + tax breakdown) before charging. Returns
+ * { planAmount, tax, totalAmount, taxBreakup: [{ name, amount }], activationFee,
+ *   shippingAmount, processingFee, totalDiscount, state }.
+ */
+async function getPaymentDetails({
+  zipCode, planId, paymentType, enrollmentId, numberOfLines,
+}) {
+  const res = await request('POST', '/payment', {
+    action: 'payment_details',
+    zip_code: zipCode,
+    payment_type: paymentType || 'NEW_SIGNUP',
+    payment_method: 'CREDIT_CARD',
+    plan_id: [{ id: String(planId), no_of_months: '1' }],
+    agent_id: config.telgoo5.agentId,
+    source: 'API',
+    enrollment_id: enrollmentId || '',
+    number_of_lines: numberOfLines,
+  });
+  const d = dataOf(res);
+  const plan = d.plan || {};
+  return {
+    planAmount: d.total_actual_amount || null,
+    tax: d.total_tax || null,
+    totalAmount: d.total_amount || null,
+    taxBreakup: (plan.tax_breakup || []).map((t) => ({
+      name: t.name || null,
+      amount: t.amount || null,
+    })),
+    activationFee: d.total_activation_fee || null,
+    shippingAmount: d.total_shipping_amount || null,
+    processingFee: d.total_processing_fee || null,
+    totalDiscount: d.total_discount || null,
+    state: d.state || null,
+  };
+}
+
+/**
  * Make a payment (NEW_SIGNUP sale). Supports CREDIT_CARD, OTHER_PAYMENT_OPTION
  * (Stripe), and CASH. Returns
  * { orderId, invoiceNumber, totalAmount, planTax, paymentStatus, transactionNo }.
@@ -302,6 +339,7 @@ module.exports = {
   authenticate,
   checkServiceAvailability,
   getPlans,
+  getPaymentDetails,
   makePayment,
   createCustomer,
   // exposed for tests

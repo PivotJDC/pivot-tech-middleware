@@ -37,7 +37,26 @@ async function enrollSubscriber(account, input = {}) {
     logger.warn({ accountId: account.id }, 'Telgoo5 returned no enrollment id');
   }
 
-  // 2. Payment → order id.
+  // 2. Payment quote (amounts + tax breakdown) before charging.
+  const quote = await telgoo5.getPaymentDetails({
+    zipCode: serviceAddress.zip,
+    planId: paymentDetails.planId,
+    paymentType: 'NEW_SIGNUP',
+    enrollmentId,
+    numberOfLines: 1,
+  });
+  logger.info(
+    {
+      accountId: account.id,
+      planAmount: quote.planAmount,
+      tax: quote.tax,
+      totalAmount: quote.totalAmount,
+      taxBreakup: quote.taxBreakup,
+    },
+    'Telgoo5 payment quote',
+  );
+
+  // 3. Payment → order id.
   const payment = await telgoo5.makePayment({
     enrollmentId,
     zipCode: serviceAddress.zip,
@@ -52,7 +71,7 @@ async function enrollSubscriber(account, input = {}) {
   });
   const { orderId } = payment;
 
-  // 3. Create the customer line.
+  // 4. Create the customer line.
   const customers = await telgoo5.createCustomer({
     parentEnrollmentId: enrollmentId,
     externalTransactionId: account.id,
@@ -74,7 +93,7 @@ async function enrollSubscriber(account, input = {}) {
   });
   const custId = customers[0] && customers[0].custId;
 
-  // 4. Record the linkage on the account.
+  // 5. Record the linkage on the account.
   await db.query(
     'UPDATE accounts SET telgoo5_customer_id = $1, telgoo5_enrollment_id = $2 WHERE id = $3',
     [custId || null, enrollmentId || null, account.id],
