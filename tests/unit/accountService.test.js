@@ -1,5 +1,6 @@
 jest.mock('../../src/db');
 jest.mock('../../src/services/didOrchestrationService');
+jest.mock('../../src/services/telgoo5Service');
 jest.mock('../../src/integrations/bics');
 jest.mock('../../src/utils/crypto');
 jest.mock('../../src/utils/logger', () => ({
@@ -9,6 +10,7 @@ jest.mock('../../src/utils/logger', () => ({
 
 const db = require('../../src/db');
 const didOrchestration = require('../../src/services/didOrchestrationService');
+const telgoo5Service = require('../../src/services/telgoo5Service');
 const bics = require('../../src/integrations/bics');
 const crypto = require('../../src/utils/crypto');
 const accountService = require('../../src/services/accountService');
@@ -66,6 +68,7 @@ beforeEach(() => {
   bics.createEndpoint.mockReset();
   bics.activateEndpoint.mockReset();
   bics.fetchSimByIccid.mockReset();
+  telgoo5Service.syncAccountToTelgoo5.mockReset();
 });
 
 describe('createAccount', () => {
@@ -324,6 +327,129 @@ describe('createAccount', () => {
     expect(insertedParams[11]).toBeNull(); // broadband_account_id
     expect(insertedParams[12]).toBeNull(); // promo_code
   });
+
+  it('persists enrollment fields (name + normalized addresses)', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] }); // email pre-check
+    didOrchestration.assignDid.mockResolvedValueOnce(credentials);
+    crypto.hashPassword.mockResolvedValueOnce('hashed-pw');
+    let insertedParams;
+    db.withTransaction.mockImplementationOnce(async (fn) => {
+      const client = {
+        query: jest.fn()
+          .mockImplementationOnce((_sql, params) => {
+            insertedParams = params;
+            return { rows: [baseRow] };
+          })
+          .mockResolvedValueOnce({ rows: [] }),
+      };
+      return fn(client);
+    });
+
+    await accountService.createAccount({
+      email: 'a@b.co',
+      market: 'lewiston-id',
+      first_name: 'Jane',
+      last_name: 'Doe',
+      service_address: {
+        line1: '1 Main', line2: 'Apt 2', city: 'Lewiston', state: 'ID', zip: '83501',
+      },
+      billing_address: {
+        line1: '2 Oak', city: 'Boise', state: 'ID', zip: '83702',
+      },
+    });
+
+    // INSERT params: ...$14 first_name, $15 last_name, $16 service_address, $17 billing_address.
+    expect(insertedParams[13]).toBe('Jane');
+    expect(insertedParams[14]).toBe('Doe');
+    expect(insertedParams[15]).toEqual({
+      line1: '1 Main', line2: 'Apt 2', city: 'Lewiston', state: 'ID', zip: '83501',
+    });
+    // line2 absent → normalized to null.
+    expect(insertedParams[16]).toEqual({
+      line1: '2 Oak', line2: null, city: 'Boise', state: 'ID', zip: '83702',
+    });
+  });
+
+  it('rejects a non-object service_address', async () => {
+    await expect(accountService.createAccount({
+      email: 'a@b.co', market: 'lewiston-id', service_address: 'not-an-object',
+    })).rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'service_address' });
+    expect(didOrchestration.assignDid).not.toHaveBeenCalled();
+  });
+
+  it('triggers a best-effort Telgoo5 sync for an active telgoo5 account with enrollment details', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] }); // email pre-check
+    didOrchestration.assignDid.mockResolvedValueOnce(credentials);
+    crypto.hashPassword.mockResolvedValueOnce('hashed-pw');
+    db.withTransaction.mockImplementationOnce(async (fn) => {
+      const client = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ ...baseRow, status: 'pending' }] }) // INSERT account
+          .mockResolvedValueOnce({ rows: [] }), // INSERT did
+      };
+      return fn(client);
+    });
+    // BICS best-effort fails — irrelevant to the sync.
+    bics.getNextAvailableEsim.mockRejectedValueOnce(
+      Object.assign(new Error('pool'), { code: 'BICS_ERROR' }),
+    );
+    // auto-activation succeeds.
+    db.query
+      .mockResolvedValueOnce({ rows: [{ ...baseRow, status: 'pending' }] }) // getAccountById
+      .mockResolvedValueOnce({ rows: [{ ...baseRow, status: 'active' }] }); // UPDATE
+    telgoo5Service.syncAccountToTelgoo5.mockResolvedValueOnce({ synced: true });
+
+    await accountService.createAccount({
+      email: 'a@b.co',
+      market: 'lewiston-id',
+      first_name: 'Jane',
+      last_name: 'Doe',
+      service_address: {
+        line1: '1 Main', city: 'Lewiston', state: 'ID', zip: '83501',
+      },
+    });
+
+    expect(telgoo5Service.syncAccountToTelgoo5).toHaveBeenCalledWith(baseRow.id, {
+      firstName: 'Jane',
+      lastName: 'Doe',
+      serviceAddress: {
+        line1: '1 Main', line2: null, city: 'Lewiston', state: 'ID', zip: '83501',
+      },
+      billingAddress: null,
+    });
+  });
+
+  it('does NOT trigger Telgoo5 sync for a gaiia (promo) account', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] }); // email pre-check
+    didOrchestration.assignDid.mockResolvedValueOnce(credentials);
+    crypto.hashPassword.mockResolvedValueOnce('hashed-pw');
+    db.withTransaction.mockImplementationOnce(async (fn) => {
+      const client = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ ...baseRow, status: 'pending' }] })
+          .mockResolvedValueOnce({ rows: [] }),
+      };
+      return fn(client);
+    });
+    bics.getNextAvailableEsim.mockRejectedValueOnce(
+      Object.assign(new Error('pool'), { code: 'BICS_ERROR' }),
+    );
+    db.query
+      .mockResolvedValueOnce({ rows: [{ ...baseRow, status: 'pending' }] })
+      .mockResolvedValueOnce({ rows: [{ ...baseRow, status: 'active' }] });
+
+    await accountService.createAccount({
+      email: 'a@b.co',
+      market: 'lewiston-id',
+      promo_code: 'FOX-1',
+      first_name: 'Jane',
+      service_address: {
+        line1: '1 Main', city: 'Lewiston', state: 'ID', zip: '83501',
+      },
+    });
+
+    expect(telgoo5Service.syncAccountToTelgoo5).not.toHaveBeenCalled();
+  });
 });
 
 describe('retryBicsProvisioning', () => {
@@ -538,7 +664,7 @@ describe('serializeAccount', () => {
   it('passes through null', () => {
     expect(accountService.serializeAccount(null)).toBeNull();
   });
-  it('passes through billing/broadband/promo and telgoo5 fields', () => {
+  it('passes through billing/broadband/promo, telgoo5, and enrollment fields', () => {
     const row = {
       ...baseRow,
       external_billing_provider: 'gaiia',
@@ -547,6 +673,14 @@ describe('serializeAccount', () => {
       promo_code: 'FOX-99',
       telgoo5_customer_id: 'C1',
       telgoo5_enrollment_id: 'E1',
+      first_name: 'Jane',
+      last_name: 'Doe',
+      service_address: {
+        line1: '1 Main', city: 'Lewiston', state: 'ID', zip: '83501',
+      },
+      billing_address: {
+        line1: '2 Oak', city: 'Boise', state: 'ID', zip: '83702',
+      },
     };
     const result = accountService.serializeAccount(row);
     expect(result).toMatchObject({
@@ -556,6 +690,14 @@ describe('serializeAccount', () => {
       promo_code: 'FOX-99',
       telgoo5_customer_id: 'C1',
       telgoo5_enrollment_id: 'E1',
+      first_name: 'Jane',
+      last_name: 'Doe',
+      service_address: {
+        line1: '1 Main', city: 'Lewiston', state: 'ID', zip: '83501',
+      },
+      billing_address: {
+        line1: '2 Oak', city: 'Boise', state: 'ID', zip: '83702',
+      },
     });
     expect(result).not.toHaveProperty('sip_password_hash');
   });

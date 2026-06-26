@@ -10,6 +10,7 @@ const db = require('../db');
 const { errors } = require('../middleware/errorHandler');
 const didOrchestration = require('./didOrchestrationService');
 const billingMigration = require('./billingMigrationService');
+const telgoo5Service = require('./telgoo5Service');
 const bics = require('../integrations/bics');
 const crypto = require('../utils/crypto');
 const e164 = require('../utils/e164');
@@ -47,7 +48,8 @@ const NOW = Symbol('NOW');
  * sip_password_hash is removed; every other column passes through, so the
  * billing/broadband/promo and Telgoo5 fields (external_billing_provider,
  * broadband_provider, broadband_account_id, promo_code, telgoo5_customer_id,
- * telgoo5_enrollment_id) are all included. For primary accounts
+ * telgoo5_enrollment_id) and the enrollment details (first_name, last_name,
+ * service_address, billing_address) are all included. For primary accounts
  * (parent_account_id NULL) we expose line_count — the number of child lines —
  * from a `line_count` query column (correlated subquery), defaulting to 0.
  */
@@ -80,6 +82,34 @@ function assertUuid(id) {
   if (!UUID_RE.test(id || '')) {
     throw errors.validation('Invalid account id.', 'id');
   }
+}
+
+/** Optional name field → trimmed string (max 50), or null. */
+function validateName(value, field) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') {
+    throw errors.validation(`${field} must be a string.`, field);
+  }
+  return value.trim().slice(0, 50) || null;
+}
+
+/**
+ * Optional address → normalized { line1, line2, city, state, zip } (each a
+ * string or null), or null when absent. Throws if a non-object is supplied.
+ */
+function validateAddress(value, field) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw errors.validation(`${field} must be an object.`, field);
+  }
+  const str = (v) => (v === undefined || v === null ? null : String(v));
+  return {
+    line1: str(value.line1),
+    line2: str(value.line2),
+    city: str(value.city),
+    state: str(value.state),
+    zip: str(value.zip),
+  };
 }
 
 function assertTransition(from, to) {
@@ -197,7 +227,9 @@ async function provisionAndPersistEsim(account) {
  * provisioning. parent_email pointing at no primary account is rejected.
  *
  * @param {{ email: string, market: string, plan?: string,
- *           parent_email?: string, line_label?: string }} input
+ *           parent_email?: string, line_label?: string, promo_code?: string,
+ *           first_name?: string, last_name?: string, service_address?: object,
+ *           billing_address?: object }} input
  * @returns {Promise<object>} the created account (serialized)
  */
 async function createAccount(input = {}) {
@@ -210,6 +242,11 @@ async function createAccount(input = {}) {
   const plan = validatePlan(input.plan);
   const lineLabel = input.line_label ? String(input.line_label).trim().slice(0, 50) : null;
   const promoCode = input.promo_code ? String(input.promo_code).trim().slice(0, 100) : null;
+  // Enrollment details (Telgoo5). All optional / backward compatible.
+  const firstName = validateName(input.first_name, 'first_name');
+  const lastName = validateName(input.last_name, 'last_name');
+  const serviceAddress = validateAddress(input.service_address, 'service_address');
+  const billingAddress = validateAddress(input.billing_address, 'billing_address');
   // Promo code routes the subscriber's billing provider (telgoo5 vs gaiia +
   // broadband linkage). external_billing_provider holds the billing provider.
   const { billingProvider, broadbandProvider, broadbandAccountId } = billingMigration
@@ -257,8 +294,9 @@ async function createAccount(input = {}) {
         `INSERT INTO accounts
            (email, market, plan, phone_e164, sip_username, sip_endpoint_id,
             sip_password_hash, parent_account_id, line_label,
-            external_billing_provider, broadband_provider, broadband_account_id, promo_code)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            external_billing_provider, broadband_provider, broadband_account_id, promo_code,
+            first_name, last_name, service_address, billing_address)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
          RETURNING *`,
         [
           email,
@@ -274,6 +312,10 @@ async function createAccount(input = {}) {
           broadbandProvider,
           broadbandAccountId,
           promoCode,
+          firstName,
+          lastName,
+          serviceAddress,
+          billingAddress,
         ],
       );
       const accountId = inserted.rows[0].id;
@@ -309,14 +351,34 @@ async function createAccount(input = {}) {
     // shouldn't fail account creation (the account just stays pending and can
     // be activated from the admin API).
     let activated = serializeAccount(finalAccount);
+    let activationOk = false;
     try {
       // eslint-disable-next-line no-use-before-define
       activated = await transitionStatus(finalAccount.id, 'active');
+      activationOk = true;
     } catch (activationErr) {
       logger.error(
         { accountId: finalAccount.id, err: activationErr.message },
         'auto-activation failed; account left pending',
       );
+    }
+
+    // Best-effort Telgoo5 enrollment sync for standalone (telgoo5) accounts once
+    // active. Fire-and-forget: it never blocks or fails account creation
+    // (syncAccountToTelgoo5 swallows its own errors; Promise.resolve guards a
+    // non-promise return).
+    if (activationOk && billingProvider === 'telgoo5' && firstName && serviceAddress) {
+      Promise.resolve(
+        telgoo5Service.syncAccountToTelgoo5(account.id, {
+          firstName,
+          lastName,
+          serviceAddress,
+          billingAddress,
+        }),
+      ).catch((syncErr) => logger.error(
+        { accountId: account.id, err: syncErr.message },
+        'Telgoo5 sync dispatch failed',
+      ));
     }
 
     const result = activated;

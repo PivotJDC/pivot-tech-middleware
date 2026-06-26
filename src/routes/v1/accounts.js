@@ -29,6 +29,8 @@ router.post(
     const {
       email, market, plan, parent_email: parentEmail, line_label: lineLabel,
       phone_e164: phoneE164, port, promo_code: promoCode,
+      first_name: firstName, last_name: lastName,
+      service_address: serviceAddress, billing_address: billingAddress,
     } = req.body || {};
     // market is optional — any US area code is allowed; createAccount defaults
     // it to "direct" and derives the search area code from the chosen number.
@@ -41,6 +43,10 @@ router.post(
       phone_e164: phoneE164,
       port,
       promo_code: promoCode,
+      first_name: firstName,
+      last_name: lastName,
+      service_address: serviceAddress,
+      billing_address: billingAddress,
     });
     // Drop raw_token from the response — the URL/QR/deep link already embed it.
     const { raw_token: rawToken, ...provisioning } = await provisioningService.issueToken(account);
