@@ -260,6 +260,18 @@ async function deleteSipEndpoint(sipEndpointId) {
 }
 
 /**
+ * Update a credential connection's outbound settings.
+ * Used to clear a static outbound ANI override:
+ *   updateConnectionOutbound(id, { ani_override_type: 'default' })
+ * With ani_override_type 'default' the connection stops forcing one caller ID,
+ * so each call's own caller ID (the customer's DID, sent by the dialer) passes
+ * through on outbound.
+ */
+async function updateConnectionOutbound(connectionId, outbound) {
+  return unwrap(await request('PATCH', `/credential_connections/${connectionId}`, { outbound }));
+}
+
+/**
  * Assign a purchased number (by id) to the SIP connection. Telnyx routes a
  * number to a SIP endpoint by attaching it to a connection, so we set
  * connection_id rather than an endpoint id.
@@ -339,6 +351,7 @@ module.exports = {
   getSipEndpoint,
   updateSipEndpoint,
   deleteSipEndpoint,
+  updateConnectionOutbound,
   assignNumberToEndpoint,
   assignNumberToCampaign,
   submitPort,

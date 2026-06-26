@@ -47,10 +47,21 @@ describe('POST /v1/accounts', () => {
   });
 
   it('surfaces a validation error from the service', async () => {
+    // Use a launched market so the route's market check passes and the request
+    // reaches the service (which rejects the bad email).
     accountService.createAccount.mockRejectedValueOnce(errors.validation('bad email', 'email'));
-    const res = await request(app).post('/v1/accounts').send({ email: 'x' });
+    const res = await request(app).post('/v1/accounts').send({ email: 'x', market: 'lewiston-id' });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
     expect(provisioningService.issueToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unlaunched market before calling the service', async () => {
+    const res = await request(app)
+      .post('/v1/accounts')
+      .send({ email: 'a@b.co', market: 'atlantis' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatchObject({ code: 'VALIDATION_ERROR', field: 'market' });
+    expect(accountService.createAccount).not.toHaveBeenCalled();
   });
 });

@@ -282,7 +282,23 @@ async function createAccount(input = {}) {
     // false and the eSIM can be retried from the admin API.
     const { account: finalAccount, esim, esimError } = await provisionAndPersistEsim(account);
 
-    const result = serializeAccount(finalAccount);
+    // Auto-activate now that voice/SMS provisioning (Telnyx DID) succeeded.
+    // BICS eSIM is best-effort and NOT required for voice/SMS, so we activate
+    // even when the eSIM step failed. Best-effort: a status-update hiccup
+    // shouldn't fail account creation (the account just stays pending and can
+    // be activated from the admin API).
+    let activated = serializeAccount(finalAccount);
+    try {
+      // eslint-disable-next-line no-use-before-define
+      activated = await transitionStatus(finalAccount.id, 'active');
+    } catch (activationErr) {
+      logger.error(
+        { accountId: finalAccount.id, err: activationErr.message },
+        'auto-activation failed; account left pending',
+      );
+    }
+
+    const result = activated;
     result.esim = esim;
     if (esimError) result.esim_error = esimError;
     return result;

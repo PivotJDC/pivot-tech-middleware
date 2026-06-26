@@ -13,8 +13,9 @@
 const express = require('express');
 const accountService = require('../../services/accountService');
 const provisioningService = require('../../services/provisioningService');
+const { isValidMarket } = require('../../utils/markets');
 const { authenticate, requireSelf } = require('../../middleware/auth');
-const { asyncHandler } = require('../../middleware/errorHandler');
+const { asyncHandler, errors } = require('../../middleware/errorHandler');
 
 const router = express.Router();
 
@@ -29,6 +30,10 @@ router.post(
     const {
       email, market, plan, parent_email: parentEmail, line_label: lineLabel,
     } = req.body || {};
+    // Reject markets we haven't launched before purchasing anything downstream.
+    if (!isValidMarket(market)) {
+      throw errors.validation('Market not available in any launched market.', 'market');
+    }
     const account = await accountService.createAccount({
       email, market, plan, parent_email: parentEmail, line_label: lineLabel,
     });

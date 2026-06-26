@@ -158,6 +158,15 @@ describe('typed API calls', () => {
     expect(JSON.parse(init.body)).toEqual({ name: 'renamed' });
   });
 
+  it('updateConnectionOutbound PATCHes /credential_connections/{id} with the outbound block', async () => {
+    global.fetch.mockResolvedValueOnce(ok({ data: { id: 'conn-9' } }));
+    await telnyx.updateConnectionOutbound('conn-9', { ani_override_type: 'default' });
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.telnyx.com/v2/credential_connections/conn-9');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body)).toEqual({ outbound: { ani_override_type: 'default' } });
+  });
+
   it('deleteSipEndpoint hits /telephony_credentials/{id} and returns null on 204', async () => {
     global.fetch.mockResolvedValueOnce({ ok: true, status: 204, text: async () => '' });
     const res = await telnyx.deleteSipEndpoint('cred-1');

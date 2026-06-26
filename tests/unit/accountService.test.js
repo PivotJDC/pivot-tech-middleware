@@ -228,6 +228,39 @@ describe('createAccount', () => {
     expect(result.esim_error).toBe('BICS provisioning failed — retry from admin');
     expect(bics.createEndpoint).not.toHaveBeenCalled();
   });
+
+  it('auto-activates the account after provisioning (even when BICS fails)', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] }); // email pre-check
+    didOrchestration.assignDid.mockResolvedValueOnce(credentials);
+    crypto.hashPassword.mockResolvedValueOnce('hashed-pw');
+    db.withTransaction.mockImplementationOnce(async (fn) => {
+      const client = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ ...baseRow, status: 'pending' }] }) // INSERT account
+          .mockResolvedValueOnce({ rows: [] }), // INSERT did
+      };
+      return fn(client);
+    });
+    // BICS best-effort fails — must still activate.
+    bics.getNextAvailableEsim.mockRejectedValueOnce(
+      Object.assign(new Error('pool'), { code: 'BICS_ERROR' }),
+    );
+    // transitionStatus('active'): getAccountById SELECT (pending) then UPDATE.
+    db.query
+      .mockResolvedValueOnce({ rows: [{ ...baseRow, status: 'pending' }] }) // getAccountById
+      .mockResolvedValueOnce({ rows: [{ ...baseRow, status: 'active' }] }); // UPDATE RETURNING
+
+    const result = await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id' });
+
+    expect(result.status).toBe('active');
+    expect(result.esim).toBeNull();
+    expect(result.esim_error).toBe('BICS provisioning failed — retry from admin');
+    // The activation UPDATE set status and stamped activated_at.
+    const updateCall = db.query.mock.calls.find(
+      ([sql]) => /UPDATE accounts/.test(sql) && /status = \$1/.test(sql) && /activated_at = NOW\(\)/.test(sql),
+    );
+    expect(updateCall).toBeTruthy();
+  });
 });
 
 describe('retryBicsProvisioning', () => {
