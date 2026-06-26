@@ -158,6 +158,16 @@ function buildConfig() {
       webhookSecret: process.env.SIGNALWIRE_WEBHOOK_SECRET || '',
     }),
 
+    // Broadband partner API keys (Fox / Confluence) — validated against the
+    // partner_key sent on /v1/partner requests. Empty by default so a missing
+    // secret never authorizes a partner.
+    partner: Object.freeze({
+      keys: Object.freeze({
+        fox: process.env.FOX_PARTNER_KEY || '',
+        confluence: process.env.CONFLUENCE_PARTNER_KEY || '',
+      }),
+    }),
+
     acrobits: Object.freeze({
       // Cloud Softphone app id for the csc: provisioning QR scheme. Not a
       // secret — it identifies the published Pivot-Tech app. Defaulted so a

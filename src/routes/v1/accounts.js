@@ -28,7 +28,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const {
       email, market, plan, parent_email: parentEmail, line_label: lineLabel,
-      phone_e164: phoneE164, port,
+      phone_e164: phoneE164, port, promo_code: promoCode,
     } = req.body || {};
     // market is optional — any US area code is allowed; createAccount defaults
     // it to "direct" and derives the search area code from the chosen number.
@@ -40,6 +40,7 @@ router.post(
       line_label: lineLabel,
       phone_e164: phoneE164,
       port,
+      promo_code: promoCode,
     });
     // Drop raw_token from the response — the URL/QR/deep link already embed it.
     const { raw_token: rawToken, ...provisioning } = await provisioningService.issueToken(account);

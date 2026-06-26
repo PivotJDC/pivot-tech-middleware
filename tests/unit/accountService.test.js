@@ -270,6 +270,60 @@ describe('createAccount', () => {
     // No market provided -> "direct"; area code derived from the chosen number.
     expect(didOrchestration.assignDid).toHaveBeenCalledWith('direct', '303');
   });
+
+  it('routes a FOX promo code to gaiia + broadband fields on the account', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] }); // email pre-check
+    didOrchestration.assignDid.mockResolvedValueOnce(credentials);
+    crypto.hashPassword.mockResolvedValueOnce('hashed-pw');
+    let insertedParams;
+    db.withTransaction.mockImplementationOnce(async (fn) => {
+      const client = {
+        query: jest.fn()
+          .mockImplementationOnce((_sql, params) => {
+            insertedParams = params;
+            return { rows: [baseRow] };
+          })
+          .mockResolvedValueOnce({ rows: [] }), // INSERT did
+      };
+      return fn(client);
+    });
+
+    await accountService.createAccount({
+      email: 'a@b.co', market: 'lewiston-id', promo_code: 'FOX-12345',
+    });
+
+    // INSERT params: ...$10 external_billing_provider, $11 broadband_provider,
+    // $12 broadband_account_id, $13 promo_code.
+    expect(insertedParams[9]).toBe('gaiia');
+    expect(insertedParams[10]).toBe('fox');
+    expect(insertedParams[11]).toBe('12345');
+    expect(insertedParams[12]).toBe('FOX-12345');
+  });
+
+  it('defaults billing provider to telgoo5 with no promo code', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] }); // email pre-check
+    didOrchestration.assignDid.mockResolvedValueOnce(credentials);
+    crypto.hashPassword.mockResolvedValueOnce('hashed-pw');
+    let insertedParams;
+    db.withTransaction.mockImplementationOnce(async (fn) => {
+      const client = {
+        query: jest.fn()
+          .mockImplementationOnce((_sql, params) => {
+            insertedParams = params;
+            return { rows: [baseRow] };
+          })
+          .mockResolvedValueOnce({ rows: [] }),
+      };
+      return fn(client);
+    });
+
+    await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id' });
+
+    expect(insertedParams[9]).toBe('telgoo5');
+    expect(insertedParams[10]).toBeNull(); // broadband_provider
+    expect(insertedParams[11]).toBeNull(); // broadband_account_id
+    expect(insertedParams[12]).toBeNull(); // promo_code
+  });
 });
 
 describe('retryBicsProvisioning', () => {

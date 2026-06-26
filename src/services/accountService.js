@@ -9,6 +9,7 @@
 const db = require('../db');
 const { errors } = require('../middleware/errorHandler');
 const didOrchestration = require('./didOrchestrationService');
+const billingMigration = require('./billingMigrationService');
 const bics = require('../integrations/bics');
 const crypto = require('../utils/crypto');
 const e164 = require('../utils/e164');
@@ -206,6 +207,11 @@ async function createAccount(input = {}) {
     : DEFAULT_MARKET;
   const plan = validatePlan(input.plan);
   const lineLabel = input.line_label ? String(input.line_label).trim().slice(0, 50) : null;
+  const promoCode = input.promo_code ? String(input.promo_code).trim().slice(0, 100) : null;
+  // Promo code routes the subscriber's billing provider (telgoo5 vs gaiia +
+  // broadband linkage). external_billing_provider holds the billing provider.
+  const { billingProvider, broadbandProvider, broadbandAccountId } = billingMigration
+    .determineBillingProvider(promoCode);
 
   // For a "direct"/unlaunched market, derive the search area code from the
   // chosen (new) or ported number so we can still find a DID in that area code.
@@ -248,8 +254,9 @@ async function createAccount(input = {}) {
       const inserted = await client.query(
         `INSERT INTO accounts
            (email, market, plan, phone_e164, sip_username, sip_endpoint_id,
-            sip_password_hash, parent_account_id, line_label)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            sip_password_hash, parent_account_id, line_label,
+            external_billing_provider, broadband_provider, broadband_account_id, promo_code)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          RETURNING *`,
         [
           email,
@@ -261,6 +268,10 @@ async function createAccount(input = {}) {
           sipPasswordHash,
           parentAccountId,
           lineLabel,
+          billingProvider,
+          broadbandProvider,
+          broadbandAccountId,
+          promoCode,
         ],
       );
       const accountId = inserted.rows[0].id;
@@ -364,6 +375,33 @@ async function getAccountByEmail(rawEmail) {
     throw errors.notFound('No account found for that email.');
   }
   return serializeAccount(rows[0]);
+}
+
+/**
+ * Find a primary account by email OR phone number (partner API lookup). Returns
+ * the serialized account, or null if none. Non-throwing.
+ * @param {string} value - an email (contains "@") or a phone number.
+ */
+async function findByEmailOrPhone(value) {
+  if (!value || typeof value !== 'string') return null;
+  const v = value.trim();
+  if (v.includes('@')) {
+    const { rows } = await db.query(
+      'SELECT * FROM accounts WHERE email = $1 AND parent_account_id IS NULL',
+      [v.toLowerCase()],
+    );
+    return rows[0] ? serializeAccount(rows[0]) : null;
+  }
+  // Phone: normalize to E.164 when possible (toE164 throws on bad input), else
+  // match as given.
+  let phone = v;
+  try {
+    phone = e164.toE164(v);
+  } catch {
+    phone = v;
+  }
+  const { rows } = await db.query('SELECT * FROM accounts WHERE phone_e164 = $1', [phone]);
+  return rows[0] ? serializeAccount(rows[0]) : null;
 }
 
 /**
@@ -525,6 +563,7 @@ module.exports = {
   getAccountById,
   getAccountByEmail,
   getAccountLines,
+  findByEmailOrPhone,
   lookupBySipUsername,
   getAccountStatus,
   updateAccount,

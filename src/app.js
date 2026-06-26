@@ -29,6 +29,7 @@ const messagesRouter = require('./routes/v1/messages');
 const acrobitsMessagingRouter = require('./routes/v1/acrobitsMessaging');
 const voiceRouter = require('./routes/v1/voice');
 const billingRouter = require('./routes/v1/billing');
+const partnerRouter = require('./routes/v1/partner');
 const adminRouter = require('./routes/admin');
 
 // Browser origins always allowed, regardless of environment. Production custom
@@ -131,6 +132,7 @@ function createApp() {
   app.use('/v1/acrobits', acrobitsMessagingRouter);
   app.use('/v1/voice', voiceRouter);
   app.use('/v1/billing', billingRouter);
+  app.use('/v1/partner', partnerRouter);
   app.use('/admin', adminRouter);
 
   // 404 + centralized error envelope (CLAUDE.md "Error Response Format").
