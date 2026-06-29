@@ -188,12 +188,36 @@ const DEFAULT_TEXML_VOICE_CONNECTION_ID = '2990188126548264846';
 const DEFAULT_MESSAGING_PROFILE_ID = '40019ed1-1614-4b43-9fa1-2b2386aa810b';
 
 /**
- * Provision a freshly-purchased number for service: buy it, then route inbound
- * voice to our TeXML application (so POST/GET /v1/voice/inbound fires) and
- * attach the messaging profile (so SMS/MMS work). Returns the purchase resource
- * whose `id` is the +E.164 number.
+ * Look up the numeric phone-number RESOURCE id for an E.164 number via
+ * GET /v2/phone_numbers?filter[phone_number]={e164}.
  *
- * The voice/messaging settings are per-number sub-resources on Telnyx:
+ * Why this is needed: a number order returns only the (async) order id and the
+ * order-line sub-resource id — NEITHER of which addresses /v2/phone_numbers/{id}
+ * (using them 404s). The per-number voice/messaging/E911 sub-resources are keyed
+ * by the phone number's own numeric id (e.g. "2990277475533063368"), which we
+ * fetch by filtering on the E.164 once the order has landed in the account.
+ *
+ * @returns {Promise<string|null>} the numeric resource id, or null if not found.
+ */
+async function findPhoneNumberId(e164) {
+  const params = new URLSearchParams();
+  params.append('filter[phone_number]', e164);
+  const data = unwrap(await request('GET', `/phone_numbers?${params.toString()}`));
+  const list = Array.isArray(data) ? data : [];
+  const match = list.find((n) => (n.phone_number || n.number) === e164) || list[0] || null;
+  return (match && match.id) || null;
+}
+
+/**
+ * Provision a freshly-purchased number for service: buy it, resolve its numeric
+ * resource id, then route inbound voice to our TeXML application (so
+ * POST/GET /v1/voice/inbound fires) and attach the messaging profile (so SMS/MMS
+ * work). Returns the purchase resource whose `id` is the numeric RESOURCE id —
+ * this id is stored as signalwire_sid and passed to enableE911 downstream.
+ *
+ * The voice/messaging settings are per-number sub-resources on Telnyx, keyed by
+ * the numeric resource id (NOT the E.164 — the order-line id 404s and the bare
+ * E.164 is not the canonical path key for these sub-resources):
  *   PATCH /phone_numbers/{id}/voice     { connection_id }
  *   PATCH /phone_numbers/{id}/messaging { messaging_profile_id }
  */
@@ -203,16 +227,29 @@ async function provisionPhoneNumber(e164) {
   const messagingProfileId = telnyxCfg.messagingProfileId || DEFAULT_MESSAGING_PROFILE_ID;
 
   const purchase = await purchaseNumber(e164);
-  const { id } = purchase;
+  const e164Number = purchase.number || e164;
 
-  await request('PATCH', `/phone_numbers/${id}/voice`, {
+  // Resolve the numeric resource id; fall back to the E.164 path form only if
+  // the number is not yet indexed (defensive — the PATCH would then behave as
+  // before rather than blowing up on an undefined id).
+  const resourceId = await findPhoneNumberId(e164Number);
+  const numberId = resourceId || e164Number;
+
+  await request('PATCH', `/phone_numbers/${numberId}/voice`, {
     connection_id: voiceConnectionId,
   });
-  await request('PATCH', `/phone_numbers/${id}/messaging`, {
+  await request('PATCH', `/phone_numbers/${numberId}/messaging`, {
     messaging_profile_id: messagingProfileId,
   });
 
-  return purchase;
+  return {
+    ...purchase,
+    // The numeric resource id is what every downstream caller needs: it is
+    // stored as dids.signalwire_sid and passed to enableE911 as phoneNumberId.
+    id: numberId,
+    number: e164Number,
+    phoneE164: e164Number,
+  };
 }
 
 /**
