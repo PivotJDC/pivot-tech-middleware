@@ -219,6 +219,34 @@ describe('typed API calls', () => {
     expect(init.method).toBe('DELETE');
   });
 
+  it('getWebhookPublicKey fetches GET /public_key once and caches the result', async () => {
+    telnyx.resetWebhookPublicKeyCache();
+    global.fetch.mockResolvedValueOnce(ok({ data: { public_key: 'base64-key' } }));
+
+    const first = await telnyx.getWebhookPublicKey();
+    const second = await telnyx.getWebhookPublicKey();
+
+    expect(first).toBe('base64-key');
+    expect(second).toBe('base64-key');
+    // Cached after the first fetch — the API is hit only once.
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.telnyx.com/v2/public_key');
+    expect(init.method).toBe('GET');
+  });
+
+  it('getWebhookPublicKey returns "" (and caches) when the fetch fails', async () => {
+    telnyx.resetWebhookPublicKeyCache();
+    global.fetch.mockResolvedValue(fail(500)); // 500 retries then exhausts
+
+    const key = await telnyx.getWebhookPublicKey();
+    expect(key).toBe('');
+    // Subsequent calls use the cached empty result — no further fetches.
+    global.fetch.mockClear();
+    expect(await telnyx.getWebhookPublicKey()).toBe('');
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
   it('sendSms posts to /messages with the messaging profile id', async () => {
     global.fetch.mockResolvedValueOnce(ok({ data: { id: 'msg-1' } }));
     await telnyx.sendSms({ from: '+12085550100', to: '+12085550142', text: 'hi' });

@@ -98,8 +98,13 @@ function createApp() {
     limit: '1mb',
     verify: (req, res, buf) => { req.rawBody = buf; },
   }));
-  // Telnyx TeXML voice webhooks post form-urlencoded bodies.
-  app.use(express.urlencoded({ extended: false, limit: '1mb' }));
+  // Telnyx TeXML voice webhooks post form-urlencoded bodies. Capture rawBody
+  // here too so the Telnyx Ed25519 verifier sees the exact signed bytes.
+  app.use(express.urlencoded({
+    extended: false,
+    limit: '1mb',
+    verify: (req, res, buf) => { req.rawBody = buf; },
+  }));
 
   // Liveness probe for the App Runner health check: answers 200 as long as the
   // process is up and the event loop is serving — no dependency checks, so a

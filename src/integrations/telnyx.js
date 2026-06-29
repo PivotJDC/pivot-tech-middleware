@@ -380,8 +380,44 @@ async function sendMessage({
   }));
 }
 
+// Module-level cache for the webhook public key fetched from Telnyx. `null`
+// means "not yet fetched"; '' means "fetch attempted and unavailable" (so we
+// don't hammer the API on every webhook). A configured key always wins.
+let cachedWebhookPublicKey = null;
+
+/**
+ * Resolve the Ed25519 public key used to verify inbound Telnyx webhooks.
+ *
+ * Order of preference:
+ *   1. config.telnyx.webhookPublicKey (TELNYX_WEBHOOK_PUBLIC_KEY env) — explicit.
+ *   2. GET /v2/public_key, fetched once and cached for the process lifetime.
+ *
+ * Returns the base64-encoded key string, or '' when none is available (e.g. dev
+ * with no API key). Never throws — the caller treats '' as "skip verification".
+ * @returns {Promise<string>}
+ */
+async function getWebhookPublicKey() {
+  if (config.telnyx.webhookPublicKey) return config.telnyx.webhookPublicKey;
+  if (cachedWebhookPublicKey !== null) return cachedWebhookPublicKey;
+  try {
+    const data = unwrap(await request('GET', '/public_key'));
+    cachedWebhookPublicKey = (data && data.public_key) || '';
+  } catch (err) {
+    logger.warn({ err: err.message }, 'failed to fetch Telnyx webhook public key');
+    cachedWebhookPublicKey = '';
+  }
+  return cachedWebhookPublicKey;
+}
+
+/** Test seam: clear the cached public key so each test starts fresh. */
+function resetWebhookPublicKeyCache() {
+  cachedWebhookPublicKey = null;
+}
+
 module.exports = {
   searchAvailableNumbers,
+  getWebhookPublicKey,
+  resetWebhookPublicKeyCache,
   purchaseNumber,
   provisionPhoneNumber,
   createSipEndpoint,

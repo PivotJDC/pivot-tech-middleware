@@ -18,6 +18,7 @@ const express = require('express');
 const webhookService = require('../../services/webhookService');
 const messagingService = require('../../services/messagingService');
 const { asyncHandler, errors } = require('../../middleware/errorHandler');
+const { verifyTelnyxWebhook } = require('../../middleware/telnyxWebhookVerify');
 const { logger } = require('../../utils/logger');
 
 const router = express.Router();
@@ -51,15 +52,14 @@ router.post(
   }),
 );
 
-// Telnyx messaging events: inbound messages + delivery status. We always return
-// 200 immediately so Telnyx doesn't retry; processing errors are logged, not
-// surfaced.
-// TODO(security): verify the Telnyx Ed25519 signature
-// (telnyx-signature-ed25519 + telnyx-timestamp headers) against the Telnyx
-// public key before processing. Telnyx uses Ed25519, not the SignalWire HMAC
-// scheme above, so it needs the public key wired into config first.
+// Telnyx messaging events: inbound messages + delivery status. The Ed25519
+// signature (telnyx-signature-ed25519 + telnyx-timestamp) is verified first
+// (CLAUDE.md rule #5); verification is skipped only when no public key is
+// configured (dev/back-compat). We always return 200 so Telnyx doesn't retry;
+// processing errors are logged, not surfaced.
 router.post(
   '/messaging',
+  verifyTelnyxWebhook,
   asyncHandler(async (req, res) => {
     try {
       const result = await messagingService.handleMessagingWebhook(req.body || {});

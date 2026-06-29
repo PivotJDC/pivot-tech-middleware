@@ -1,4 +1,7 @@
 jest.mock('../../src/services/voiceService');
+// Automock the Telnyx integration so the Ed25519 webhook verifier reads no
+// public key (getWebhookPublicKey -> undefined) and skips — no network call.
+jest.mock('../../src/integrations/telnyx');
 jest.mock('../../src/utils/logger', () => ({
   logger: {
     info: () => {}, warn: () => {}, error: () => {},

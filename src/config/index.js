@@ -135,6 +135,10 @@ function buildConfig() {
       apiKey: process.env.TELNYX_API_KEY || '',
       sipConnectionId: process.env.TELNYX_SIP_CONNECTION_ID || '',
       messagingProfileId: process.env.TELNYX_MESSAGING_PROFILE_ID || '',
+      // Ed25519 public key (base64, from Mission Control or GET /v2/public_key)
+      // used to verify inbound Telnyx webhook signatures. When empty, signature
+      // verification is skipped (dev/back-compat) — see telnyxWebhookVerify.
+      webhookPublicKey: process.env.TELNYX_WEBHOOK_PUBLIC_KEY || '',
     }),
 
     // Cellular data / eSIM vendor (BICS SIMforThings). planId / apnGroupId /

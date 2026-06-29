@@ -13,6 +13,7 @@
 const express = require('express');
 const voiceService = require('../../services/voiceService');
 const { asyncHandler } = require('../../middleware/errorHandler');
+const { verifyTelnyxWebhook } = require('../../middleware/telnyxWebhookVerify');
 const { logger } = require('../../utils/logger');
 
 const router = express.Router();
@@ -73,6 +74,7 @@ function rejectXml() {
 // (params in the query string) or POST (form body), so handle both and merge.
 router.all(
   '/inbound',
+  verifyTelnyxWebhook,
   asyncHandler(async (req, res) => {
     const params = { ...req.query, ...req.body };
     // URL-encoded "+" arrives as a space (body) or %2B (query); normalize both.
