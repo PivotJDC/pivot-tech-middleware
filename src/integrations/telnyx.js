@@ -260,6 +260,43 @@ async function deleteSipEndpoint(sipEndpointId) {
 }
 
 /**
+ * Create an emergency (E911) address in the Telnyx address book.
+ * Returns { addressId, status }.
+ */
+async function createE911Address({
+  firstName, lastName, line1, line2, city, state, zip, countryCode,
+}) {
+  const data = unwrap(await request('POST', '/addresses', {
+    first_name: firstName,
+    last_name: lastName,
+    street_address: line1,
+    extended_address: line2 || '',
+    locality: city,
+    administrative_area: state,
+    postal_code: zip,
+    country_code: countryCode || 'US',
+    address_book: true,
+    business_name: 'MobilityNet Subscriber',
+  }));
+  return { addressId: data && data.id, status: data && data.status };
+}
+
+/**
+ * Enable emergency (E911) calling on a number, pointing it at an E911 address.
+ * Returns { emergencyEnabled, emergencyStatus }.
+ */
+async function enableE911({ phoneNumberId, addressId }) {
+  const data = unwrap(await request('PATCH', `/phone_numbers/${phoneNumberId}/voice`, {
+    emergency_enabled: true,
+    emergency_address_id: addressId,
+  }));
+  return {
+    emergencyEnabled: !!(data && data.emergency_enabled),
+    emergencyStatus: data && data.emergency_status,
+  };
+}
+
+/**
  * Update a credential connection's outbound settings.
  * Used to clear a static outbound ANI override:
  *   updateConnectionOutbound(id, { ani_override_type: 'default' })
@@ -352,6 +389,8 @@ module.exports = {
   updateSipEndpoint,
   deleteSipEndpoint,
   updateConnectionOutbound,
+  createE911Address,
+  enableE911,
   assignNumberToEndpoint,
   assignNumberToCampaign,
   submitPort,

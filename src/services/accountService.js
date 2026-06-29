@@ -48,8 +48,9 @@ const NOW = Symbol('NOW');
  * sip_password_hash is removed; every other column passes through, so the
  * billing/broadband/promo and Telgoo5 fields (external_billing_provider,
  * broadband_provider, broadband_account_id, promo_code, telgoo5_customer_id,
- * telgoo5_enrollment_id) and the enrollment details (first_name, last_name,
- * service_address, billing_address) are all included. For primary accounts
+ * telgoo5_enrollment_id), the enrollment details (first_name, last_name,
+ * service_address, billing_address), and the E911 fields (e911_address_id,
+ * e911_enabled) are all included. For primary accounts
  * (parent_account_id NULL) we expose line_count — the number of child lines —
  * from a `line_count` query column (correlated subquery), defaulting to 0.
  */
@@ -284,8 +285,11 @@ async function createAccount(input = {}) {
     }
   }
 
-  // External provisioning (SignalWire). Throws DID_UNAVAILABLE / SIGNALWIRE_ERROR.
-  const credentials = await didOrchestration.assignDid(market, requestedAreaCode);
+  // External provisioning (Telnyx). Throws DID_UNAVAILABLE / SIGNALWIRE_ERROR.
+  // Pass enrollment so DID orchestration can also provision E911 (best-effort).
+  const credentials = await didOrchestration.assignDid(market, requestedAreaCode, {
+    firstName, lastName, serviceAddress,
+  });
   const sipPasswordHash = await crypto.hashPassword(credentials.sipPassword);
 
   try {
@@ -295,8 +299,9 @@ async function createAccount(input = {}) {
            (email, market, plan, phone_e164, sip_username, sip_endpoint_id,
             sip_password_hash, parent_account_id, line_label,
             external_billing_provider, broadband_provider, broadband_account_id, promo_code,
-            first_name, last_name, service_address, billing_address)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+            first_name, last_name, service_address, billing_address,
+            e911_address_id, e911_enabled)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
          RETURNING *`,
         [
           email,
@@ -316,6 +321,8 @@ async function createAccount(input = {}) {
           lastName,
           serviceAddress,
           billingAddress,
+          credentials.e911AddressId || null,
+          credentials.e911Enabled || false,
         ],
       );
       const accountId = inserted.rows[0].id;

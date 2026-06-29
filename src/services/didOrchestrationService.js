@@ -85,13 +85,18 @@ async function findAvailableNumber(market, requestedAreaCode = null) {
 }
 
 /**
- * Assign a DID + SIP endpoint for a new account in the given market.
+ * Assign a DID + SIP endpoint for a new account in the given market. When an
+ * enrollment serviceAddress is supplied, also provisions E911 (best-effort).
+ * @param {string} market
+ * @param {string|null} [requestedAreaCode]
+ * @param {{ firstName?, lastName?, serviceAddress?: object }} [enrollment]
  * @returns {Promise<{
  *   phoneE164: string, areaCode: string, signalwireSid: string,
- *   sipUsername: string, sipEndpointId: string, sipPassword: string
+ *   sipUsername: string, sipEndpointId: string, sipPassword: string,
+ *   e911AddressId: string|null, e911Enabled: boolean
  * }>}
  */
-async function assignDid(market, requestedAreaCode = null) {
+async function assignDid(market, requestedAreaCode = null, enrollment = {}) {
   const { e164, areaCode } = await findAvailableNumber(market, requestedAreaCode);
 
   // Purchase + route inbound voice to the TeXML app + attach the messaging
@@ -118,13 +123,50 @@ async function assignDid(market, requestedAreaCode = null) {
   // overwrite that connection_id and break inbound calls. Outbound calls route
   // via the SIP credential's own connection, not the number's connection_id.
 
+  // Best-effort E911: register the subscriber's service address and enable
+  // emergency calling on the number. Like BICS, a failure here is logged but
+  // never fails account creation.
+  let e911AddressId = null;
+  let e911Enabled = false;
+  const svc = enrollment.serviceAddress;
+  if (svc && svc.line1) {
+    try {
+      const addr = await telnyx.createE911Address({
+        firstName: enrollment.firstName,
+        lastName: enrollment.lastName,
+        line1: svc.line1,
+        line2: svc.line2,
+        city: svc.city,
+        state: svc.state,
+        zip: svc.zip,
+      });
+      e911AddressId = addr.addressId || null;
+      if (e911AddressId) {
+        const result = await telnyx.enableE911({
+          phoneNumberId: signalwireSid,
+          addressId: e911AddressId,
+        });
+        e911Enabled = !!result.emergencyEnabled;
+      }
+    } catch (err) {
+      logger.error({ phoneE164: e164, err: err.message }, 'E911 provisioning failed (best-effort)');
+    }
+  }
+
   // Never log sipPassword (CLAUDE.md security rule #1).
   logger.info({
-    market, areaCode, phoneE164: e164, sipEndpointId,
+    market, areaCode, phoneE164: e164, sipEndpointId, e911Enabled,
   }, 'DID assigned on Telnyx');
 
   return {
-    phoneE164: e164, areaCode, signalwireSid, sipUsername, sipEndpointId, sipPassword,
+    phoneE164: e164,
+    areaCode,
+    signalwireSid,
+    sipUsername,
+    sipEndpointId,
+    sipPassword,
+    e911AddressId,
+    e911Enabled,
   };
 }
 

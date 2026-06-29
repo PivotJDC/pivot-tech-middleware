@@ -57,6 +57,8 @@ const credentials = {
   sipUsername: 'pivottech-abc',
   sipEndpointId: 'ep-1',
   sipPassword: 'plaintext-pw',
+  e911AddressId: 'addr-9',
+  e911Enabled: true,
 };
 
 beforeEach(() => {
@@ -94,7 +96,7 @@ describe('createAccount', () => {
       market: 'lewiston-id',
     });
 
-    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null);
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null, { firstName: null, lastName: null, serviceAddress: null });
     expect(crypto.hashPassword).toHaveBeenCalledWith('plaintext-pw');
     expect(result.id).toBe(baseRow.id);
     expect(result).not.toHaveProperty('sip_password_hash');
@@ -271,7 +273,7 @@ describe('createAccount', () => {
     await accountService.createAccount({ email: 'a@b.co', phone_e164: '+13035550100' });
 
     // No market provided -> "direct"; area code derived from the chosen number.
-    expect(didOrchestration.assignDid).toHaveBeenCalledWith('direct', '303');
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('direct', '303', { firstName: null, lastName: null, serviceAddress: null });
   });
 
   it('routes a FOX promo code to gaiia + broadband fields on the account', async () => {
@@ -367,6 +369,18 @@ describe('createAccount', () => {
     // line2 absent → normalized to null.
     expect(insertedParams[16]).toEqual({
       line1: '2 Oak', line2: null, city: 'Boise', state: 'ID', zip: '83702',
+    });
+    // $18 e911_address_id, $19 e911_enabled — from the assignDid credentials.
+    expect(insertedParams[17]).toBe('addr-9');
+    expect(insertedParams[18]).toBe(true);
+
+    // E911 enrollment context flows through to assignDid.
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null, {
+      firstName: 'Jane',
+      lastName: 'Doe',
+      serviceAddress: {
+        line1: '1 Main', line2: 'Apt 2', city: 'Lewiston', state: 'ID', zip: '83501',
+      },
     });
   });
 
@@ -529,7 +543,7 @@ describe('multi-line (family plan)', () => {
     // Parent resolved against primary accounts only; uniqueness pre-check skipped.
     expect(db.query.mock.calls[0][0]).toMatch(/parent_account_id IS NULL/);
     // Child line still gets its own DID and eSIM.
-    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null);
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null, { firstName: null, lastName: null, serviceAddress: null });
     expect(bics.getNextAvailableEsim).toHaveBeenCalled();
     // parent_account_id ($8) and line_label ($9) persisted.
     expect(insertedParams[7]).toBe('parent-1');

@@ -43,6 +43,69 @@ describe('assignDid', () => {
     expect(telnyx.assignNumberToEndpoint).not.toHaveBeenCalled();
   });
 
+  it('provisions E911 (best-effort) when an enrollment serviceAddress is supplied', async () => {
+    telnyx.searchAvailableNumbers.mockResolvedValueOnce([{ number: '+12085550100' }]);
+    telnyx.provisionPhoneNumber.mockResolvedValueOnce({ id: 'sid-1' });
+    telnyx.createSipEndpoint.mockResolvedValueOnce({
+      id: 'ep-1', sip_username: 'u', sip_password: 'p',
+    });
+    telnyx.createE911Address.mockResolvedValueOnce({ addressId: 'addr-9', status: 'pending' });
+    telnyx.enableE911.mockResolvedValueOnce({ emergencyEnabled: true, emergencyStatus: 'enabled' });
+
+    const cred = await did.assignDid('lewiston-id', null, {
+      firstName: 'Jane',
+      lastName: 'Doe',
+      serviceAddress: {
+        line1: '1 Main St', line2: '', city: 'Lewiston', state: 'ID', zip: '83501',
+      },
+    });
+
+    expect(telnyx.createE911Address).toHaveBeenCalledWith({
+      firstName: 'Jane',
+      lastName: 'Doe',
+      line1: '1 Main St',
+      line2: '',
+      city: 'Lewiston',
+      state: 'ID',
+      zip: '83501',
+    });
+    // The number (signalwireSid), not the SIP credential, gets E911 enabled.
+    expect(telnyx.enableE911).toHaveBeenCalledWith({ phoneNumberId: 'sid-1', addressId: 'addr-9' });
+    expect(cred).toMatchObject({ e911AddressId: 'addr-9', e911Enabled: true });
+  });
+
+  it('does not call E911 when no serviceAddress is supplied', async () => {
+    telnyx.searchAvailableNumbers.mockResolvedValueOnce([{ number: '+12085550100' }]);
+    telnyx.provisionPhoneNumber.mockResolvedValueOnce({ id: 'sid-1' });
+    telnyx.createSipEndpoint.mockResolvedValueOnce({
+      id: 'ep-1', sip_username: 'u', sip_password: 'p',
+    });
+
+    const cred = await did.assignDid('lewiston-id');
+
+    expect(telnyx.createE911Address).not.toHaveBeenCalled();
+    expect(telnyx.enableE911).not.toHaveBeenCalled();
+    expect(cred).toMatchObject({ e911AddressId: null, e911Enabled: false });
+  });
+
+  it('does not fail account creation when E911 provisioning throws (best-effort)', async () => {
+    telnyx.searchAvailableNumbers.mockResolvedValueOnce([{ number: '+12085550100' }]);
+    telnyx.provisionPhoneNumber.mockResolvedValueOnce({ id: 'sid-1' });
+    telnyx.createSipEndpoint.mockResolvedValueOnce({
+      id: 'ep-1', sip_username: 'u', sip_password: 'p',
+    });
+    telnyx.createE911Address.mockRejectedValueOnce(new Error('telnyx 422'));
+
+    const cred = await did.assignDid('lewiston-id', null, {
+      serviceAddress: {
+        line1: '1 Main St', city: 'Lewiston', state: 'ID', zip: '83501',
+      },
+    });
+
+    expect(cred).toMatchObject({ phoneE164: '+12085550100', e911AddressId: null, e911Enabled: false });
+    expect(logger.error).toHaveBeenCalled();
+  });
+
   it('throws VALIDATION_ERROR for an unknown market with no requested area code', async () => {
     await expect(did.assignDid('atlantis')).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
     expect(telnyx.searchAvailableNumbers).not.toHaveBeenCalled();

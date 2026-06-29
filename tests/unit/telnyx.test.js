@@ -167,6 +167,49 @@ describe('typed API calls', () => {
     expect(JSON.parse(init.body)).toEqual({ outbound: { ani_override_type: 'default' } });
   });
 
+  it('createE911Address POSTs /addresses and maps the result', async () => {
+    global.fetch.mockResolvedValueOnce(ok({ data: { id: 'addr-1', status: 'pending' } }));
+    const res = await telnyx.createE911Address({
+      firstName: 'Jane',
+      lastName: 'Doe',
+      line1: '1 Main St',
+      line2: 'Apt 2',
+      city: 'Lewiston',
+      state: 'ID',
+      zip: '83501',
+    });
+    expect(res).toEqual({ addressId: 'addr-1', status: 'pending' });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.telnyx.com/v2/addresses');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      first_name: 'Jane',
+      last_name: 'Doe',
+      street_address: '1 Main St',
+      extended_address: 'Apt 2',
+      locality: 'Lewiston',
+      administrative_area: 'ID',
+      postal_code: '83501',
+      country_code: 'US',
+      address_book: true,
+      business_name: 'MobilityNet Subscriber',
+    });
+  });
+
+  it('enableE911 PATCHes /phone_numbers/{id}/voice and maps the result', async () => {
+    global.fetch.mockResolvedValueOnce(ok({
+      data: { emergency_enabled: true, emergency_status: 'enabled' },
+    }));
+    const res = await telnyx.enableE911({ phoneNumberId: '+12085550100', addressId: 'addr-1' });
+    expect(res).toEqual({ emergencyEnabled: true, emergencyStatus: 'enabled' });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.telnyx.com/v2/phone_numbers/+12085550100/voice');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body)).toEqual({ emergency_enabled: true, emergency_address_id: 'addr-1' });
+  });
+
   it('deleteSipEndpoint hits /telephony_credentials/{id} and returns null on 204', async () => {
     global.fetch.mockResolvedValueOnce({ ok: true, status: 204, text: async () => '' });
     const res = await telnyx.deleteSipEndpoint('cred-1');
