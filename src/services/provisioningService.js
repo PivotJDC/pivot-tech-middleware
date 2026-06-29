@@ -38,6 +38,17 @@ async function resolveSipPassword(account) {
  * SIP credentials directly. Both parts are base64url/uuid charsets, so the
  * URI needs no percent-encoding. NEVER log the result — it embeds the live
  * SIP password (security rule #1).
+ *
+ * DECISION (per-subscriber caller ID): the csc: form carries only ONE username,
+ * which Acrobits uses as BOTH the SIP <username> (From identity) and the
+ * <authUsername> (digest auth) — it cannot encode the split identity. We pass
+ * the gencred so SIP REGISTER still authenticates; the subscriber's own caller
+ * ID (From = E.164) is delivered authoritatively by the Account XML
+ * (<username> = phone_e164, <authUsername> = gencred) served from the
+ * token-based GET /v1/provision endpoint. If the branded app provisions purely
+ * from this csc: deep link (bypassing the XML web service), point the QR at
+ * provisioning_url instead so the full split-identity XML is applied. Flagged
+ * for Jim — see acrobits.buildAccountXml.
  */
 function buildCscUri(sipUsername, sipPassword) {
   return `csc:${sipUsername}:${sipPassword}@${config.acrobits.cloudId}`;

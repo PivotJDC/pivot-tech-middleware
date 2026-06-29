@@ -26,7 +26,23 @@ function escapeXml(value) {
 
 /**
  * Build the Acrobits Account XML.
+ *
+ * SIP identity is split across two fields (confirmed against the Acrobits
+ * Account XML docs):
+ *   - <username>     the user part of the SIP URI / From header. We use the
+ *                    subscriber's E.164 number so outbound calls present the
+ *                    subscriber's own caller identity.
+ *   - <authUsername> the username used ONLY in SIP authorization (digest)
+ *                    headers — the Telnyx-generated gencred credential. Acrobits
+ *                    docs: "Username used in SIP authorization headers. If left
+ *                    empty, the username is used." Leaving it empty would
+ *                    (incorrectly) authenticate as the E.164 number, so it must
+ *                    be set explicitly.
+ * Both fields used to be the gencred credential, which put the gencred in the
+ * From header instead of the subscriber's number (the bug fixed here).
  * @param {{ sipUsername: string, sipPassword: string, phoneE164: string }} params
+ *   sipUsername is the Telnyx gencred credential (SIP auth only); phoneE164 is
+ *   the subscriber's number (the SIP identity / caller ID).
  * @returns {string} XML document (Content-Type: application/xml)
  */
 function buildAccountXml({ sipUsername, sipPassword, phoneE164 }) {
@@ -36,7 +52,8 @@ function buildAccountXml({ sipUsername, sipPassword, phoneE164 }) {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<account>',
-    `  <username>${escapeXml(sipUsername)}</username>`,
+    `  <username>${escapeXml(phoneE164)}</username>`,
+    `  <authUsername>${escapeXml(sipUsername)}</authUsername>`,
     `  <password>${escapeXml(sipPassword)}</password>`,
     `  <domain>${escapeXml(domain)}</domain>`,
     '  <port>5061</port>',

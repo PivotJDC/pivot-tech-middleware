@@ -10,7 +10,10 @@ describe('acrobits.buildAccountXml', () => {
   it('renders the Acrobits Account XML with all required fields', () => {
     const xml = acrobits.buildAccountXml(params);
     expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
-    expect(xml).toContain('<username>pivottech-abc</username>');
+    // Split identity: <username> is the subscriber E.164 (From header), while
+    // <authUsername> is the Telnyx gencred (SIP digest auth only).
+    expect(xml).toContain('<username>+12085550100</username>');
+    expect(xml).toContain('<authUsername>pivottech-abc</authUsername>');
     expect(xml).toContain('<password>sip-secret-123</password>');
     expect(xml).toContain('<domain>sip.telnyx.com</domain>');
     expect(xml).toContain('<port>5061</port>');
@@ -19,6 +22,8 @@ describe('acrobits.buildAccountXml', () => {
     expect(xml).toContain('<callerID>+12085550100</callerID>');
     expect(xml).toContain('<displayName>(208) 555-0100</displayName>');
     expect(xml).toContain('<codecPriority>OPUS,ULAW,ALAW</codecPriority>');
+    // The gencred must NOT be the From-header username anymore.
+    expect(xml).not.toContain('<username>pivottech-abc</username>');
   });
 
   it('escapes XML special characters in values', () => {
