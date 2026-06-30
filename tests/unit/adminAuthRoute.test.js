@@ -68,6 +68,53 @@ describe('POST /admin/login', () => {
   });
 });
 
+describe('POST /admin/bootstrap (public, one-time)', () => {
+  it('creates the first super_admin when no admin users exist', async () => {
+    adminUserService.countAdminUsers.mockResolvedValueOnce(0);
+    adminUserService.createAdminUser.mockResolvedValueOnce({
+      id: 'u1', username: 'jim', email: 'jim@p.io', role: 'super_admin',
+    });
+
+    const res = await request(app)
+      .post('/admin/bootstrap')
+      .send({ username: 'jim', email: 'jim@p.io', password: 'password1' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.role).toBe('super_admin');
+    // role is forced to super_admin regardless of any supplied value.
+    expect(adminUserService.createAdminUser).toHaveBeenCalledWith(
+      expect.objectContaining({ username: 'jim', role: 'super_admin' }),
+    );
+  });
+
+  it('forces super_admin even if a different role is supplied', async () => {
+    adminUserService.countAdminUsers.mockResolvedValueOnce(0);
+    adminUserService.createAdminUser.mockResolvedValueOnce({ id: 'u1', role: 'super_admin' });
+
+    await request(app)
+      .post('/admin/bootstrap')
+      .send({
+        username: 'jim', email: 'jim@p.io', password: 'password1', role: 'viewer',
+      });
+
+    expect(adminUserService.createAdminUser).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'super_admin' }),
+    );
+  });
+
+  it('returns 403 once an admin user already exists', async () => {
+    adminUserService.countAdminUsers.mockResolvedValueOnce(1);
+
+    const res = await request(app)
+      .post('/admin/bootstrap')
+      .send({ username: 'x', email: 'x@p.io', password: 'password1' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toMatch(/already completed/i);
+    expect(adminUserService.createAdminUser).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /admin/users (super_admin only)', () => {
   it('creates a user when caller is super_admin', async () => {
     adminUserService.createAdminUser.mockResolvedValueOnce({

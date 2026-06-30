@@ -107,6 +107,12 @@ async function createAdminUser(input = {}) {
   }
 }
 
+/** Count existing admin users (used by the one-time bootstrap route). */
+async function countAdminUsers() {
+  const { rows } = await db.query('SELECT COUNT(*)::int AS total FROM admin_users');
+  return rows[0].total;
+}
+
 /** List all admin users (never includes password_hash). */
 async function listAdminUsers() {
   const { rows } = await db.query(
@@ -121,6 +127,7 @@ module.exports = {
   ROLES,
   login,
   createAdminUser,
+  countAdminUsers,
   listAdminUsers,
   issueToken,
   serialize,
