@@ -1,5 +1,6 @@
 jest.mock('../../src/cache');
 jest.mock('../../src/services/accountService');
+jest.mock('../../src/integrations/email');
 jest.mock('../../src/utils/token');
 jest.mock('../../src/utils/logger', () => ({
   logger: { info: () => {}, warn: () => {}, error: () => {} },
@@ -8,6 +9,7 @@ jest.mock('../../src/utils/logger', () => ({
 
 const cache = require('../../src/cache');
 const accountService = require('../../src/services/accountService');
+const emailClient = require('../../src/integrations/email');
 const token = require('../../src/utils/token');
 const { errors } = require('../../src/middleware/errorHandler');
 const authService = require('../../src/services/authService');
@@ -27,6 +29,11 @@ describe('sendCode', () => {
     expect(key).toBe('auth:code:jane@example.com'); // normalized
     expect(value).toMatch(/^\d{6}$/);
     expect(ttl).toBe(600);
+    // The code is emailed to the customer.
+    expect(emailClient.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'jane@example.com',
+      subject: expect.stringContaining(value),
+    }));
   });
 
   it('is a silent no-op for an unknown email (no enumeration)', async () => {
@@ -34,6 +41,7 @@ describe('sendCode', () => {
 
     await expect(authService.sendCode('ghost@example.com')).resolves.toBeUndefined();
     expect(cache.setWithTtl).not.toHaveBeenCalled();
+    expect(emailClient.sendEmail).not.toHaveBeenCalled();
   });
 });
 

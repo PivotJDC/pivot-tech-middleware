@@ -130,6 +130,13 @@ function buildConfig() {
 
     encryptionKey: process.env.ENCRYPTION_KEY || '',
 
+    // Transactional email (Amazon SES). When enabled is false, the integration
+    // logs the email instead of sending — the default, so dev/test never call SES.
+    email: Object.freeze({
+      from: process.env.EMAIL_FROM || 'noreply@mymobilitynet.io',
+      enabled: process.env.EMAIL_ENABLED === 'true',
+    }),
+
     // Outbound voice/SMS/number provisioning vendor.
     telnyx: Object.freeze({
       apiKey: process.env.TELNYX_API_KEY || '',

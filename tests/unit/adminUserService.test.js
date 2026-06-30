@@ -1,5 +1,6 @@
 jest.mock('../../src/db');
 jest.mock('../../src/cache');
+jest.mock('../../src/integrations/email');
 jest.mock('../../src/utils/crypto');
 jest.mock('../../src/config', () => ({
   admin: { jwtSecret: 'test-admin-secret', jwtTtl: '8h' },
@@ -12,6 +13,7 @@ jest.mock('../../src/utils/logger', () => ({
 const jwt = require('jsonwebtoken');
 const db = require('../../src/db');
 const cache = require('../../src/cache');
+const emailClient = require('../../src/integrations/email');
 const crypto = require('../../src/utils/crypto');
 const adminUserService = require('../../src/services/adminUserService');
 
@@ -79,6 +81,22 @@ describe('createAdminUser', () => {
     expect(user.username).toBe('ops');
     // email normalized to lowercase in the insert params.
     expect(db.query.mock.calls[0][1]).toEqual(['ops', 'ops@p.io', 'hashed', 'admin']);
+    // Best-effort invite email with the plaintext password.
+    expect(emailClient.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'ops@p.io',
+      subject: expect.stringMatching(/invited/i),
+    }));
+  });
+
+  it('still returns the user when the invite email fails', async () => {
+    crypto.hashPassword.mockResolvedValueOnce('hashed');
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'u9', username: 'ops2', role: 'admin' }] });
+    emailClient.sendEmail.mockRejectedValueOnce(new Error('SES down'));
+
+    const user = await adminUserService.createAdminUser({
+      username: 'ops2', email: 'ops2@p.io', password: 'longenough',
+    });
+    expect(user.username).toBe('ops2');
   });
 
   it('defaults role to admin', async () => {
@@ -145,12 +163,18 @@ describe('requestPasswordReset', () => {
     expect(ttl).toBe(900);
     // email normalized to lowercase for the lookup.
     expect(db.query.mock.calls[0][1]).toEqual(['jim@p.io']);
+    // Emails the reset link to the address on file.
+    expect(emailClient.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'jim@p.io',
+      subject: expect.stringMatching(/reset/i),
+    }));
   });
 
   it('is a silent no-op for an unknown email', async () => {
     db.query.mockResolvedValueOnce({ rows: [] });
     await adminUserService.requestPasswordReset('ghost@p.io');
     expect(cache.setWithTtl).not.toHaveBeenCalled();
+    expect(emailClient.sendEmail).not.toHaveBeenCalled();
   });
 });
 

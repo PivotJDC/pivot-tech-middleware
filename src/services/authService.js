@@ -14,6 +14,8 @@ const crypto = require('crypto');
 const cache = require('../cache');
 const accountService = require('./accountService');
 const token = require('../utils/token');
+const emailClient = require('../integrations/email');
+const emailTemplates = require('./emailTemplates');
 const { logger } = require('../utils/logger');
 
 const CODE_TTL_SECONDS = 10 * 60; // 10 minutes
@@ -57,9 +59,19 @@ async function sendCode(rawEmail) {
 
   const code = generateCode();
   await cache.setWithTtl(codeKey(email), code, CODE_TTL_SECONDS);
-  // TODO: deliver via email. Until then we log the code for dev/testing — this
-  // is an explicit MVP step and must be removed once email delivery lands.
-  logger.info({ email, code }, 'auth code generated (email delivery pending)');
+  logger.info({ email }, 'auth code generated');
+
+  // Email the code (best-effort — never reveal failure to the caller, and never
+  // block the flow). When EMAIL_ENABLED=false the integration logs the subject,
+  // which carries the code, so local dev can still read it.
+  try {
+    const tpl = emailTemplates.customerVerificationCode({ code });
+    await emailClient.sendEmail({
+      to: email, subject: tpl.subject, textBody: tpl.text, htmlBody: tpl.html,
+    });
+  } catch (err) {
+    logger.error({ email, err: err.message }, 'failed to send verification code email');
+  }
 }
 
 /**

@@ -16,11 +16,14 @@ const db = require('../db');
 const config = require('../config');
 const cache = require('../cache');
 const crypto = require('../utils/crypto');
+const emailClient = require('../integrations/email');
+const emailTemplates = require('./emailTemplates');
 const { errors, AppError } = require('../middleware/errorHandler');
 const { logger } = require('../utils/logger');
 
 const ROLES = ['super_admin', 'admin', 'viewer'];
 const RESET_TOKEN_TTL_SECONDS = 15 * 60; // 15 minutes
+const ADMIN_LOGIN_URL = 'https://mymobilitynet.io/admin';
 
 function resetKey(token) {
   return `admin:reset:${token}`;
@@ -105,6 +108,18 @@ async function createAdminUser(input = {}) {
       [username, email, passwordHash, role],
     );
     logger.info({ username, role }, 'admin user created');
+
+    // Best-effort invite email with the plaintext temporary password. Never let
+    // an email failure undo or block the (already committed) user creation.
+    try {
+      const tpl = emailTemplates.adminInvite({ username, password, loginUrl: ADMIN_LOGIN_URL });
+      await emailClient.sendEmail({
+        to: email, subject: tpl.subject, textBody: tpl.text, htmlBody: tpl.html,
+      });
+    } catch (err) {
+      logger.error({ err: err.message, username }, 'failed to send admin invite email');
+    }
+
     return serialize(rows[0]);
   } catch (err) {
     if (err.code === '23505') {
@@ -142,9 +157,9 @@ async function getByUsername(username) {
 
 /**
  * Begin a password reset: if an admin user has this email, mint a UUID reset
- * token in Redis (admin:reset:{token} -> username, 15-min TTL) and log the
- * link. No-op for an unknown email — callers always answer { sent: true } so
- * the endpoint never reveals whether the email exists.
+ * token in Redis (admin:reset:{token} -> username, 15-min TTL) and email the
+ * reset link (best-effort). No-op for an unknown email — callers always answer
+ * { sent: true } so the endpoint never reveals whether the email exists.
  */
 async function requestPasswordReset(rawEmail) {
   const email = String(rawEmail || '').trim().toLowerCase();
@@ -157,11 +172,18 @@ async function requestPasswordReset(rawEmail) {
   }
   const token = nodeCrypto.randomUUID();
   await cache.setWithTtl(resetKey(token), user.username, RESET_TOKEN_TTL_SECONDS);
-  // TODO: email the link. Until then, log it for dev/ops (remove with delivery).
-  logger.info(
-    { username: user.username, resetLink: `/admin/reset-password?token=${token}` },
-    'admin password reset link generated (email delivery pending)',
-  );
+  logger.info({ username: user.username }, 'admin password reset link generated');
+
+  // Best-effort delivery — never let an email failure surface to the caller.
+  try {
+    const resetLink = `${ADMIN_LOGIN_URL}/reset-password?token=${token}`;
+    const tpl = emailTemplates.adminPasswordReset({ resetLink });
+    await emailClient.sendEmail({
+      to: email, subject: tpl.subject, textBody: tpl.text, htmlBody: tpl.html,
+    });
+  } catch (err) {
+    logger.error({ err: err.message, username: user.username }, 'failed to send admin reset email');
+  }
 }
 
 /**
