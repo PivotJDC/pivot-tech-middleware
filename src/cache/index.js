@@ -46,6 +46,21 @@ async function healthCheck() {
   return pong === 'PONG';
 }
 
+/** Get a string value by key (null if absent). */
+async function get(key) {
+  return getClient().get(key);
+}
+
+/** Set a key to a string value with a TTL (seconds). */
+async function setWithTtl(key, value, ttlSeconds) {
+  return getClient().set(key, value, 'EX', ttlSeconds);
+}
+
+/** Delete a key. Returns the number of keys removed. */
+async function del(key) {
+  return getClient().del(key);
+}
+
 /** Close the connection. Call during graceful shutdown; tests also use this. */
 async function close() {
   if (client) {
@@ -62,6 +77,9 @@ async function close() {
 
 module.exports = {
   getClient,
+  get,
+  setWithTtl,
+  del,
   healthCheck,
   close,
 };
