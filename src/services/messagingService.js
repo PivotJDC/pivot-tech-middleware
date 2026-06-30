@@ -12,8 +12,17 @@ const db = require('../db');
 const telnyx = require('../integrations/telnyx');
 const accountService = require('./accountService');
 const pushService = require('./pushService');
+const cdrService = require('./cdrService');
 const { errors } = require('../middleware/errorHandler');
 const { logger } = require('../utils/logger');
+
+// Telnyx messaging event_type -> the CDR status we log for it.
+const CDR_STATUS_BY_EVENT = {
+  'message.received': 'received',
+  'message.sent': 'sent',
+  'message.delivered': 'delivered',
+  'message.sending_failed': 'failed',
+};
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -223,6 +232,28 @@ async function handleMessagingWebhook(body = {}) {
   const eventType = data.event_type;
   const payload = data.payload || {};
   if (!eventType) return { ignored: true };
+
+  // Best-effort CDR log (separate from the `messages` table). Upserts by
+  // message_id so status events update the same record. Never breaks handling.
+  if (payload.id && CDR_STATUS_BY_EVENT[eventType]) {
+    const from = (payload.from && payload.from.phone_number) || payload.from || '';
+    const toEntry = Array.isArray(payload.to) ? payload.to[0] : payload.to;
+    const to = (toEntry && toEntry.phone_number) || toEntry || '';
+    try {
+      await cdrService.recordMessage({
+        messageId: payload.id,
+        direction: payload.direction === 'outbound' || payload.direction === 'inbound'
+          ? payload.direction
+          : undefined,
+        from,
+        to,
+        status: CDR_STATUS_BY_EVENT[eventType],
+        messageType: String(payload.type || '').toLowerCase() === 'mms' ? 'mms' : 'sms',
+      });
+    } catch (err) {
+      logger.error({ err: err.message, messageId: payload.id }, 'failed to record message CDR');
+    }
+  }
 
   switch (eventType) {
     case 'message.received':

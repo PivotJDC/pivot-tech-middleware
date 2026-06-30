@@ -2,6 +2,7 @@ jest.mock('../../src/db');
 jest.mock('../../src/integrations/telnyx');
 jest.mock('../../src/services/accountService');
 jest.mock('../../src/services/pushService');
+jest.mock('../../src/services/cdrService');
 jest.mock('../../src/utils/logger', () => ({
   logger: {
     info: () => {}, warn: () => {}, error: () => {},
@@ -12,6 +13,7 @@ jest.mock('../../src/utils/logger', () => ({
 const db = require('../../src/db');
 const telnyx = require('../../src/integrations/telnyx');
 const accountService = require('../../src/services/accountService');
+const cdrService = require('../../src/services/cdrService');
 const messaging = require('../../src/services/messagingService');
 
 const ACCOUNT_ID = '11111111-1111-4111-8111-111111111111';
@@ -20,6 +22,7 @@ beforeEach(() => {
   db.query.mockReset();
   telnyx.sendMessage.mockReset();
   accountService.getAccountById.mockReset();
+  cdrService.recordMessage.mockReset();
 });
 
 describe('sendMessage', () => {
@@ -216,5 +219,38 @@ describe('handleMessagingWebhook', () => {
     });
     expect(res.ignored).toBe('message.unknown');
     expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it('records a CDR (best-effort) for a known event with the mapped status', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'm1', status: 'delivered' }] });
+    await messaging.handleMessagingWebhook({
+      data: {
+        event_type: 'message.delivered',
+        payload: {
+          id: 'tmsg-1',
+          direction: 'outbound',
+          from: { phone_number: '+12085550100' },
+          to: [{ phone_number: '+12085550142' }],
+          type: 'SMS',
+        },
+      },
+    });
+    expect(cdrService.recordMessage).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: 'tmsg-1',
+      direction: 'outbound',
+      from: '+12085550100',
+      to: '+12085550142',
+      status: 'delivered',
+      messageType: 'sms',
+    }));
+  });
+
+  it('does not break handling when the CDR write throws', async () => {
+    cdrService.recordMessage.mockRejectedValueOnce(new Error('db down'));
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'm1' }] });
+    const res = await messaging.handleMessagingWebhook({
+      data: { event_type: 'message.delivered', payload: { id: 'tmsg-2' } },
+    });
+    expect(res.handled).toBe('message.delivered');
   });
 });

@@ -23,6 +23,7 @@ const adminService = require('../../services/adminService');
 const accountService = require('../../services/accountService');
 const provisioningService = require('../../services/provisioningService');
 const adminUserService = require('../../services/adminUserService');
+const cdrService = require('../../services/cdrService');
 const { adminAuth, requireRole } = require('../../middleware/adminAuth');
 const { rateLimit } = require('../../middleware/rateLimiter');
 const { asyncHandler, errors } = require('../../middleware/errorHandler');
@@ -136,6 +137,19 @@ router.get(
   '/accounts/:id',
   asyncHandler(async (req, res) => {
     res.json(await accountService.getAccountById(req.params.id));
+  }),
+);
+
+// Call + message history for an account — { calls, messages }, limit/offset.
+router.get(
+  '/accounts/:id/history',
+  asyncHandler(async (req, res) => {
+    const { limit, offset } = req.query;
+    const [calls, messages] = await Promise.all([
+      cdrService.getCallHistory(req.params.id, { limit, offset }),
+      cdrService.getMessageHistory(req.params.id, { limit, offset }),
+    ]);
+    res.json({ calls, messages });
   }),
 );
 

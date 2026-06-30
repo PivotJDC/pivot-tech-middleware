@@ -10,12 +10,14 @@ jest.mock('../../src/services/adminService');
 jest.mock('../../src/services/accountService');
 jest.mock('../../src/services/provisioningService');
 jest.mock('../../src/services/adminUserService');
+jest.mock('../../src/services/cdrService');
 
 const express = require('express');
 const request = require('supertest');
 const adminService = require('../../src/services/adminService');
 const accountService = require('../../src/services/accountService');
 const provisioningService = require('../../src/services/provisioningService');
+const cdrService = require('../../src/services/cdrService');
 const adminRouter = require('../../src/routes/admin');
 const { errorHandler } = require('../../src/middleware/errorHandler');
 
@@ -46,6 +48,16 @@ describe('admin API', () => {
     const res = await request(app).get('/admin/accounts/a1');
     expect(res.status).toBe(200);
     expect(res.body.id).toBe('a1');
+  });
+
+  it('GET /admin/accounts/:id/history returns calls + messages', async () => {
+    cdrService.getCallHistory.mockResolvedValueOnce([{ id: 'cr-1' }]);
+    cdrService.getMessageHistory.mockResolvedValueOnce([{ id: 'mr-1' }]);
+    const res = await request(app).get('/admin/accounts/a1/history?limit=10&offset=0');
+    expect(res.status).toBe(200);
+    expect(res.body.calls).toEqual([{ id: 'cr-1' }]);
+    expect(res.body.messages).toEqual([{ id: 'mr-1' }]);
+    expect(cdrService.getCallHistory).toHaveBeenCalledWith('a1', { limit: '10', offset: '0' });
   });
 
   it('PATCH /admin/accounts/:id/status forces a status change', async () => {

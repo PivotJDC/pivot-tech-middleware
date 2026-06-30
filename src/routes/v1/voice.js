@@ -12,6 +12,7 @@
  */
 const express = require('express');
 const voiceService = require('../../services/voiceService');
+const cdrService = require('../../services/cdrService');
 const { asyncHandler } = require('../../middleware/errorHandler');
 const { verifyTelnyxWebhook } = require('../../middleware/telnyxWebhookVerify');
 const { logger } = require('../../utils/logger');
@@ -97,18 +98,38 @@ router.all(
   }),
 );
 
-// Call status callbacks — log and acknowledge.
+/** Normalize Telnyx's Direction field to 'inbound' | 'outbound' | undefined. */
+function normalizeDirection(raw) {
+  const v = String(raw || '').toLowerCase();
+  if (v.startsWith('in')) return 'inbound';
+  if (v.startsWith('out')) return 'outbound';
+  return undefined;
+}
+
+// Call status callbacks — log, persist a CDR (best-effort), and acknowledge.
 router.post(
   '/status',
   asyncHandler(async (req, res) => {
     const body = req.body || {};
-    logger.info(
-      {
-        callId: body.CallSid || body.CallControlId || null,
-        status: body.CallStatus || body.call_status || body.status || null,
-      },
-      'call status update',
-    );
+    const callSid = body.CallSid || body.CallControlId || body.call_control_id || null;
+    const status = body.CallStatus || body.call_status || body.status || null;
+    logger.info({ callId: callSid, status }, 'call status update');
+
+    // Record the call detail. Never let a CDR failure break the webhook ack.
+    try {
+      await cdrService.recordCall({
+        callSid,
+        direction: normalizeDirection(body.Direction || body.direction),
+        from: normalizePhone(body.From || body.from),
+        to: normalizePhone(body.To || body.to),
+        status,
+        durationSeconds:
+          Number.parseInt(body.CallDuration || body.Duration || body.call_duration, 10) || 0,
+      });
+    } catch (err) {
+      logger.error({ err: err.message, callId: callSid }, 'failed to record call CDR');
+    }
+
     res.status(200).json({ received: true });
   }),
 );

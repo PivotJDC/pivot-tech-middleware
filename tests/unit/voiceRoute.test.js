@@ -1,4 +1,5 @@
 jest.mock('../../src/services/voiceService');
+jest.mock('../../src/services/cdrService');
 // Automock the Telnyx integration so the Ed25519 webhook verifier reads no
 // public key (getWebhookPublicKey -> undefined) and skips — no network call.
 jest.mock('../../src/integrations/telnyx');
@@ -12,6 +13,7 @@ jest.mock('../../src/utils/logger', () => ({
 const express = require('express');
 const request = require('supertest');
 const voiceService = require('../../src/services/voiceService');
+const cdrService = require('../../src/services/cdrService');
 const voiceRouter = require('../../src/routes/v1/voice');
 const { errorHandler } = require('../../src/middleware/errorHandler');
 
@@ -135,12 +137,33 @@ describe('POST /v1/voice/inbound', () => {
 });
 
 describe('POST /v1/voice/status', () => {
-  it('acknowledges a status callback with 200', async () => {
+  beforeEach(() => cdrService.recordCall.mockReset());
+
+  it('acknowledges a status callback with 200 and records a CDR', async () => {
+    cdrService.recordCall.mockResolvedValueOnce({ id: 'cr-1' });
     const res = await request(app)
       .post('/v1/voice/status')
       .type('form')
-      .send({ CallSid: 'CA1', CallStatus: 'completed' });
+      .send('CallSid=CA1&CallStatus=completed&Direction=outbound&From=+12085550100&To=+12085550142&CallDuration=37');
+
     expect(res.status).toBe(200);
     expect(res.body.received).toBe(true);
+    expect(cdrService.recordCall).toHaveBeenCalledWith(expect.objectContaining({
+      callSid: 'CA1',
+      direction: 'outbound',
+      from: '+12085550100',
+      to: '+12085550142',
+      status: 'completed',
+      durationSeconds: 37,
+    }));
+  });
+
+  it('still acknowledges 200 even if CDR recording throws', async () => {
+    cdrService.recordCall.mockRejectedValueOnce(new Error('db down'));
+    const res = await request(app)
+      .post('/v1/voice/status')
+      .type('form')
+      .send({ CallSid: 'CA2', CallStatus: 'failed' });
+    expect(res.status).toBe(200);
   });
 });

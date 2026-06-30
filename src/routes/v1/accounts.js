@@ -13,6 +13,7 @@
 const express = require('express');
 const accountService = require('../../services/accountService');
 const provisioningService = require('../../services/provisioningService');
+const cdrService = require('../../services/cdrService');
 const { authenticate, requireSelf } = require('../../middleware/auth');
 const { asyncHandler } = require('../../middleware/errorHandler');
 
@@ -85,6 +86,21 @@ router.get(
   asyncHandler(async (req, res) => {
     const status = await accountService.getAccountStatus(req.params.id);
     res.json(status);
+  }),
+);
+
+// Call + message history — owner only. { calls, messages } with limit/offset.
+router.get(
+  '/:id/history',
+  authenticate,
+  requireSelf,
+  asyncHandler(async (req, res) => {
+    const { limit, offset } = req.query;
+    const [calls, messages] = await Promise.all([
+      cdrService.getCallHistory(req.params.id, { limit, offset }),
+      cdrService.getMessageHistory(req.params.id, { limit, offset }),
+    ]);
+    res.json({ calls, messages });
   }),
 );
 
