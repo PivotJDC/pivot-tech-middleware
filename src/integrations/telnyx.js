@@ -103,6 +103,17 @@ async function request(method, path, body) {
         { status: 502 },
       );
       clientErr.upstreamStatus = res.status;
+      // Attach the parsed Telnyx error body (when JSON) so callers can inspect
+      // the structured `errors[]` — e.g. E911 USPS address suggestions (10015).
+      let responseBody = null;
+      if (text) {
+        try {
+          responseBody = JSON.parse(text);
+        } catch (parseErr) {
+          responseBody = null;
+        }
+      }
+      clientErr.responseBody = responseBody;
       throw clientErr;
     }
 
@@ -327,14 +338,21 @@ async function deleteSipEndpoint(sipEndpointId) {
   return request('DELETE', `/telephony_credentials/${sipEndpointId}`);
 }
 
-/**
- * Create an emergency (E911) address in the Telnyx address book.
- * Returns { addressId, status }.
- */
-async function createE911Address({
+// Telnyx address-suggestion `source.pointer` -> our address field name.
+const E911_POINTER_TO_FIELD = {
+  '/street_address': 'line1',
+  '/extended_address': 'line2',
+  '/locality': 'city',
+  '/administrative_area': 'state',
+  '/postal_code': 'zip',
+  '/country_code': 'countryCode',
+};
+
+/** Build the Telnyx POST /addresses request body from our address fields. */
+function e911AddressBody({
   firstName, lastName, line1, line2, city, state, zip, countryCode,
 }) {
-  const data = unwrap(await request('POST', '/addresses', {
+  return {
     first_name: firstName,
     last_name: lastName,
     street_address: line1,
@@ -345,8 +363,56 @@ async function createE911Address({
     country_code: countryCode || 'US',
     address_book: true,
     business_name: 'MobilityNet Subscriber',
-  }));
-  return { addressId: data && data.id, status: data && data.status };
+  };
+}
+
+/**
+ * Extract USPS-normalized field corrections from a Telnyx 422 error body.
+ * Telnyx flags a correctable address with errors of code "10015" (Suggestion);
+ * each carries the corrected value in `detail` and the target field in
+ * `source.pointer` (e.g. "/street_address" -> "6674 E 118TH CT"). Returns a
+ * partial address ({ line1, city, ... }), or null when there are no suggestions.
+ */
+function extractE911Suggestions(responseBody) {
+  const list = responseBody && Array.isArray(responseBody.errors) ? responseBody.errors : [];
+  const corrections = {};
+  list.forEach((e) => {
+    if (!e || String(e.code) !== '10015') return;
+    const field = E911_POINTER_TO_FIELD[e.source && e.source.pointer];
+    if (field && e.detail !== undefined && e.detail !== null) {
+      corrections[field] = e.detail;
+    }
+  });
+  return Object.keys(corrections).length ? corrections : null;
+}
+
+/**
+ * Create an emergency (E911) address in the Telnyx address book.
+ *
+ * Telnyx validates against USPS and rejects a near-miss with HTTP 422 carrying
+ * suggestion errors (code "10015") that contain the normalized values. On that
+ * response we merge the suggestions over the submitted address and retry ONCE;
+ * any other error (or a still-failing retry) propagates.
+ * Returns { addressId, status }.
+ */
+async function createE911Address(address) {
+  try {
+    const data = unwrap(await request('POST', '/addresses', e911AddressBody(address)));
+    return { addressId: data && data.id, status: data && data.status };
+  } catch (err) {
+    const suggestions = err && err.upstreamStatus === 422
+      ? extractE911Suggestions(err.responseBody)
+      : null;
+    if (!suggestions) throw err;
+
+    logger.info(
+      { fields: Object.keys(suggestions) },
+      'retrying E911 address with Telnyx USPS suggestions',
+    );
+    const corrected = { ...address, ...suggestions };
+    const data = unwrap(await request('POST', '/addresses', e911AddressBody(corrected)));
+    return { addressId: data && data.id, status: data && data.status };
+  }
 }
 
 /**

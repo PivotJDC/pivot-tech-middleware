@@ -284,6 +284,93 @@ describe('typed API calls', () => {
     });
   });
 
+  // Telnyx 422 with USPS suggestion errors (code 10015) — the body carries the
+  // normalized field values in each error's `detail`.
+  function suggestion422(corrections) {
+    const errs = Object.entries(corrections).map(([pointer, detail]) => ({
+      code: '10015',
+      title: 'Suggestion',
+      detail,
+      source: { pointer },
+    }));
+    return { ok: false, status: 422, text: async () => JSON.stringify({ errors: errs }) };
+  }
+
+  const baseAddress = {
+    firstName: 'Jane',
+    lastName: 'Doe',
+    line1: '6674 e 118th court',
+    line2: '',
+    city: 'tulsa',
+    state: 'OK',
+    zip: '74133',
+  };
+
+  it('createE911Address retries with USPS suggestions on a 422 (10015) and succeeds', async () => {
+    global.fetch
+      .mockResolvedValueOnce(suggestion422({
+        '/street_address': '6674 E 118TH CT',
+        '/locality': 'TULSA',
+        '/postal_code': '74133-6674',
+      }))
+      .mockResolvedValueOnce(ok({ data: { id: 'addr-9', status: 'pending' } }));
+
+    const res = await telnyx.createE911Address(baseAddress);
+    expect(res).toEqual({ addressId: 'addr-9', status: 'pending' });
+
+    // First attempt sent the original values.
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toMatchObject({
+      street_address: '6674 e 118th court',
+      locality: 'tulsa',
+      postal_code: '74133',
+    });
+    // Retry merged the corrected (USPS-normalized) values; untouched fields kept.
+    expect(JSON.parse(global.fetch.mock.calls[1][1].body)).toMatchObject({
+      street_address: '6674 E 118TH CT',
+      locality: 'TULSA',
+      postal_code: '74133-6674',
+      administrative_area: 'OK',
+      first_name: 'Jane',
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('createE911Address throws on a 422 with no suggestion (10015) errors', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      text: async () => JSON.stringify({
+        errors: [{
+          code: '10009', title: 'Invalid', detail: 'bad', source: { pointer: '/postal_code' },
+        }],
+      }),
+    });
+
+    await expect(telnyx.createE911Address(baseAddress))
+      .rejects.toMatchObject({ code: 'TELNYX_ERROR', upstreamStatus: 422 });
+    // No retry attempted.
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('createE911Address throws (no retry) on a non-422 error', async () => {
+    global.fetch.mockResolvedValueOnce(fail(400));
+
+    await expect(telnyx.createE911Address(baseAddress))
+      .rejects.toMatchObject({ code: 'TELNYX_ERROR' });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('createE911Address surfaces a still-failing 422 retry', async () => {
+    global.fetch
+      .mockResolvedValueOnce(suggestion422({ '/street_address': '6674 E 118TH CT' }))
+      .mockResolvedValueOnce(suggestion422({ '/street_address': '6674 E 118TH CT' }));
+
+    await expect(telnyx.createE911Address(baseAddress))
+      .rejects.toMatchObject({ code: 'TELNYX_ERROR', upstreamStatus: 422 });
+    // One retry only.
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('enableE911 PATCHes /phone_numbers/{id}/voice and maps the result', async () => {
     global.fetch.mockResolvedValueOnce(ok({
       data: { emergency_enabled: true, emergency_status: 'enabled' },
