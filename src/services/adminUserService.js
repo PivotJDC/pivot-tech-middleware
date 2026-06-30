@@ -10,14 +10,22 @@
  * login() reveals nothing about which of username/password was wrong (returns
  * null for any failure so the route can answer a single generic 401).
  */
+const nodeCrypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const db = require('../db');
 const config = require('../config');
+const cache = require('../cache');
 const crypto = require('../utils/crypto');
 const { errors, AppError } = require('../middleware/errorHandler');
 const { logger } = require('../utils/logger');
 
 const ROLES = ['super_admin', 'admin', 'viewer'];
+const RESET_TOKEN_TTL_SECONDS = 15 * 60; // 15 minutes
+const BOOTSTRAP_RESET_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function resetKey(token) {
+  return `admin:reset:${token}`;
+}
 
 /** Strip password_hash from a row before it leaves the service. */
 function serialize(row) {
@@ -123,12 +131,86 @@ async function listAdminUsers() {
   return rows;
 }
 
+/** Fetch one admin user by username (no password_hash), or null. */
+async function getByUsername(username) {
+  const { rows } = await db.query(
+    `SELECT id, username, email, role, created_at, last_login_at
+       FROM admin_users WHERE username = $1`,
+    [username],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * DANGER: wipe ALL admin users so the deploy can be re-bootstrapped. Allowed
+ * ONLY within 24h of the newest admin user's created_at; afterwards it throws
+ * 403. An empty table is a no-op. This is a temporary setup aid — see the route
+ * in app.js for the security caveat.
+ */
+async function resetBootstrap() {
+  const { rows } = await db.query('SELECT MAX(created_at) AS newest FROM admin_users');
+  const newest = rows[0] && rows[0].newest;
+  if (newest && Date.now() - new Date(newest).getTime() > BOOTSTRAP_RESET_WINDOW_MS) {
+    throw errors.forbidden('Bootstrap reset window (24h) has expired.');
+  }
+  await db.query('TRUNCATE admin_users');
+  logger.warn('admin_users truncated via reset-bootstrap');
+}
+
+/**
+ * Begin a password reset: if an admin user has this email, mint a UUID reset
+ * token in Redis (admin:reset:{token} -> username, 15-min TTL) and log the
+ * link. No-op for an unknown email — callers always answer { sent: true } so
+ * the endpoint never reveals whether the email exists.
+ */
+async function requestPasswordReset(rawEmail) {
+  const email = String(rawEmail || '').trim().toLowerCase();
+  if (!email) return;
+  const { rows } = await db.query('SELECT username FROM admin_users WHERE email = $1', [email]);
+  const user = rows[0];
+  if (!user) {
+    logger.info({ email }, 'admin password reset requested for unknown email (no-op)');
+    return;
+  }
+  const token = nodeCrypto.randomUUID();
+  await cache.setWithTtl(resetKey(token), user.username, RESET_TOKEN_TTL_SECONDS);
+  // TODO: email the link. Until then, log it for dev/ops (remove with delivery).
+  logger.info(
+    { username: user.username, resetLink: `/admin/reset-password?token=${token}` },
+    'admin password reset link generated (email delivery pending)',
+  );
+}
+
+/**
+ * Complete a password reset: exchange a valid token for a new password. Returns
+ * true on success; returns false when the token is missing/expired/invalid.
+ * Throws VALIDATION_ERROR when the new password is too short.
+ */
+async function resetPassword(token, newPassword) {
+  if (!token) return false;
+  if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 8) {
+    throw errors.validation('new_password must be at least 8 characters.', 'new_password');
+  }
+  const username = await cache.get(resetKey(token));
+  if (!username) return false;
+
+  const passwordHash = await crypto.hashPassword(newPassword);
+  await db.query('UPDATE admin_users SET password_hash = $1 WHERE username = $2', [passwordHash, username]);
+  await cache.del(resetKey(token));
+  logger.info({ username }, 'admin password reset completed');
+  return true;
+}
+
 module.exports = {
   ROLES,
   login,
   createAdminUser,
   countAdminUsers,
   listAdminUsers,
+  getByUsername,
+  resetBootstrap,
+  requestPasswordReset,
+  resetPassword,
   issueToken,
   serialize,
 };

@@ -48,11 +48,57 @@ router.post(
   }),
 );
 
-// NB: the one-time POST /admin/bootstrap route is mounted in app.js BEFORE this
-// router, so it is never subject to the router-wide adminAuth below.
+// Forgot password (PUBLIC). Mints a 15-min reset token (in Redis) and logs the
+// link; always answers { sent: true } so it never reveals whether the email
+// belongs to an admin. Rate limited like /login.
+router.post(
+  '/forgot-password',
+  rateLimit({ windowMs: 60_000, max: 5 }),
+  asyncHandler(async (req, res) => {
+    const { email } = req.body || {};
+    if (!email) {
+      throw errors.validation('email is required.', 'email');
+    }
+    await adminUserService.requestPasswordReset(email);
+    res.json({ sent: true });
+  }),
+);
+
+// Reset password (PUBLIC). Exchanges a valid reset token for a new password.
+router.post(
+  '/reset-password',
+  rateLimit({ windowMs: 60_000, max: 5 }),
+  asyncHandler(async (req, res) => {
+    const { token: resetToken, new_password: newPassword } = req.body || {};
+    if (!resetToken || !newPassword) {
+      throw errors.validation('token and new_password are required.');
+    }
+    const ok = await adminUserService.resetPassword(resetToken, newPassword);
+    if (!ok) {
+      throw errors.unauthorized('Invalid or expired reset token.');
+    }
+    res.json({ reset: true });
+  }),
+);
+
+// NB: the one-time POST /admin/bootstrap and /admin/reset-bootstrap routes are
+// mounted in app.js BEFORE this router, so they bypass the router-wide adminAuth.
 
 // Every admin route below is authenticated.
 router.use(adminAuth);
+
+// Identity of the currently authenticated admin (username/email/role). Useful
+// as a "forgot username" aid for an admin still logged in elsewhere.
+router.get(
+  '/whoami',
+  asyncHandler(async (req, res) => {
+    const user = await adminUserService.getByUsername(req.admin.id);
+    if (!user) {
+      throw errors.notFound('Admin user not found.');
+    }
+    res.json({ username: user.username, email: user.email, role: user.role });
+  }),
+);
 
 // --- Admin users (super_admin only) ---
 

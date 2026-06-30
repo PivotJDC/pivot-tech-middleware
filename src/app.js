@@ -153,6 +153,16 @@ function createApp() {
     res.status(201).json(user);
   }));
 
+  // TEMPORARY setup aid — DANGER: wipes ALL admin users so the deploy can be
+  // re-bootstrapped. Self-disables 24h after the newest admin was created (403
+  // thereafter). This is an unauthenticated destructive endpoint; remove it
+  // once initial setup is done. Mounted before the admin router for the same
+  // reason as /admin/bootstrap.
+  app.post('/admin/reset-bootstrap', asyncHandler(async (req, res) => {
+    await adminUserService.resetBootstrap();
+    res.json({ reset: true });
+  }));
+
   app.use('/admin', adminRouter);
 
   // 404 + centralized error envelope (CLAUDE.md "Error Response Format").

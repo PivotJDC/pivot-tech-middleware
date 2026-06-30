@@ -5,6 +5,7 @@ const request = require('supertest');
 const db = require('../../src/db');
 const adminUserService = require('../../src/services/adminUserService');
 const { createApp } = require('../../src/app');
+const { errors } = require('../../src/middleware/errorHandler');
 
 describe('GET /ping', () => {
   const app = createApp();
@@ -74,5 +75,26 @@ describe('POST /admin/bootstrap (mounted before the admin router)', () => {
     expect(res.status).toBe(403);
     expect(res.body.error.message).toMatch(/already completed/i);
     expect(adminUserService.createAdminUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /admin/reset-bootstrap (mounted before the admin router)', () => {
+  const app = createApp();
+  beforeEach(() => jest.clearAllMocks());
+
+  it('truncates admin_users within the window — no auth required', async () => {
+    adminUserService.resetBootstrap.mockResolvedValueOnce(undefined);
+    const res = await request(app).post('/admin/reset-bootstrap').send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ reset: true });
+    expect(adminUserService.resetBootstrap).toHaveBeenCalled();
+  });
+
+  it('propagates a 403 once the reset window has expired', async () => {
+    adminUserService.resetBootstrap.mockRejectedValueOnce(
+      errors.forbidden('Bootstrap reset window (24h) has expired.'),
+    );
+    const res = await request(app).post('/admin/reset-bootstrap').send({});
+    expect(res.status).toBe(403);
   });
 });

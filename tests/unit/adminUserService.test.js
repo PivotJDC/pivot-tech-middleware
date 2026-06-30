@@ -1,4 +1,5 @@
 jest.mock('../../src/db');
+jest.mock('../../src/cache');
 jest.mock('../../src/utils/crypto');
 jest.mock('../../src/config', () => ({
   admin: { jwtSecret: 'test-admin-secret', jwtTtl: '8h' },
@@ -10,13 +11,12 @@ jest.mock('../../src/utils/logger', () => ({
 
 const jwt = require('jsonwebtoken');
 const db = require('../../src/db');
+const cache = require('../../src/cache');
 const crypto = require('../../src/utils/crypto');
 const adminUserService = require('../../src/services/adminUserService');
 
 beforeEach(() => {
-  db.query.mockReset();
-  crypto.hashPassword.mockReset();
-  crypto.verifyPassword.mockReset();
+  jest.clearAllMocks();
 });
 
 describe('login', () => {
@@ -119,5 +119,96 @@ describe('listAdminUsers', () => {
     expect(users).toHaveLength(1);
     // The SELECT explicitly omits password_hash.
     expect(db.query.mock.calls[0][0]).not.toMatch(/password_hash/);
+  });
+});
+
+describe('getByUsername', () => {
+  it('returns the user (no password_hash) or null', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ username: 'jim', email: 'j@p.io', role: 'admin' }] });
+    expect(await adminUserService.getByUsername('jim')).toMatchObject({ email: 'j@p.io' });
+    expect(db.query.mock.calls[0][0]).not.toMatch(/password_hash/);
+
+    db.query.mockResolvedValueOnce({ rows: [] });
+    expect(await adminUserService.getByUsername('ghost')).toBeNull();
+  });
+});
+
+describe('resetBootstrap', () => {
+  it('truncates when the newest admin is within the 24h window', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ newest: new Date().toISOString() }] }) // MAX
+      .mockResolvedValueOnce({}); // TRUNCATE
+    await adminUserService.resetBootstrap();
+    expect(db.query.mock.calls[1][0]).toMatch(/TRUNCATE admin_users/);
+  });
+
+  it('truncates (no-op) when the table is empty (newest null)', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ newest: null }] })
+      .mockResolvedValueOnce({});
+    await adminUserService.resetBootstrap();
+    expect(db.query.mock.calls[1][0]).toMatch(/TRUNCATE/);
+  });
+
+  it('throws 403 once the 24h window has elapsed (and does not truncate)', async () => {
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    db.query.mockResolvedValueOnce({ rows: [{ newest: old }] });
+    await expect(adminUserService.resetBootstrap())
+      .rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    expect(db.query).toHaveBeenCalledTimes(1); // no TRUNCATE
+  });
+});
+
+describe('requestPasswordReset', () => {
+  it('stores a reset token keyed to the username for a known email', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ username: 'jim' }] });
+    await adminUserService.requestPasswordReset('Jim@P.io');
+
+    expect(cache.setWithTtl).toHaveBeenCalledTimes(1);
+    const [key, value, ttl] = cache.setWithTtl.mock.calls[0];
+    expect(key).toMatch(/^admin:reset:/);
+    expect(value).toBe('jim');
+    expect(ttl).toBe(900);
+    // email normalized to lowercase for the lookup.
+    expect(db.query.mock.calls[0][1]).toEqual(['jim@p.io']);
+  });
+
+  it('is a silent no-op for an unknown email', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await adminUserService.requestPasswordReset('ghost@p.io');
+    expect(cache.setWithTtl).not.toHaveBeenCalled();
+  });
+});
+
+describe('resetPassword', () => {
+  it('updates the password and consumes the token on a valid token', async () => {
+    cache.get.mockResolvedValueOnce('jim');
+    crypto.hashPassword.mockResolvedValueOnce('newhash');
+    db.query.mockResolvedValueOnce({});
+
+    const ok = await adminUserService.resetPassword('tok-1', 'password123');
+
+    expect(ok).toBe(true);
+    expect(crypto.hashPassword).toHaveBeenCalledWith('password123');
+    expect(db.query.mock.calls[0][1]).toEqual(['newhash', 'jim']);
+    expect(cache.del).toHaveBeenCalledWith('admin:reset:tok-1');
+  });
+
+  it('returns false for an unknown/expired token (no update)', async () => {
+    cache.get.mockResolvedValueOnce(null);
+    expect(await adminUserService.resetPassword('bad', 'password123')).toBe(false);
+    expect(db.query).not.toHaveBeenCalled();
+    expect(cache.del).not.toHaveBeenCalled();
+  });
+
+  it('returns false when no token is supplied', async () => {
+    expect(await adminUserService.resetPassword('', 'password123')).toBe(false);
+    expect(cache.get).not.toHaveBeenCalled();
+  });
+
+  it('rejects a too-short new password', async () => {
+    await expect(adminUserService.resetPassword('tok', 'short'))
+      .rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'new_password' });
+    expect(cache.get).not.toHaveBeenCalled();
   });
 });

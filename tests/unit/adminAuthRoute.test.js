@@ -68,8 +68,70 @@ describe('POST /admin/login', () => {
   });
 });
 
-// POST /admin/bootstrap is mounted in app.js (before the admin router), so it is
-// covered against the real createApp() in app.test.js — not here.
+// POST /admin/bootstrap and /admin/reset-bootstrap are mounted in app.js
+// (before the admin router), so they are covered against createApp() in
+// app.test.js — not here.
+
+describe('POST /admin/forgot-password (public)', () => {
+  it('always returns { sent: true } (no enumeration)', async () => {
+    adminUserService.requestPasswordReset.mockResolvedValueOnce(undefined);
+    const res = await request(app).post('/admin/forgot-password').send({ email: 'jim@p.io' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ sent: true });
+    expect(adminUserService.requestPasswordReset).toHaveBeenCalledWith('jim@p.io');
+  });
+
+  it('returns 400 when email is missing', async () => {
+    const res = await request(app).post('/admin/forgot-password').send({});
+    expect(res.status).toBe(400);
+    expect(adminUserService.requestPasswordReset).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /admin/reset-password (public)', () => {
+  it('returns { reset: true } for a valid token', async () => {
+    adminUserService.resetPassword.mockResolvedValueOnce(true);
+    const res = await request(app)
+      .post('/admin/reset-password')
+      .send({ token: 'tok-1', new_password: 'password123' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ reset: true });
+    expect(adminUserService.resetPassword).toHaveBeenCalledWith('tok-1', 'password123');
+  });
+
+  it('returns 401 for an invalid/expired token', async () => {
+    adminUserService.resetPassword.mockResolvedValueOnce(false);
+    const res = await request(app)
+      .post('/admin/reset-password')
+      .send({ token: 'bad', new_password: 'password123' });
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 400 when token or new_password is missing', async () => {
+    const res = await request(app).post('/admin/reset-password').send({ token: 'tok-1' });
+    expect(res.status).toBe(400);
+    expect(adminUserService.resetPassword).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /admin/whoami (authenticated)', () => {
+  it('returns the current admin identity', async () => {
+    mockAdmin = { id: 'jim', role: 'super_admin' };
+    adminUserService.getByUsername.mockResolvedValueOnce({
+      username: 'jim', email: 'jim@p.io', role: 'super_admin',
+    });
+    const res = await request(app).get('/admin/whoami');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ username: 'jim', email: 'jim@p.io', role: 'super_admin' });
+    expect(adminUserService.getByUsername).toHaveBeenCalledWith('jim');
+  });
+
+  it('404s when the token subject no longer exists', async () => {
+    adminUserService.getByUsername.mockResolvedValueOnce(null);
+    const res = await request(app).get('/admin/whoami');
+    expect(res.status).toBe(404);
+  });
+});
 
 describe('POST /admin/users (super_admin only)', () => {
   it('creates a user when caller is super_admin', async () => {
