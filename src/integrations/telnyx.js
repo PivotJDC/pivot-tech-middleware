@@ -36,6 +36,13 @@ function retryDelay(attempt) {
   return BACKOFF_STEPS[attempt] * baseMs;
 }
 
+// Delay before (and between) the messaging sub-resource PATCH, which can lag a
+// number purchase. Defaults to 2s; overridable via config so tests run fast.
+function messagingReadyDelayMs() {
+  const v = config.telnyx.messagingReadyDelayMs;
+  return v === undefined || v === null ? 2000 : v;
+}
+
 /** Placeholder ops-alert hook (CLAUDE.md: "queue for ops alert"). */
 function emitOpsAlert(detail) {
   // TODO: publish to SQS_NOTIFICATION_QUEUE_URL when the queue layer lands.
@@ -87,7 +94,16 @@ async function request(method, path, body) {
       logger.error({
         method, path, status: res.status, body: text,
       }, 'Telnyx client error');
-      throw new AppError('TELNYX_ERROR', `Telnyx rejected ${method} ${path} (${res.status}).`, { status: 502 });
+      // Surface the upstream HTTP status (mapped responses are all 502) so
+      // callers can react to specific upstream conditions — e.g. a 404 on a
+      // sub-resource that is not yet ready right after a number purchase.
+      const clientErr = new AppError(
+        'TELNYX_ERROR',
+        `Telnyx rejected ${method} ${path} (${res.status}).`,
+        { status: 502 },
+      );
+      clientErr.upstreamStatus = res.status;
+      throw clientErr;
     }
 
     // 5xx or 429 — retryable.
@@ -238,9 +254,24 @@ async function provisionPhoneNumber(e164) {
   await request('PATCH', `/phone_numbers/${numberId}/voice`, {
     connection_id: voiceConnectionId,
   });
-  await request('PATCH', `/phone_numbers/${numberId}/messaging`, {
+
+  // The messaging sub-resource can lag the number purchase: a PATCH issued
+  // immediately after the order can 404 even though /voice already succeeded.
+  // Give it a beat, then retry once more on a 404 (other errors propagate).
+  const patchMessaging = () => request('PATCH', `/phone_numbers/${numberId}/messaging`, {
     messaging_profile_id: messagingProfileId,
   });
+  await sleep(messagingReadyDelayMs());
+  try {
+    await patchMessaging();
+  } catch (err) {
+    if (err && err.upstreamStatus === 404) {
+      await sleep(messagingReadyDelayMs());
+      await patchMessaging();
+    } else {
+      throw err;
+    }
+  }
 
   return {
     ...purchase,

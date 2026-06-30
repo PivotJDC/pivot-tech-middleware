@@ -5,6 +5,7 @@ jest.mock('../../src/config', () => ({
     sipConnectionId: 'conn-1',
     messagingProfileId: 'mp-1',
     retryBaseMs: 1,
+    messagingReadyDelayMs: 0,
   },
   logLevel: 'silent',
   isProduction: true,
@@ -116,6 +117,65 @@ describe('typed API calls', () => {
     expect(calls[3][0]).toBe('https://api.telnyx.com/v2/phone_numbers/2990277475533063368/messaging');
     expect(calls[3][1].method).toBe('PATCH');
     expect(JSON.parse(calls[3][1].body)).toEqual({ messaging_profile_id: 'mp-1' });
+  });
+
+  it('provisionPhoneNumber retries the messaging PATCH once on a 404 (sub-resource not ready)', async () => {
+    global.fetch
+      .mockResolvedValueOnce(ok({
+        data: { id: 'order-1', phone_numbers: [{ phone_number: '+12085550100' }] },
+      })) // purchase
+      .mockResolvedValueOnce(ok({
+        data: [{ id: '2990277475533063368', phone_number: '+12085550100' }],
+      })) // GET /phone_numbers?filter
+      .mockResolvedValueOnce(ok({ data: {} })) // PATCH /voice
+      .mockResolvedValueOnce(fail(404)) // PATCH /messaging — not ready yet
+      .mockResolvedValueOnce(ok({ data: {} })); // PATCH /messaging retry — ok
+
+    const res = await telnyx.provisionPhoneNumber('+12085550100');
+    expect(res.id).toBe('2990277475533063368');
+
+    const { calls } = global.fetch.mock;
+    expect(calls).toHaveLength(5);
+    // The 4th and 5th calls are both the messaging PATCH (first 404, then retry).
+    expect(calls[3][0]).toBe('https://api.telnyx.com/v2/phone_numbers/2990277475533063368/messaging');
+    expect(calls[3][1].method).toBe('PATCH');
+    expect(calls[4][0]).toBe('https://api.telnyx.com/v2/phone_numbers/2990277475533063368/messaging');
+    expect(calls[4][1].method).toBe('PATCH');
+  });
+
+  it('provisionPhoneNumber does NOT retry the messaging PATCH on a non-404 error', async () => {
+    global.fetch
+      .mockResolvedValueOnce(ok({
+        data: { id: 'order-1', phone_numbers: [{ phone_number: '+12085550100' }] },
+      })) // purchase
+      .mockResolvedValueOnce(ok({
+        data: [{ id: '2990277475533063368', phone_number: '+12085550100' }],
+      })) // GET /phone_numbers?filter
+      .mockResolvedValueOnce(ok({ data: {} })) // PATCH /voice
+      .mockResolvedValueOnce(fail(400)); // PATCH /messaging — hard client error
+
+    await expect(telnyx.provisionPhoneNumber('+12085550100'))
+      .rejects.toMatchObject({ code: 'TELNYX_ERROR' });
+    // No retry: purchase + lookup + voice + the single failed messaging PATCH.
+    expect(global.fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it('provisionPhoneNumber surfaces a persistent 404 after the single messaging retry', async () => {
+    global.fetch
+      .mockResolvedValueOnce(ok({
+        data: { id: 'order-1', phone_numbers: [{ phone_number: '+12085550100' }] },
+      })) // purchase
+      .mockResolvedValueOnce(ok({
+        data: [{ id: '2990277475533063368', phone_number: '+12085550100' }],
+      })) // GET /phone_numbers?filter
+      .mockResolvedValueOnce(ok({ data: {} })) // PATCH /voice
+      .mockResolvedValueOnce(fail(404)) // PATCH /messaging — 404
+      .mockResolvedValueOnce(fail(404)); // PATCH /messaging retry — still 404
+
+    await expect(telnyx.provisionPhoneNumber('+12085550100'))
+      .rejects.toMatchObject({ code: 'TELNYX_ERROR' });
+    // purchase + lookup + voice + messaging(404) + messaging-retry(404) = 5.
+    expect(global.fetch).toHaveBeenCalledTimes(5);
   });
 
   it('provisionPhoneNumber falls back to the E.164 path form when the lookup finds nothing', async () => {
