@@ -166,4 +166,65 @@ describe('POST /v1/voice/status', () => {
       .send({ CallSid: 'CA2', CallStatus: 'failed' });
     expect(res.status).toBe(200);
   });
+
+  it('parses Call Control v2 JSON webhooks (credential connection format)', async () => {
+    cdrService.recordCall.mockResolvedValueOnce({ id: 'cr-2' });
+    const res = await request(app)
+      .post('/v1/voice/status')
+      .send({
+        data: {
+          event_type: 'call.hangup',
+          payload: {
+            call_control_id: 'v3:abc123',
+            call_session_id: 'sess-1',
+            from: '+12085550142',
+            to: '+12085550100',
+            direction: 'incoming',
+            state: 'hangup',
+            start_time: '2026-07-01T00:00:00.000Z',
+            end_time: '2026-07-01T00:01:30.000Z',
+          },
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(cdrService.recordCall).toHaveBeenCalledWith(expect.objectContaining({
+      callSid: 'v3:abc123',
+      status: 'completed', // call.hangup -> completed
+      direction: 'inbound', // incoming -> inbound
+      from: '+12085550142',
+      to: '+12085550100',
+      durationSeconds: 90, // 90s between start and end
+      startedAt: '2026-07-01T00:00:00.000Z',
+      endedAt: '2026-07-01T00:01:30.000Z',
+    }));
+  });
+
+  it('maps v2 call.initiated and call.answered events', async () => {
+    cdrService.recordCall.mockResolvedValue({ id: 'cr-x' });
+
+    await request(app).post('/v1/voice/status').send({
+      data: {
+        event_type: 'call.initiated',
+        payload: {
+          call_control_id: 'c1', from: '+1', to: '+2', direction: 'outgoing',
+        },
+      },
+    });
+    expect(cdrService.recordCall).toHaveBeenLastCalledWith(expect.objectContaining({
+      callSid: 'c1', status: 'initiated', direction: 'outbound',
+    }));
+
+    await request(app).post('/v1/voice/status').send({
+      data: {
+        event_type: 'call.answered',
+        payload: {
+          call_control_id: 'c1', from: '+1', to: '+2', direction: 'outgoing',
+        },
+      },
+    });
+    expect(cdrService.recordCall).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'answered',
+    }));
+  });
 });

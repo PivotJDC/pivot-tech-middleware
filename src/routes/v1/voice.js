@@ -98,7 +98,11 @@ router.all(
   }),
 );
 
-/** Normalize Telnyx's Direction field to 'inbound' | 'outbound' | undefined. */
+/**
+ * Normalize a call direction to 'inbound' | 'outbound' | undefined. Handles both
+ * the TeXML values (inbound/outbound) and the v2 values (incoming/outgoing) —
+ * all of which start with "in"/"out".
+ */
 function normalizeDirection(raw) {
   const v = String(raw || '').toLowerCase();
   if (v.startsWith('in')) return 'inbound';
@@ -106,28 +110,79 @@ function normalizeDirection(raw) {
   return undefined;
 }
 
+// Map a Call Control v2 event_type to our CDR status.
+const V2_STATUS_BY_EVENT = {
+  'call.initiated': 'initiated',
+  'call.answered': 'answered',
+  'call.hangup': 'completed',
+};
+
+/** Seconds between two ISO timestamps, or 0 when not derivable. */
+function durationBetween(startIso, endIso) {
+  if (!startIso || !endIso) return 0;
+  const ms = new Date(endIso).getTime() - new Date(startIso).getTime();
+  return Number.isFinite(ms) && ms > 0 ? Math.round(ms / 1000) : 0;
+}
+
+/**
+ * Extract a normalized call event from a status webhook. Credential-connection
+ * webhooks send Call Control v2 JSON ({ data: { event_type, payload } }); TeXML
+ * applications send form-urlencoded (CallSid/CallStatus/...). Handle both.
+ */
+function parseStatusEvent(body) {
+  const data = body && body.data;
+  if (data && data.payload) {
+    // Call Control v2 JSON.
+    const { event_type: eventType } = data;
+    const p = data.payload;
+    return {
+      callSid: p.call_control_id || p.call_session_id || p.call_leg_id || null,
+      status: V2_STATUS_BY_EVENT[eventType]
+        || (eventType ? String(eventType).replace(/^call\./, '') : null),
+      direction: normalizeDirection(p.direction),
+      from: normalizePhone(p.from),
+      to: normalizePhone(p.to),
+      startedAt: p.start_time || null,
+      endedAt: p.end_time || null,
+      durationSeconds: durationBetween(p.start_time, p.end_time),
+    };
+  }
+  // TeXML form-urlencoded (or flat JSON).
+  return {
+    callSid: body.CallSid || body.CallControlId || body.call_control_id || null,
+    status: body.CallStatus || body.call_status || body.status || null,
+    direction: normalizeDirection(body.Direction || body.direction),
+    from: normalizePhone(body.From || body.from),
+    to: normalizePhone(body.To || body.to),
+    startedAt: null,
+    endedAt: null,
+    durationSeconds:
+      Number.parseInt(body.CallDuration || body.Duration || body.call_duration, 10) || 0,
+  };
+}
+
 // Call status callbacks — log, persist a CDR (best-effort), and acknowledge.
+// Accepts both Call Control v2 JSON and TeXML form-urlencoded payloads.
 router.post(
   '/status',
   asyncHandler(async (req, res) => {
-    const body = req.body || {};
-    const callSid = body.CallSid || body.CallControlId || body.call_control_id || null;
-    const status = body.CallStatus || body.call_status || body.status || null;
-    logger.info({ callId: callSid, status }, 'call status update');
+    const event = parseStatusEvent(req.body || {});
+    logger.info({ callId: event.callSid, status: event.status }, 'call status update');
 
     // Record the call detail. Never let a CDR failure break the webhook ack.
     try {
       await cdrService.recordCall({
-        callSid,
-        direction: normalizeDirection(body.Direction || body.direction),
-        from: normalizePhone(body.From || body.from),
-        to: normalizePhone(body.To || body.to),
-        status,
-        durationSeconds:
-          Number.parseInt(body.CallDuration || body.Duration || body.call_duration, 10) || 0,
+        callSid: event.callSid,
+        direction: event.direction,
+        from: event.from,
+        to: event.to,
+        status: event.status,
+        durationSeconds: event.durationSeconds,
+        startedAt: event.startedAt,
+        endedAt: event.endedAt,
       });
     } catch (err) {
-      logger.error({ err: err.message, callId: callSid }, 'failed to record call CDR');
+      logger.error({ err: err.message, callId: event.callSid }, 'failed to record call CDR');
     }
 
     res.status(200).json({ received: true });
