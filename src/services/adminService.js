@@ -40,6 +40,11 @@ async function listAccounts(filters = {}) {
   if (filters.market) { params.push(filters.market); conditions.push(`market = $${params.length}`); }
   if (filters.from) { params.push(filters.from); conditions.push(`created_at >= $${params.length}`); }
   if (filters.to) { params.push(filters.to); conditions.push(`created_at <= $${params.length}`); }
+  // Free-text search across email + phone (case-insensitive substring).
+  if (filters.search) {
+    params.push(`%${filters.search}%`);
+    conditions.push(`(email ILIKE $${params.length} OR phone_e164 ILIKE $${params.length})`);
+  }
   const where = whereClause(conditions);
 
   const { total } = (await db.query(`SELECT COUNT(*)::int AS total FROM accounts ${where}`, params))

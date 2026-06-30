@@ -37,6 +37,20 @@ describe('listAccounts', () => {
     expect(result.accounts[0]).not.toHaveProperty('sip_password_hash');
   });
 
+  it('applies a free-text search across email + phone', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ total: 1 }] }) // COUNT
+      .mockResolvedValueOnce({ rows: [{ id: 'a1', email: 'jane@b.co', status: 'active' }] });
+
+    await adminService.listAccounts({ search: '208555' });
+
+    const countParams = db.query.mock.calls[0][1];
+    const countSql = db.query.mock.calls[0][0];
+    expect(countParams).toEqual(['%208555%']);
+    expect(countSql).toContain('email ILIKE');
+    expect(countSql).toContain('phone_e164 ILIKE');
+  });
+
   it('clamps limit to the max and defaults offset', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ total: 0 }] }).mockResolvedValueOnce({ rows: [] });
     const result = await adminService.listAccounts({ limit: '9999' });
