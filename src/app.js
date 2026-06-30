@@ -19,7 +19,10 @@ const pinoHttp = require('pino-http');
 const config = require('./config');
 const db = require('./db');
 const { logger, REDACT_PATHS } = require('./utils/logger');
-const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
+const {
+  notFoundHandler, errorHandler, asyncHandler, errors,
+} = require('./middleware/errorHandler');
+const adminUserService = require('./services/adminUserService');
 const accountsRouter = require('./routes/v1/accounts');
 const authRouter = require('./routes/v1/auth');
 const didsRouter = require('./routes/v1/dids');
@@ -138,6 +141,18 @@ function createApp() {
   app.use('/v1/voice', voiceRouter);
   app.use('/v1/billing', billingRouter);
   app.use('/v1/partner', partnerRouter);
+
+  // One-time admin bootstrap — MUST be mounted before the admin router so it can
+  // never be caught by the router-wide adminAuth. Creates the first super_admin
+  // when admin_users is empty; permanently 403 once any admin user exists.
+  app.post('/admin/bootstrap', asyncHandler(async (req, res) => {
+    if ((await adminUserService.countAdminUsers()) > 0) {
+      throw errors.forbidden('Bootstrap already completed.');
+    }
+    const user = await adminUserService.createAdminUser({ ...(req.body || {}), role: 'super_admin' });
+    res.status(201).json(user);
+  }));
+
   app.use('/admin', adminRouter);
 
   // 404 + centralized error envelope (CLAUDE.md "Error Response Format").

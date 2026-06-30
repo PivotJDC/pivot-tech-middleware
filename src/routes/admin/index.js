@@ -48,19 +48,8 @@ router.post(
   }),
 );
 
-// --- Bootstrap (PUBLIC, one-time) — create the first super_admin when no admin
-// users exist yet. Once any admin user exists this is permanently 403.
-router.post(
-  '/bootstrap',
-  asyncHandler(async (req, res) => {
-    if ((await adminUserService.countAdminUsers()) > 0) {
-      throw errors.forbidden('Bootstrap already completed.');
-    }
-    const user = await adminUserService.createAdminUser({ ...(req.body || {}), role: 'super_admin' });
-    logger.info({ createdUsername: user.username }, 'bootstrapped first super_admin');
-    res.status(201).json(user);
-  }),
-);
+// NB: the one-time POST /admin/bootstrap route is mounted in app.js BEFORE this
+// router, so it is never subject to the router-wide adminAuth below.
 
 // Every admin route below is authenticated.
 router.use(adminAuth);

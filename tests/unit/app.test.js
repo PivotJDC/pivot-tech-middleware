@@ -1,7 +1,9 @@
 jest.mock('../../src/db');
+jest.mock('../../src/services/adminUserService');
 
 const request = require('supertest');
 const db = require('../../src/db');
+const adminUserService = require('../../src/services/adminUserService');
 const { createApp } = require('../../src/app');
 
 describe('GET /ping', () => {
@@ -36,5 +38,41 @@ describe('GET /health', () => {
 
     expect(res.status).toBe(503);
     expect(res.body).toEqual({ status: 'degraded', db: 'unreachable' });
+  });
+});
+
+describe('POST /admin/bootstrap (mounted before the admin router)', () => {
+  const app = createApp();
+  beforeEach(() => jest.clearAllMocks());
+
+  it('creates the first super_admin when none exist — no auth required', async () => {
+    adminUserService.countAdminUsers.mockResolvedValueOnce(0);
+    adminUserService.createAdminUser.mockResolvedValueOnce({
+      id: 'u1', username: 'jim', email: 'jim@p.io', role: 'super_admin',
+    });
+
+    const res = await request(app)
+      .post('/admin/bootstrap')
+      .send({ username: 'jim', email: 'jim@p.io', password: 'password1' });
+
+    // The key regression: this is NOT 401, even with no Authorization header.
+    expect(res.status).toBe(201);
+    expect(res.body.role).toBe('super_admin');
+    // role is forced to super_admin regardless of any supplied value.
+    expect(adminUserService.createAdminUser).toHaveBeenCalledWith(
+      expect.objectContaining({ username: 'jim', role: 'super_admin' }),
+    );
+  });
+
+  it('returns 403 once an admin user already exists', async () => {
+    adminUserService.countAdminUsers.mockResolvedValueOnce(1);
+
+    const res = await request(app)
+      .post('/admin/bootstrap')
+      .send({ username: 'x', email: 'x@p.io', password: 'password1' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toMatch(/already completed/i);
+    expect(adminUserService.createAdminUser).not.toHaveBeenCalled();
   });
 });
