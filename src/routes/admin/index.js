@@ -13,19 +13,66 @@
  *   GET   /admin/ports                          port requests (filters: status, carrier)
  *   POST  /admin/ports/:id/retry                resubmit a failed port
  *   GET   /admin/metrics                        operational metrics
+ *
+ *   POST  /admin/login                          public: username+password -> JWT
+ *   POST  /admin/users                          super_admin: create admin user
+ *   GET   /admin/users                          super_admin: list admin users
  */
 const express = require('express');
 const adminService = require('../../services/adminService');
 const accountService = require('../../services/accountService');
 const provisioningService = require('../../services/provisioningService');
-const { adminAuth } = require('../../middleware/adminAuth');
+const adminUserService = require('../../services/adminUserService');
+const { adminAuth, requireRole } = require('../../middleware/adminAuth');
+const { rateLimit } = require('../../middleware/rateLimiter');
 const { asyncHandler, errors } = require('../../middleware/errorHandler');
 const { logger } = require('../../utils/logger');
 
 const router = express.Router();
 
-// Every admin route is authenticated.
+// --- Login (PUBLIC — must come BEFORE the router-wide adminAuth) ---
+// Rate limited to 5 attempts/min/IP to blunt brute force.
+router.post(
+  '/login',
+  rateLimit({ windowMs: 60_000, max: 5 }),
+  asyncHandler(async (req, res) => {
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      throw errors.validation('username and password are required.');
+    }
+    const result = await adminUserService.login(username, password);
+    if (!result) {
+      throw errors.unauthorized('Invalid username or password.');
+    }
+    res.json(result);
+  }),
+);
+
+// Every admin route below is authenticated.
 router.use(adminAuth);
+
+// --- Admin users (super_admin only) ---
+
+router.post(
+  '/users',
+  requireRole('super_admin'),
+  asyncHandler(async (req, res) => {
+    const user = await adminUserService.createAdminUser(req.body || {});
+    logger.info(
+      { adminId: req.admin.id, createdUsername: user.username, role: user.role },
+      'admin created an admin user',
+    );
+    res.status(201).json(user);
+  }),
+);
+
+router.get(
+  '/users',
+  requireRole('super_admin'),
+  asyncHandler(async (req, res) => {
+    res.json({ users: await adminUserService.listAdminUsers() });
+  }),
+);
 
 // --- Accounts ---
 

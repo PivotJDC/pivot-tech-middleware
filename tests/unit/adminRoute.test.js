@@ -1,13 +1,15 @@
 // adminAuth is exercised in adminAuth.test.js; here we stub it to a pass-through
 // so we can test the route wiring + handlers in isolation.
 jest.mock('../../src/middleware/adminAuth', () => ({
-  adminAuth: (req, res, next) => { req.admin = { id: 'admin-1' }; next(); },
+  adminAuth: (req, res, next) => { req.admin = { id: 'admin-1', role: 'super_admin' }; next(); },
+  requireRole: () => (req, res, next) => next(),
   verifyAdminToken: jest.fn(),
   isIpAllowed: jest.fn(),
 }));
 jest.mock('../../src/services/adminService');
 jest.mock('../../src/services/accountService');
 jest.mock('../../src/services/provisioningService');
+jest.mock('../../src/services/adminUserService');
 
 const express = require('express');
 const request = require('supertest');

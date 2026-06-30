@@ -20,6 +20,7 @@ const CODE_STATUS = {
   PORT_ALREADY_PENDING: 409,
   PORT_SUBMISSION_FAILED: 502,
   TOKEN_EXPIRED: 401,
+  RATE_LIMITED: 429,
   // TELNYX_ERROR is the migrated equivalent of SIGNALWIRE_ERROR; the latter is
   // retained for the not-yet-migrated inbound webhook path.
   TELNYX_ERROR: 502,
@@ -58,6 +59,7 @@ const errors = {
   unauthorized: (message = 'Authentication required.') => new AppError('UNAUTHORIZED', message),
   forbidden: (message = 'Not permitted.') => new AppError('FORBIDDEN', message),
   tokenExpired: (message = 'Token has expired.') => new AppError('TOKEN_EXPIRED', message),
+  rateLimited: (message = 'Too many requests. Please slow down.') => new AppError('RATE_LIMITED', message),
   internal: (message = 'An unexpected error occurred.') => new AppError('INTERNAL_ERROR', message),
 };
 

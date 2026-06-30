@@ -100,4 +100,24 @@ function adminAuth(req, res, next) {
   next();
 }
 
-module.exports = { adminAuth, verifyAdminToken, isIpAllowed };
+/**
+ * Gate a route on the admin's role. Use AFTER adminAuth (which populates
+ * req.admin from the JWT's `role` claim). Tokens without a matching role —
+ * including legacy tokens that carry no role at all — are rejected 403.
+ *   router.post('/users', requireRole('super_admin'), handler)
+ * @param {...string} allowedRoles
+ */
+function requireRole(...allowedRoles) {
+  return function roleGuard(req, res, next) {
+    const role = req.admin && req.admin.role;
+    if (!role || !allowedRoles.includes(role)) {
+      next(errors.forbidden('Your role does not permit this action.'));
+      return;
+    }
+    next();
+  };
+}
+
+module.exports = {
+  adminAuth, requireRole, verifyAdminToken, isIpAllowed,
+};
