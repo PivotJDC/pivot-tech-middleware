@@ -31,4 +31,21 @@ describe('acrobits.buildAccountXml', () => {
     expect(xml).toContain('<password>a&amp;b&lt;c&gt;&quot;d&apos;</password>');
     expect(xml).not.toContain('a&b<c>');
   });
+
+  it('uses the subscriber first + last name as the caller ID display name', () => {
+    const xml = acrobits.buildAccountXml({ ...params, firstName: 'Jane', lastName: 'Doe' });
+    expect(xml).toContain('<displayName>Jane Doe</displayName>');
+    // Caller ID number stays the subscriber E.164.
+    expect(xml).toContain('<callerID>+12085550100</callerID>');
+  });
+
+  it('escapes XML special characters in the caller ID display name', () => {
+    const xml = acrobits.buildAccountXml({ ...params, firstName: 'Tom & Jerry', lastName: '<Co>' });
+    expect(xml).toContain('<displayName>Tom &amp; Jerry &lt;Co&gt;</displayName>');
+  });
+
+  it('falls back to the national-format number when no name is on file', () => {
+    const xml = acrobits.buildAccountXml(params); // no firstName/lastName
+    expect(xml).toContain('<displayName>(208) 555-0100</displayName>');
+  });
 });

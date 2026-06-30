@@ -159,6 +159,10 @@ async function generateAccountXml(account) {
     sipUsername: account.sip_username,
     sipPassword,
     phoneE164: account.phone_e164,
+    // Per-subscriber caller ID display name (first + last). Optional — falls
+    // back to the national-format number inside buildAccountXml when absent.
+    firstName: account.first_name,
+    lastName: account.last_name,
   });
 }
 

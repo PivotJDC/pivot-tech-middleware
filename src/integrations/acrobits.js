@@ -40,14 +40,31 @@ function escapeXml(value) {
  *                    be set explicitly.
  * Both fields used to be the gencred credential, which put the gencred in the
  * From header instead of the subscriber's number (the bug fixed here).
- * @param {{ sipUsername: string, sipPassword: string, phoneE164: string }} params
+ *
+ * Per-subscriber caller ID:
+ *   - callerIdName   = "{firstName} {lastName}" → the From-header display name
+ *                      (rendered as <displayName>). Falls back to the
+ *                      national-format number when the subscriber has no name.
+ *   - callerIdNumber = phoneE164 → the From-header number (rendered as
+ *                      <callerID>).
+ * @param {{ sipUsername: string, sipPassword: string, phoneE164: string,
+ *          firstName?: string, lastName?: string }} params
  *   sipUsername is the Telnyx gencred credential (SIP auth only); phoneE164 is
- *   the subscriber's number (the SIP identity / caller ID).
+ *   the subscriber's number (the SIP identity / caller ID number); firstName +
+ *   lastName form the caller ID display name.
  * @returns {string} XML document (Content-Type: application/xml)
  */
-function buildAccountXml({ sipUsername, sipPassword, phoneE164 }) {
+function buildAccountXml({
+  sipUsername, sipPassword, phoneE164, firstName, lastName,
+}) {
   const domain = SIP_DOMAIN;
-  const displayName = formatNational(phoneE164);
+  // Caller ID display name = subscriber's full name; fall back to the
+  // national-format number when no name is on file (name fields are optional).
+  const callerIdName = [firstName, lastName]
+    .filter((part) => part && String(part).trim())
+    .join(' ')
+    .trim() || formatNational(phoneE164);
+  const callerIdNumber = phoneE164;
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -63,8 +80,8 @@ function buildAccountXml({ sipUsername, sipPassword, phoneE164 }) {
     '  <allowMessage>1</allowMessage>',
     '  <allowVideo>1</allowVideo>',
     '  <pushEnabled>1</pushEnabled>',
-    `  <displayName>${escapeXml(displayName)}</displayName>`,
-    `  <callerID>${escapeXml(phoneE164)}</callerID>`,
+    `  <displayName>${escapeXml(callerIdName)}</displayName>`,
+    `  <callerID>${escapeXml(callerIdNumber)}</callerID>`,
     '  <codecPriority>OPUS,ULAW,ALAW</codecPriority>',
     '</account>',
     '',
