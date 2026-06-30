@@ -68,9 +68,8 @@ describe('POST /admin/login', () => {
   });
 });
 
-// POST /admin/bootstrap and /admin/reset-bootstrap are mounted in app.js
-// (before the admin router), so they are covered against createApp() in
-// app.test.js — not here.
+// POST /admin/bootstrap is mounted in app.js (before the admin router), so it is
+// covered against createApp() in app.test.js — not here.
 
 describe('POST /admin/forgot-password (public)', () => {
   it('always returns { sent: true } (no enumeration)', async () => {

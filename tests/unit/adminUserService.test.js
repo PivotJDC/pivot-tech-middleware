@@ -133,32 +133,6 @@ describe('getByUsername', () => {
   });
 });
 
-describe('resetBootstrap', () => {
-  it('truncates when the newest admin is within the 24h window', async () => {
-    db.query
-      .mockResolvedValueOnce({ rows: [{ newest: new Date().toISOString() }] }) // MAX
-      .mockResolvedValueOnce({}); // TRUNCATE
-    await adminUserService.resetBootstrap();
-    expect(db.query.mock.calls[1][0]).toMatch(/TRUNCATE admin_users/);
-  });
-
-  it('truncates (no-op) when the table is empty (newest null)', async () => {
-    db.query
-      .mockResolvedValueOnce({ rows: [{ newest: null }] })
-      .mockResolvedValueOnce({});
-    await adminUserService.resetBootstrap();
-    expect(db.query.mock.calls[1][0]).toMatch(/TRUNCATE/);
-  });
-
-  it('throws 403 once the 24h window has elapsed (and does not truncate)', async () => {
-    const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
-    db.query.mockResolvedValueOnce({ rows: [{ newest: old }] });
-    await expect(adminUserService.resetBootstrap())
-      .rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
-    expect(db.query).toHaveBeenCalledTimes(1); // no TRUNCATE
-  });
-});
-
 describe('requestPasswordReset', () => {
   it('stores a reset token keyed to the username for a known email', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ username: 'jim' }] });

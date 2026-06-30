@@ -21,7 +21,6 @@ const { logger } = require('../utils/logger');
 
 const ROLES = ['super_admin', 'admin', 'viewer'];
 const RESET_TOKEN_TTL_SECONDS = 15 * 60; // 15 minutes
-const BOOTSTRAP_RESET_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 function resetKey(token) {
   return `admin:reset:${token}`;
@@ -142,22 +141,6 @@ async function getByUsername(username) {
 }
 
 /**
- * DANGER: wipe ALL admin users so the deploy can be re-bootstrapped. Allowed
- * ONLY within 24h of the newest admin user's created_at; afterwards it throws
- * 403. An empty table is a no-op. This is a temporary setup aid — see the route
- * in app.js for the security caveat.
- */
-async function resetBootstrap() {
-  const { rows } = await db.query('SELECT MAX(created_at) AS newest FROM admin_users');
-  const newest = rows[0] && rows[0].newest;
-  if (newest && Date.now() - new Date(newest).getTime() > BOOTSTRAP_RESET_WINDOW_MS) {
-    throw errors.forbidden('Bootstrap reset window (24h) has expired.');
-  }
-  await db.query('TRUNCATE admin_users');
-  logger.warn('admin_users truncated via reset-bootstrap');
-}
-
-/**
  * Begin a password reset: if an admin user has this email, mint a UUID reset
  * token in Redis (admin:reset:{token} -> username, 15-min TTL) and log the
  * link. No-op for an unknown email — callers always answer { sent: true } so
@@ -208,7 +191,6 @@ module.exports = {
   countAdminUsers,
   listAdminUsers,
   getByUsername,
-  resetBootstrap,
   requestPasswordReset,
   resetPassword,
   issueToken,

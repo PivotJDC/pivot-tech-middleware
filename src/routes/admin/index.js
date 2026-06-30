@@ -81,8 +81,8 @@ router.post(
   }),
 );
 
-// NB: the one-time POST /admin/bootstrap and /admin/reset-bootstrap routes are
-// mounted in app.js BEFORE this router, so they bypass the router-wide adminAuth.
+// NB: the one-time POST /admin/bootstrap route is mounted in app.js BEFORE this
+// router, so it bypasses the router-wide adminAuth.
 
 // Every admin route below is authenticated.
 router.use(adminAuth);
