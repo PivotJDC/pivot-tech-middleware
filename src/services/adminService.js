@@ -68,6 +68,11 @@ async function listDids(filters = {}) {
   if (filters.market) { params.push(filters.market); conditions.push(`market = $${params.length}`); }
   if (filters.status) { params.push(filters.status); conditions.push(`status = $${params.length}`); }
   if (filters.area_code) { params.push(filters.area_code); conditions.push(`area_code = $${params.length}`); }
+  // Free-text search by phone number (case-insensitive substring on e164).
+  if (filters.search) {
+    params.push(`%${filters.search}%`);
+    conditions.push(`e164 ILIKE $${params.length}`);
+  }
   const where = whereClause(conditions);
 
   const { total } = (await db.query(`SELECT COUNT(*)::int AS total FROM dids ${where}`, params))

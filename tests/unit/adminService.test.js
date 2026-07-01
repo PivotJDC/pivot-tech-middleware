@@ -66,6 +66,13 @@ describe('listDids', () => {
     expect(db.query.mock.calls[0][1]).toEqual(['lewiston-id', 'available', '208']);
     expect(result.dids).toHaveLength(1);
   });
+
+  it('searches by phone number (e164 ILIKE)', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ total: 1 }] }).mockResolvedValueOnce({ rows: [{ id: 'd1' }] });
+    await adminService.listDids({ search: '208555' });
+    expect(db.query.mock.calls[0][0]).toMatch(/e164 ILIKE/);
+    expect(db.query.mock.calls[0][1]).toEqual(['%208555%']);
+  });
 });
 
 describe('listPorts', () => {
