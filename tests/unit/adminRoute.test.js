@@ -194,4 +194,24 @@ describe('admin API', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('accounts');
   });
+
+  it('GET /admin/analytics/hourly-activity returns the hourly series', async () => {
+    adminService.getHourlyActivity.mockResolvedValueOnce([
+      { hour: 0, calls: 2, messages: 5 },
+    ]);
+    const res = await request(app).get('/admin/analytics/hourly-activity');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ hour: 0, calls: 2, messages: 5 }]);
+    expect(adminService.getHourlyActivity).toHaveBeenCalled();
+  });
+
+  it('GET /admin/analytics/usage-distribution returns the bucket counts', async () => {
+    adminService.getUsageDistribution.mockResolvedValueOnce([
+      { bucket: '0-1 GB', count: 42 },
+    ]);
+    const res = await request(app).get('/admin/analytics/usage-distribution');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toEqual({ bucket: '0-1 GB', count: 42 });
+    expect(adminService.getUsageDistribution).toHaveBeenCalled();
+  });
 });

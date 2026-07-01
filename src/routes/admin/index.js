@@ -297,4 +297,22 @@ router.get(
   }),
 );
 
+// --- Analytics ---
+
+// Network activity (calls + messages) by hour of day, current month.
+router.get(
+  '/analytics/hourly-activity',
+  asyncHandler(async (req, res) => {
+    res.json(await adminService.getHourlyActivity());
+  }),
+);
+
+// Subscriber data-usage distribution across GB buckets.
+router.get(
+  '/analytics/usage-distribution',
+  asyncHandler(async (req, res) => {
+    res.json(await adminService.getUsageDistribution());
+  }),
+);
+
 module.exports = router;

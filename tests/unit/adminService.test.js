@@ -104,6 +104,47 @@ describe('getAccountUsageStats', () => {
   });
 });
 
+describe('getHourlyActivity', () => {
+  it('returns hour/calls/messages as numbers, scoped to the current month', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [
+        { hour: 0, calls: '2', messages: '5' },
+        { hour: 1, calls: 0, messages: 0 },
+      ],
+    });
+
+    const rows = await adminService.getHourlyActivity();
+
+    expect(rows[0]).toEqual({ hour: 0, calls: 2, messages: 5 });
+    const sql = db.query.mock.calls[0][0];
+    expect(sql).toMatch(/generate_series\(0, 23\)/);
+    expect(sql).toMatch(/EXTRACT\(HOUR FROM created_at\)/);
+    expect(sql).toMatch(/date_trunc\('month'/);
+    expect(sql).toMatch(/call_records/);
+    expect(sql).toMatch(/message_records/);
+  });
+});
+
+describe('getUsageDistribution', () => {
+  it('returns bucket/count pairs as numbers using the latest snapshot per subscriber', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [
+        { bucket: '0-1 GB', count: '42' },
+        { bucket: '30+ GB', count: 3 },
+      ],
+    });
+
+    const rows = await adminService.getUsageDistribution();
+
+    expect(rows[0]).toEqual({ bucket: '0-1 GB', count: 42 });
+    expect(rows[1]).toEqual({ bucket: '30+ GB', count: 3 });
+    const sql = db.query.mock.calls[0][0];
+    expect(sql).toMatch(/DISTINCT ON \(account_id\)/);
+    expect(sql).toMatch(/data_total_mb < 1024/);
+    expect(sql).toMatch(/data_total_mb < 30720/);
+  });
+});
+
 describe('listDids', () => {
   it('filters by market/status/area_code', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ total: 1 }] }).mockResolvedValueOnce({ rows: [{ id: 'd1' }] });

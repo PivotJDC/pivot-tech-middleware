@@ -235,6 +235,76 @@ async function getAccountUsageStats(accountId) {
   };
 }
 
+/**
+ * Network activity by hour of day (0-23) for the current calendar month:
+ * call + message counts bucketed by EXTRACT(HOUR FROM created_at). Always
+ * returns all 24 hours (zero-filled), ordered 0..23.
+ * @returns {Promise<Array<{ hour, calls, messages }>>}
+ */
+async function getHourlyActivity() {
+  const { rows } = await db.query(
+    `SELECT h.hour AS hour,
+            COALESCE(c.calls, 0)    AS calls,
+            COALESCE(m.messages, 0) AS messages
+       FROM generate_series(0, 23) AS h(hour)
+       LEFT JOIN (
+         SELECT EXTRACT(HOUR FROM created_at)::int AS hour, COUNT(*) AS calls
+           FROM call_records
+          WHERE created_at >= date_trunc('month', now())
+          GROUP BY 1
+       ) c ON c.hour = h.hour
+       LEFT JOIN (
+         SELECT EXTRACT(HOUR FROM created_at)::int AS hour, COUNT(*) AS messages
+           FROM message_records
+          WHERE created_at >= date_trunc('month', now())
+          GROUP BY 1
+       ) m ON m.hour = h.hour
+      ORDER BY h.hour`,
+  );
+  return rows.map((r) => ({
+    hour: Number(r.hour),
+    calls: Number(r.calls),
+    messages: Number(r.messages),
+  }));
+}
+
+/**
+ * Subscriber data-usage distribution: count of subscribers whose latest usage
+ * snapshot falls into each GB bucket. One row per subscriber (their most recent
+ * usage_records period). Always returns all six buckets in order, zero-filled.
+ * @returns {Promise<Array<{ bucket, count }>>}
+ */
+async function getUsageDistribution() {
+  const { rows } = await db.query(
+    `WITH latest AS (
+       SELECT DISTINCT ON (account_id) account_id, data_total_mb
+         FROM usage_records
+        ORDER BY account_id, period_start DESC, polled_at DESC
+     )
+     SELECT b.bucket AS bucket, COALESCE(cnt.count, 0) AS count
+       FROM (VALUES
+         (1, '0-1 GB'), (2, '1-5 GB'), (3, '5-10 GB'),
+         (4, '10-20 GB'), (5, '20-30 GB'), (6, '30+ GB')
+       ) AS b(ord, bucket)
+       LEFT JOIN (
+         SELECT
+           CASE
+             WHEN data_total_mb < 1024  THEN '0-1 GB'
+             WHEN data_total_mb < 5120  THEN '1-5 GB'
+             WHEN data_total_mb < 10240 THEN '5-10 GB'
+             WHEN data_total_mb < 20480 THEN '10-20 GB'
+             WHEN data_total_mb < 30720 THEN '20-30 GB'
+             ELSE '30+ GB'
+           END AS bucket,
+           COUNT(*) AS count
+           FROM latest
+          GROUP BY 1
+       ) cnt ON cnt.bucket = b.bucket
+      ORDER BY b.ord`,
+  );
+  return rows.map((r) => ({ bucket: r.bucket, count: Number(r.count) }));
+}
+
 module.exports = {
   listAccounts,
   listDids,
@@ -242,5 +312,7 @@ module.exports = {
   retryPort,
   getMetrics,
   getAccountUsageStats,
+  getHourlyActivity,
+  getUsageDistribution,
   serializePort,
 };
