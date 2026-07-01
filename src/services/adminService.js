@@ -393,6 +393,70 @@ async function getUsageTrends(period = 'day') {
   }));
 }
 
+// Blended $/GB fallback when no per-carrier BICS cost is available. Rough MVP
+// estimate; refine once BICS wholesale rates are wired in.
+const BLENDED_DATA_RATE_PER_GB = 2.0;
+
+/**
+ * Billing reconciliation for a date range: Telnyx-side voice/SMS/MMS volumes
+ * (call_records + message_records, by created_at) alongside BICS-side data
+ * usage (usage_records, by period). `from`/`to` are YYYY-MM-DD strings; the
+ * range is inclusive.
+ * @param {string} from
+ * @param {string} to
+ */
+async function getBillingReconciliation(from, to) {
+  const [telnyxRes, bicsRes] = await Promise.all([
+    db.query(
+      `SELECT
+         (SELECT COALESCE(FLOOR(SUM(duration_seconds) / 60.0), 0)::int
+            FROM call_records
+           WHERE created_at BETWEEN $1 AND $2)                    AS voice_minutes,
+         (SELECT COUNT(*) FROM call_records
+           WHERE created_at BETWEEN $1 AND $2)                    AS voice_calls,
+         (SELECT COUNT(*) FROM message_records
+           WHERE created_at BETWEEN $1 AND $2
+             AND message_type = 'sms')                            AS sms_count,
+         (SELECT COUNT(*) FROM message_records
+           WHERE created_at BETWEEN $1 AND $2
+             AND message_type = 'mms')                            AS mms_count`,
+      [from, to],
+    ),
+    db.query(
+      `SELECT COALESCE(SUM(data_total_mb), 0) AS data_total_mb,
+              COALESCE(SUM(data_cost), 0)     AS data_cost
+         FROM usage_records
+        WHERE period_start >= $1 AND period_end <= $2`,
+      [from, to],
+    ),
+  ]);
+
+  const t = telnyxRes.rows[0] || {};
+  const b = bicsRes.rows[0] || {};
+  const dataTotalMb = Number(b.data_total_mb) || 0;
+  const dataTotalGb = Math.round((dataTotalMb / 1024) * 100) / 100;
+  // Prefer the carrier's own reported cost; fall back to the blended $/GB rate.
+  const carrierCost = Number(b.data_cost) || 0;
+  const estimatedCost = carrierCost > 0
+    ? Math.round(carrierCost * 100) / 100
+    : Math.round((dataTotalMb / 1024) * BLENDED_DATA_RATE_PER_GB * 100) / 100;
+
+  return {
+    period: { from, to },
+    telnyx: {
+      voice_minutes: Number(t.voice_minutes) || 0,
+      voice_calls: Number(t.voice_calls) || 0,
+      sms_count: Number(t.sms_count) || 0,
+      mms_count: Number(t.mms_count) || 0,
+    },
+    bics: {
+      data_total_mb: dataTotalMb,
+      data_total_gb: dataTotalGb,
+      estimated_cost: estimatedCost,
+    },
+  };
+}
+
 module.exports = {
   listAccounts,
   listDids,
@@ -405,5 +469,6 @@ module.exports = {
   getHourlyDataVoice,
   getHourlyMessages,
   getUsageTrends,
+  getBillingReconciliation,
   serializePort,
 };

@@ -209,6 +209,65 @@ describe('getUsageTrends', () => {
   });
 });
 
+describe('getBillingReconciliation', () => {
+  it('aggregates Telnyx volumes + BICS data and computes GB/cost', async () => {
+    db.query
+      .mockResolvedValueOnce({
+        rows: [{
+          voice_minutes: 120, voice_calls: '40', sms_count: '15', mms_count: '3',
+        }],
+      }) // telnyx aggregate
+      .mockResolvedValueOnce({ rows: [{ data_total_mb: '20480.000', data_cost: 0 }] }); // bics
+
+    const report = await adminService.getBillingReconciliation('2026-07-01', '2026-07-31');
+
+    expect(report.period).toEqual({ from: '2026-07-01', to: '2026-07-31' });
+    expect(report.telnyx).toEqual({
+      voice_minutes: 120, voice_calls: 40, sms_count: 15, mms_count: 3,
+    });
+    // 20480 MB = 20 GB; no carrier cost -> blended $2/GB = $40.
+    expect(report.bics).toEqual({
+      data_total_mb: 20480,
+      data_total_gb: 20,
+      estimated_cost: 40,
+    });
+    // Both queries scoped to the range.
+    expect(db.query.mock.calls[0][1]).toEqual(['2026-07-01', '2026-07-31']);
+    expect(db.query.mock.calls[1][1]).toEqual(['2026-07-01', '2026-07-31']);
+    expect(db.query.mock.calls[1][0]).toMatch(/period_start >= \$1 AND period_end <= \$2/);
+  });
+
+  it('prefers the carrier-reported data_cost when present', async () => {
+    db.query
+      .mockResolvedValueOnce({
+        rows: [{
+          voice_minutes: 0, voice_calls: 0, sms_count: 0, mms_count: 0,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ data_total_mb: '10240', data_cost: '17.500' }] });
+
+    const report = await adminService.getBillingReconciliation('2026-06-01', '2026-06-30');
+    expect(report.bics.data_total_gb).toBe(10);
+    expect(report.bics.estimated_cost).toBe(17.5); // carrier cost, not blended
+  });
+
+  it('returns zeros when there is no activity', async () => {
+    db.query
+      .mockResolvedValueOnce({
+        rows: [{
+          voice_minutes: 0, voice_calls: 0, sms_count: 0, mms_count: 0,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ data_total_mb: 0, data_cost: 0 }] });
+
+    const report = await adminService.getBillingReconciliation('2026-05-01', '2026-05-31');
+    expect(report.telnyx).toEqual({
+      voice_minutes: 0, voice_calls: 0, sms_count: 0, mms_count: 0,
+    });
+    expect(report.bics).toEqual({ data_total_mb: 0, data_total_gb: 0, estimated_cost: 0 });
+  });
+});
+
 describe('listDids', () => {
   it('filters by market/status/area_code', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ total: 1 }] }).mockResolvedValueOnce({ rows: [{ id: 'd1' }] });

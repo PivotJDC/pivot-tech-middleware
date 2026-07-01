@@ -364,4 +364,17 @@ router.get(
   }),
 );
 
+// Billing reconciliation for a date range: Telnyx volumes vs BICS data usage.
+router.get(
+  '/analytics/billing-reconciliation',
+  asyncHandler(async (req, res) => {
+    const { from, to } = req.query;
+    const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+    if (!isDate(from) || !isDate(to)) {
+      throw errors.validation('from and to are required as YYYY-MM-DD dates.', 'from');
+    }
+    res.json(await adminService.getBillingReconciliation(from, to));
+  }),
+);
+
 module.exports = router;

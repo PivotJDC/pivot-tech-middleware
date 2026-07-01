@@ -250,4 +250,28 @@ describe('admin API', () => {
     expect(adminService.getUsageTrends).toHaveBeenNthCalledWith(1, 'day');
     expect(adminService.getUsageTrends).toHaveBeenNthCalledWith(2, 'day');
   });
+
+  it('GET /admin/analytics/billing-reconciliation returns the report', async () => {
+    adminService.getBillingReconciliation.mockResolvedValueOnce({
+      period: { from: '2026-07-01', to: '2026-07-31' },
+      telnyx: {
+        voice_minutes: 120, voice_calls: 40, sms_count: 15, mms_count: 3,
+      },
+      bics: { data_total_mb: 20480, data_total_gb: 20, estimated_cost: 40 },
+    });
+    const res = await request(app)
+      .get('/admin/analytics/billing-reconciliation?from=2026-07-01&to=2026-07-31');
+    expect(res.status).toBe(200);
+    expect(res.body.bics.data_total_gb).toBe(20);
+    expect(adminService.getBillingReconciliation).toHaveBeenCalledWith('2026-07-01', '2026-07-31');
+  });
+
+  it('GET /admin/analytics/billing-reconciliation 400s on missing/invalid dates', async () => {
+    const res = await request(app).get('/admin/analytics/billing-reconciliation?from=2026-07-01');
+    expect(res.status).toBe(400);
+    const res2 = await request(app)
+      .get('/admin/analytics/billing-reconciliation?from=nope&to=2026-07-31');
+    expect(res2.status).toBe(400);
+    expect(adminService.getBillingReconciliation).not.toHaveBeenCalled();
+  });
 });
