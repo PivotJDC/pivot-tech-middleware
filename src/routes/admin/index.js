@@ -25,6 +25,7 @@ const provisioningService = require('../../services/provisioningService');
 const adminUserService = require('../../services/adminUserService');
 const cdrService = require('../../services/cdrService');
 const usageService = require('../../services/usageService');
+const tenantsRouter = require('./tenants');
 const { adminAuth, requireRole } = require('../../middleware/adminAuth');
 const { rateLimit } = require('../../middleware/rateLimiter');
 const { asyncHandler, errors } = require('../../middleware/errorHandler');
@@ -88,6 +89,9 @@ router.post(
 
 // Every admin route below is authenticated.
 router.use(adminAuth);
+
+// Tenant management (MVNE). super_admin only, applied at the mount point.
+router.use('/tenants', requireRole('super_admin'), tenantsRouter);
 
 // Identity of the currently authenticated admin (username/email/role). Useful
 // as a "forgot username" aid for an admin still logged in elsewhere.

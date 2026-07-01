@@ -20,6 +20,7 @@ jest.mock('../../src/services/adminService');
 jest.mock('../../src/services/accountService');
 jest.mock('../../src/services/provisioningService');
 jest.mock('../../src/services/usageService');
+jest.mock('../../src/services/tenantService');
 jest.mock('../../src/utils/logger', () => ({
   logger: { info: () => {}, warn: () => {}, error: () => {} },
   REDACT_PATHS: [],
@@ -29,6 +30,7 @@ const express = require('express');
 const request = require('supertest');
 const adminUserService = require('../../src/services/adminUserService');
 const usageService = require('../../src/services/usageService');
+const tenantService = require('../../src/services/tenantService');
 const adminRouter = require('../../src/routes/admin');
 const { errorHandler } = require('../../src/middleware/errorHandler');
 
@@ -205,6 +207,31 @@ describe('DELETE /admin/users/:id (super_admin only)', () => {
     const res = await request(app).delete('/admin/users/u2');
     expect(res.status).toBe(403);
     expect(adminUserService.deleteAdminUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('/admin/tenants (super_admin only)', () => {
+  it('lists tenants for a super_admin', async () => {
+    tenantService.listTenants.mockResolvedValueOnce({ tenants: [{ id: 't1' }], pagination: {} });
+    const res = await request(app).get('/admin/tenants');
+    expect(res.status).toBe(200);
+    expect(res.body.tenants).toHaveLength(1);
+  });
+
+  it('creates a tenant for a super_admin', async () => {
+    tenantService.createTenant.mockResolvedValueOnce({ id: 't1', slug: 'acme' });
+    const res = await request(app).post('/admin/tenants').send({ slug: 'acme', name: 'Acme' });
+    expect(res.status).toBe(201);
+  });
+
+  it('forbids a non-super_admin from any tenant route', async () => {
+    mockAdmin = { id: 'x', role: 'admin' };
+    const list = await request(app).get('/admin/tenants');
+    expect(list.status).toBe(403);
+    const create = await request(app).post('/admin/tenants').send({ slug: 'a', name: 'A' });
+    expect(create.status).toBe(403);
+    expect(tenantService.listTenants).not.toHaveBeenCalled();
+    expect(tenantService.createTenant).not.toHaveBeenCalled();
   });
 });
 
