@@ -59,6 +59,51 @@ describe('listAccounts', () => {
   });
 });
 
+describe('getAccountUsageStats', () => {
+  it('returns the mapped stats as numbers from a single query', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{
+        data_used_mb: '12400.500',
+        data_cap_mb: '30720.000',
+        voice_minutes: 47,
+        sms_count: '23',
+        mms_count: '2',
+      }],
+    });
+
+    const stats = await adminService.getAccountUsageStats('acc-1');
+
+    expect(stats).toEqual({
+      data_used_mb: 12400.5,
+      data_cap_mb: 30720,
+      voice_minutes: 47,
+      sms_count: 23,
+      mms_count: 2,
+    });
+    // Single query, parameterized by account id.
+    expect(db.query).toHaveBeenCalledTimes(1);
+    expect(db.query.mock.calls[0][1]).toEqual(['acc-1']);
+    // Pulls from all three sources, scoped to the current month.
+    const sql = db.query.mock.calls[0][0];
+    expect(sql).toMatch(/usage_records/);
+    expect(sql).toMatch(/call_records/);
+    expect(sql).toMatch(/message_records/);
+    expect(sql).toMatch(/date_trunc\('month'/);
+  });
+
+  it('defaults to zeros when there is no data', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{
+        data_used_mb: 0, data_cap_mb: 0, voice_minutes: 0, sms_count: 0, mms_count: 0,
+      }],
+    });
+    const stats = await adminService.getAccountUsageStats('acc-2');
+    expect(stats).toEqual({
+      data_used_mb: 0, data_cap_mb: 0, voice_minutes: 0, sms_count: 0, mms_count: 0,
+    });
+  });
+});
+
 describe('listDids', () => {
   it('filters by market/status/area_code', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ total: 1 }] }).mockResolvedValueOnce({ rows: [{ id: 'd1' }] });

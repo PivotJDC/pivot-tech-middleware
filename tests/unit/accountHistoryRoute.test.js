@@ -8,10 +8,12 @@ jest.mock('../../src/middleware/auth', () => ({
 jest.mock('../../src/services/accountService');
 jest.mock('../../src/services/provisioningService');
 jest.mock('../../src/services/cdrService');
+jest.mock('../../src/services/adminService');
 
 const express = require('express');
 const request = require('supertest');
 const cdrService = require('../../src/services/cdrService');
+const adminService = require('../../src/services/adminService');
 const accountsRouter = require('../../src/routes/v1/accounts');
 const { errorHandler } = require('../../src/middleware/errorHandler');
 
@@ -39,5 +41,17 @@ describe('GET /v1/accounts/:id/history', () => {
     expect(res.body.messages).toHaveLength(1);
     expect(cdrService.getCallHistory).toHaveBeenCalledWith('acc-1', { limit: '25', offset: '5' });
     expect(cdrService.getMessageHistory).toHaveBeenCalledWith('acc-1', { limit: '25', offset: '5' });
+  });
+});
+
+describe('GET /v1/accounts/:id/usage', () => {
+  it('returns the usage stats for the owner', async () => {
+    adminService.getAccountUsageStats.mockResolvedValueOnce({
+      data_used_mb: 12400, data_cap_mb: 30720, voice_minutes: 47, sms_count: 23, mms_count: 2,
+    });
+    const res = await request(app).get('/v1/accounts/acc-1/usage');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ data_used_mb: 12400, voice_minutes: 47 });
+    expect(adminService.getAccountUsageStats).toHaveBeenCalledWith('acc-1');
   });
 });

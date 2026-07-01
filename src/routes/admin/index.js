@@ -153,6 +153,14 @@ router.get(
   }),
 );
 
+// Usage stats for an account (data snapshot + this month's voice/SMS/MMS).
+router.get(
+  '/accounts/:id/usage',
+  asyncHandler(async (req, res) => {
+    res.json(await adminService.getAccountUsageStats(req.params.id));
+  }),
+);
+
 router.patch(
   '/accounts/:id/status',
   asyncHandler(async (req, res) => {

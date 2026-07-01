@@ -188,11 +188,59 @@ async function getMetrics() {
   };
 }
 
+/**
+ * Usage stats for one account: the latest data snapshot (usage_records) plus
+ * this calendar month's voice/SMS/MMS totals (call_records + message_records),
+ * in a single round-trip. Missing data yields zeros (never null).
+ * @returns {Promise<{ data_used_mb, data_cap_mb, voice_minutes, sms_count, mms_count }>}
+ */
+async function getAccountUsageStats(accountId) {
+  const { rows } = await db.query(
+    `SELECT
+       COALESCE(u.data_total_mb, 0)    AS data_used_mb,
+       COALESCE(u.plan_data_cap_mb, 0) AS data_cap_mb,
+       COALESCE(c.voice_minutes, 0)    AS voice_minutes,
+       COALESCE(m.sms_count, 0)        AS sms_count,
+       COALESCE(m.mms_count, 0)        AS mms_count
+     FROM (SELECT $1::uuid AS account_id) base
+     LEFT JOIN LATERAL (
+       SELECT data_total_mb, plan_data_cap_mb
+         FROM usage_records
+        WHERE account_id = base.account_id
+        ORDER BY period_start DESC, polled_at DESC
+        LIMIT 1
+     ) u ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT FLOOR(COALESCE(SUM(duration_seconds), 0) / 60.0)::int AS voice_minutes
+         FROM call_records
+        WHERE account_id = base.account_id
+          AND created_at >= date_trunc('month', now())
+     ) c ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT COUNT(*) FILTER (WHERE message_type = 'sms') AS sms_count,
+              COUNT(*) FILTER (WHERE message_type = 'mms') AS mms_count
+         FROM message_records
+        WHERE account_id = base.account_id
+          AND created_at >= date_trunc('month', now())
+     ) m ON TRUE`,
+    [accountId],
+  );
+  const r = rows[0] || {};
+  return {
+    data_used_mb: Number(r.data_used_mb) || 0,
+    data_cap_mb: Number(r.data_cap_mb) || 0,
+    voice_minutes: Number(r.voice_minutes) || 0,
+    sms_count: Number(r.sms_count) || 0,
+    mms_count: Number(r.mms_count) || 0,
+  };
+}
+
 module.exports = {
   listAccounts,
   listDids,
   listPorts,
   retryPort,
   getMetrics,
+  getAccountUsageStats,
   serializePort,
 };

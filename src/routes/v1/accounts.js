@@ -14,6 +14,9 @@ const express = require('express');
 const accountService = require('../../services/accountService');
 const provisioningService = require('../../services/provisioningService');
 const cdrService = require('../../services/cdrService');
+// Usage stats are a read-only aggregate; reuse the admin service's query rather
+// than duplicating it (the customer route still enforces owner-only access).
+const adminService = require('../../services/adminService');
 const { authenticate, requireSelf } = require('../../middleware/auth');
 const { asyncHandler } = require('../../middleware/errorHandler');
 
@@ -101,6 +104,16 @@ router.get(
       cdrService.getMessageHistory(req.params.id, { limit, offset }),
     ]);
     res.json({ calls, messages });
+  }),
+);
+
+// Usage stats — owner only. Data snapshot + this month's voice/SMS/MMS.
+router.get(
+  '/:id/usage',
+  authenticate,
+  requireSelf,
+  asyncHandler(async (req, res) => {
+    res.json(await adminService.getAccountUsageStats(req.params.id));
   }),
 );
 

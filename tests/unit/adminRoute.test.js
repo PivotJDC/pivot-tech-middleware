@@ -60,6 +60,16 @@ describe('admin API', () => {
     expect(cdrService.getCallHistory).toHaveBeenCalledWith('a1', { limit: '10', offset: '0' });
   });
 
+  it('GET /admin/accounts/:id/usage returns usage stats', async () => {
+    adminService.getAccountUsageStats.mockResolvedValueOnce({
+      data_used_mb: 12400, data_cap_mb: 30720, voice_minutes: 47, sms_count: 23, mms_count: 2,
+    });
+    const res = await request(app).get('/admin/accounts/a1/usage');
+    expect(res.status).toBe(200);
+    expect(res.body.voice_minutes).toBe(47);
+    expect(adminService.getAccountUsageStats).toHaveBeenCalledWith('a1');
+  });
+
   it('PATCH /admin/accounts/:id/status forces a status change', async () => {
     accountService.transitionStatus.mockResolvedValueOnce({ id: 'a1', status: 'suspended' });
     const res = await request(app)
