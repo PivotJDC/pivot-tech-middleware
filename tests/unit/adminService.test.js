@@ -145,6 +145,52 @@ describe('getUsageDistribution', () => {
   });
 });
 
+describe('tenant scoping', () => {
+  it('listAccounts filters by tenant_id when tenantId is given', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ total: 1 }] }).mockResolvedValueOnce({ rows: [] });
+    await adminService.listAccounts({ tenantId: 'ten-1' });
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/tenant_id =/);
+    expect(params).toEqual(['ten-1']);
+  });
+
+  it('listAccounts does NOT filter by tenant when omitted (super_admin all-tenants)', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ total: 0 }] }).mockResolvedValueOnce({ rows: [] });
+    await adminService.listAccounts({});
+    expect(db.query.mock.calls[0][0]).not.toMatch(/tenant_id/);
+  });
+
+  it('listPorts scopes via the owning account subquery', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ total: 0 }] }).mockResolvedValueOnce({ rows: [] });
+    await adminService.listPorts({ tenantId: 'ten-1' });
+    expect(db.query.mock.calls[0][0]).toMatch(/account_id IN \(SELECT id FROM accounts WHERE tenant_id/);
+  });
+
+  it('getMetrics scopes each count to the tenant', async () => {
+    db.query.mockResolvedValue({ rows: [] });
+    await adminService.getMetrics('ten-1');
+    expect(db.query.mock.calls[0][1]).toEqual(['ten-1']); // accounts
+    expect(db.query.mock.calls[1][0]).toMatch(/account_id IN \(SELECT id FROM accounts WHERE tenant_id/); // ports
+    expect(db.query.mock.calls[2][1]).toEqual(['ten-1']); // dids
+  });
+
+  it('getHourlyActivity + getUsageTrends + getBillingReconciliation scope by tenant', async () => {
+    db.query.mockResolvedValue({ rows: [] });
+    await adminService.getHourlyActivity('ten-1');
+    expect(db.query.mock.calls[0][0]).toMatch(/AND tenant_id = \$1/);
+    expect(db.query.mock.calls[0][1]).toEqual(['ten-1']);
+
+    db.query.mockClear();
+    await adminService.getUsageTrends('day', 'ten-1');
+    expect(db.query.mock.calls[0][1]).toEqual(['ten-1']);
+
+    db.query.mockClear();
+    db.query.mockResolvedValue({ rows: [{}] });
+    await adminService.getBillingReconciliation('2026-07-01', '2026-07-31', 'ten-1');
+    expect(db.query.mock.calls[0][1]).toEqual(['2026-07-01', '2026-07-31', 'ten-1']);
+  });
+});
+
 describe('getHourlyDataVoice', () => {
   it('returns hour/voice_minutes/call_count as numbers for the current month', async () => {
     db.query.mockResolvedValueOnce({

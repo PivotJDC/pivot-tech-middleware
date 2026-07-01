@@ -59,7 +59,7 @@ describe('admin API', () => {
     expect(res.status).toBe(200);
     expect(res.body.calls).toEqual([{ id: 'cr-1' }]);
     expect(res.body.messages).toEqual([{ id: 'mr-1' }]);
-    expect(cdrService.getCallHistory).toHaveBeenCalledWith('a1', { limit: '10', offset: '0' });
+    expect(cdrService.getCallHistory).toHaveBeenCalledWith('a1', { limit: '10', offset: '0' }, null);
   });
 
   it('GET /admin/accounts/:id/usage returns usage stats', async () => {
@@ -69,7 +69,7 @@ describe('admin API', () => {
     const res = await request(app).get('/admin/accounts/a1/usage');
     expect(res.status).toBe(200);
     expect(res.body.voice_minutes).toBe(47);
-    expect(adminService.getAccountUsageStats).toHaveBeenCalledWith('a1');
+    expect(adminService.getAccountUsageStats).toHaveBeenCalledWith('a1', null);
   });
 
   it('PATCH /admin/accounts/:id/status forces a status change', async () => {
@@ -262,15 +262,15 @@ describe('admin API', () => {
     const res = await request(app).get('/admin/analytics/usage-trends?period=week');
     expect(res.status).toBe(200);
     expect(res.body[0]).toEqual({ label: '2026-06-01', total_mb: 45000 });
-    expect(adminService.getUsageTrends).toHaveBeenCalledWith('week');
+    expect(adminService.getUsageTrends).toHaveBeenCalledWith('week', null);
   });
 
   it('GET /admin/analytics/usage-trends defaults an invalid/absent period to day', async () => {
     adminService.getUsageTrends.mockResolvedValue([]);
     await request(app).get('/admin/analytics/usage-trends');
     await request(app).get('/admin/analytics/usage-trends?period=bogus');
-    expect(adminService.getUsageTrends).toHaveBeenNthCalledWith(1, 'day');
-    expect(adminService.getUsageTrends).toHaveBeenNthCalledWith(2, 'day');
+    expect(adminService.getUsageTrends).toHaveBeenNthCalledWith(1, 'day', null);
+    expect(adminService.getUsageTrends).toHaveBeenNthCalledWith(2, 'day', null);
   });
 
   it('GET /admin/analytics/billing-reconciliation returns the report', async () => {
@@ -285,7 +285,7 @@ describe('admin API', () => {
       .get('/admin/analytics/billing-reconciliation?from=2026-07-01&to=2026-07-31');
     expect(res.status).toBe(200);
     expect(res.body.bics.data_total_gb).toBe(20);
-    expect(adminService.getBillingReconciliation).toHaveBeenCalledWith('2026-07-01', '2026-07-31');
+    expect(adminService.getBillingReconciliation).toHaveBeenCalledWith('2026-07-01', '2026-07-31', null);
   });
 
   it('GET /admin/analytics/billing-reconciliation 400s on missing/invalid dates', async () => {

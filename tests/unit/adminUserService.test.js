@@ -63,6 +63,39 @@ describe('login', () => {
   });
 });
 
+describe('tenant scoping', () => {
+  it('login scopes the lookup to the tenant when tenantId is given', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await adminUserService.login('jim', 'pw', 'ten-1');
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/username = \$1 AND tenant_id = \$2/);
+    expect(params).toEqual(['jim', 'ten-1']);
+  });
+
+  it('login matches by username alone when no tenantId (legacy/tests)', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await adminUserService.login('jim', 'pw');
+    expect(db.query.mock.calls[0][0]).not.toMatch(/tenant_id/);
+    expect(db.query.mock.calls[0][1]).toEqual(['jim']);
+  });
+
+  it('createAdminUser uses a supplied tenant_id', async () => {
+    crypto.hashPassword.mockResolvedValueOnce('hashed');
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'u1', tenant_id: 'ten-x' }] });
+    await adminUserService.createAdminUser({
+      username: 'a', email: 'a@p.io', password: 'password1', tenant_id: 'ten-x',
+    });
+    expect(db.query.mock.calls[0][1][4]).toBe('ten-x');
+  });
+
+  it('listAdminUsers filters by tenant when given', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await adminUserService.listAdminUsers('ten-1');
+    expect(db.query.mock.calls[0][0]).toMatch(/WHERE tenant_id = \$1/);
+    expect(db.query.mock.calls[0][1]).toEqual(['ten-1']);
+  });
+});
+
 describe('createAdminUser', () => {
   it('hashes the password, inserts, and returns the row without password_hash', async () => {
     crypto.hashPassword.mockResolvedValueOnce('hashed');
@@ -79,8 +112,10 @@ describe('createAdminUser', () => {
     expect(crypto.hashPassword).toHaveBeenCalledWith('longenough');
     expect(user).not.toHaveProperty('password_hash');
     expect(user.username).toBe('ops');
-    // email normalized to lowercase in the insert params.
-    expect(db.query.mock.calls[0][1]).toEqual(['ops', 'ops@p.io', 'hashed', 'admin']);
+    // email normalized to lowercase; tenant_id defaults to MobilityNet.
+    expect(db.query.mock.calls[0][1]).toEqual([
+      'ops', 'ops@p.io', 'hashed', 'admin', '00000000-0000-4000-a000-000000000001',
+    ]);
     // Best-effort invite email with the plaintext password.
     expect(emailClient.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
       to: 'ops@p.io',

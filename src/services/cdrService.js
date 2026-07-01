@@ -32,30 +32,40 @@ function parsePage(opts = {}) {
   return { limit, offset };
 }
 
-/** Account id that owns an E.164 number (one of our DIDs), or null. */
-async function accountIdForNumber(num) {
+/** Account (id + tenant_id) that owns an E.164 number (one of our DIDs), or null. */
+async function accountForNumber(num) {
   if (!num) return null;
-  const { rows } = await db.query('SELECT id FROM accounts WHERE phone_e164 = $1', [num]);
-  return rows[0] ? rows[0].id : null;
+  const { rows } = await db.query(
+    'SELECT id, tenant_id FROM accounts WHERE phone_e164 = $1',
+    [num],
+  );
+  return rows[0] || null;
 }
 
 /**
- * Resolve { accountId, direction } from from/to. Honors an explicit valid
- * direction (matching `from` for outbound, `to` for inbound); otherwise infers
- * direction from whichever side is one of our numbers.
+ * Resolve { accountId, tenantId, direction } from from/to. Honors an explicit
+ * valid direction (matching `from` for outbound, `to` for inbound); otherwise
+ * infers direction from whichever side is one of our numbers. The webhook has no
+ * tenant context, so we derive tenant_id from the matched account.
  */
 async function resolveOwnership(direction, from, to) {
+  const pick = (acct, dir) => (acct
+    ? { accountId: acct.id, tenantId: acct.tenant_id, direction: dir }
+    : null);
+
   if (direction === 'outbound') {
-    return { accountId: await accountIdForNumber(from), direction: 'outbound' };
+    return pick(await accountForNumber(from), 'outbound')
+      || { accountId: null, tenantId: null, direction: null };
   }
   if (direction === 'inbound') {
-    return { accountId: await accountIdForNumber(to), direction: 'inbound' };
+    return pick(await accountForNumber(to), 'inbound')
+      || { accountId: null, tenantId: null, direction: null };
   }
-  const outboundOwner = await accountIdForNumber(from);
-  if (outboundOwner) return { accountId: outboundOwner, direction: 'outbound' };
-  const inboundOwner = await accountIdForNumber(to);
-  if (inboundOwner) return { accountId: inboundOwner, direction: 'inbound' };
-  return { accountId: null, direction: null };
+  const out = pick(await accountForNumber(from), 'outbound');
+  if (out) return out;
+  const inb = pick(await accountForNumber(to), 'inbound');
+  if (inb) return inb;
+  return { accountId: null, tenantId: null, direction: null };
 }
 
 /**
@@ -67,7 +77,7 @@ async function recordCall({
   callSid, direction, from, to, status, durationSeconds, startedAt, endedAt,
 } = {}) {
   if (!callSid) return null;
-  const { accountId, direction: dir } = await resolveOwnership(direction, from, to);
+  const { accountId, tenantId, direction: dir } = await resolveOwnership(direction, from, to);
   if (!accountId) {
     logger.warn({ callSid }, 'call record for a number we do not own; ignored');
     return null;
@@ -91,11 +101,14 @@ async function recordCall({
 
   const inserted = await db.query(
     `INSERT INTO call_records
-       (account_id, call_sid, direction, from_number, to_number, status,
+       (account_id, tenant_id, call_sid, direction, from_number, to_number, status,
         duration_seconds, started_at, ended_at)
-     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 0), $8, $9)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 0), $9, $10)
      RETURNING *`,
-    [accountId, callSid, dir, from, to, finalStatus, duration, startedAt || null, endedAt || null],
+    [
+      accountId, tenantId, callSid, dir, from, to, finalStatus,
+      duration, startedAt || null, endedAt || null,
+    ],
   );
   logger.info({ accountId, callSid, direction: dir }, 'call record stored');
   return inserted.rows[0];
@@ -110,7 +123,7 @@ async function recordMessage({
   messageId, direction, from, to, status, messageType,
 } = {}) {
   if (!messageId) return null;
-  const { accountId, direction: dir } = await resolveOwnership(direction, from, to);
+  const { accountId, tenantId, direction: dir } = await resolveOwnership(direction, from, to);
   if (!accountId) {
     logger.warn({ messageId }, 'message record for a number we do not own; ignored');
     return null;
@@ -126,37 +139,54 @@ async function recordMessage({
 
   const inserted = await db.query(
     `INSERT INTO message_records
-       (account_id, message_id, direction, from_number, to_number, status, message_type)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (account_id, tenant_id, message_id, direction, from_number, to_number, status, message_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
-    [accountId, messageId, dir, from, to, finalStatus, type],
+    [accountId, tenantId, messageId, dir, from, to, finalStatus, type],
   );
   logger.info({ accountId, messageId, direction: dir }, 'message record stored');
   return inserted.rows[0];
 }
 
-/** Paginated call history for an account, newest first. */
-async function getCallHistory(accountId, opts = {}) {
+/**
+ * Paginated call history for an account, newest first. When tenantId is given,
+ * additionally scopes to that tenant (defense in depth for tenant isolation).
+ */
+async function getCallHistory(accountId, opts, tenantId) {
   const { limit, offset } = parsePage(opts);
+  const params = [accountId];
+  let where = 'account_id = $1';
+  if (tenantId) {
+    params.push(tenantId);
+    where += ` AND tenant_id = $${params.length}`;
+  }
+  params.push(limit, offset);
   const { rows } = await db.query(
     `SELECT * FROM call_records
-      WHERE account_id = $1
+      WHERE ${where}
       ORDER BY created_at DESC
-      LIMIT $2 OFFSET $3`,
-    [accountId, limit, offset],
+      LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params,
   );
   return rows;
 }
 
-/** Paginated message history for an account, newest first. */
-async function getMessageHistory(accountId, opts = {}) {
+/** Paginated message history for an account, newest first (optionally tenant-scoped). */
+async function getMessageHistory(accountId, opts, tenantId) {
   const { limit, offset } = parsePage(opts);
+  const params = [accountId];
+  let where = 'account_id = $1';
+  if (tenantId) {
+    params.push(tenantId);
+    where += ` AND tenant_id = $${params.length}`;
+  }
+  params.push(limit, offset);
   const { rows } = await db.query(
     `SELECT * FROM message_records
-      WHERE account_id = $1
+      WHERE ${where}
       ORDER BY created_at DESC
-      LIMIT $2 OFFSET $3`,
-    [accountId, limit, offset],
+      LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params,
   );
   return rows;
 }

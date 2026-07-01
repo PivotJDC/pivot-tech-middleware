@@ -33,6 +33,19 @@ const { logger } = require('../../utils/logger');
 
 const router = express.Router();
 
+/**
+ * The tenant a read query should be scoped to:
+ *   - super_admin: all tenants (null) unless they explicitly pass ?tenant_id=
+ *   - admin/viewer: their own tenant (from the JWT claim / resolved tenant),
+ *     and a ?tenant_id override is ignored.
+ */
+function tenantScope(req) {
+  if (req.admin && req.admin.role === 'super_admin') {
+    return req.query.tenant_id || null;
+  }
+  return (req.admin && req.admin.tenant_id) || (req.tenant && req.tenant.id) || null;
+}
+
 // --- Login (PUBLIC — must come BEFORE the router-wide adminAuth) ---
 // Rate limited to 5 attempts/min/IP to blunt brute force.
 router.post(
@@ -43,7 +56,9 @@ router.post(
     if (!username || !password) {
       throw errors.validation('username and password are required.');
     }
-    const result = await adminUserService.login(username, password);
+    // An admin belongs to a tenant; scope the lookup to the resolved tenant.
+    const tenantId = req.tenant && req.tenant.id;
+    const result = await adminUserService.login(username, password, tenantId);
     if (!result) {
       throw errors.unauthorized('Invalid username or password.');
     }
@@ -125,7 +140,7 @@ router.get(
   '/users',
   requireRole('super_admin'),
   asyncHandler(async (req, res) => {
-    res.json({ users: await adminUserService.listAdminUsers() });
+    res.json({ users: await adminUserService.listAdminUsers(tenantScope(req)) });
   }),
 );
 
@@ -156,7 +171,7 @@ router.delete(
 router.get(
   '/accounts',
   asyncHandler(async (req, res) => {
-    res.json(await adminService.listAccounts(req.query));
+    res.json(await adminService.listAccounts({ ...req.query, tenantId: tenantScope(req) }));
   }),
 );
 
@@ -172,9 +187,10 @@ router.get(
   '/accounts/:id/history',
   asyncHandler(async (req, res) => {
     const { limit, offset } = req.query;
+    const tenantId = tenantScope(req);
     const [calls, messages] = await Promise.all([
-      cdrService.getCallHistory(req.params.id, { limit, offset }),
-      cdrService.getMessageHistory(req.params.id, { limit, offset }),
+      cdrService.getCallHistory(req.params.id, { limit, offset }, tenantId),
+      cdrService.getMessageHistory(req.params.id, { limit, offset }, tenantId),
     ]);
     res.json({ calls, messages });
   }),
@@ -184,7 +200,7 @@ router.get(
 router.get(
   '/accounts/:id/usage',
   asyncHandler(async (req, res) => {
-    res.json(await adminService.getAccountUsageStats(req.params.id));
+    res.json(await adminService.getAccountUsageStats(req.params.id, tenantScope(req)));
   }),
 );
 
@@ -293,7 +309,7 @@ router.post(
 router.get(
   '/dids',
   asyncHandler(async (req, res) => {
-    res.json(await adminService.listDids(req.query));
+    res.json(await adminService.listDids({ ...req.query, tenantId: tenantScope(req) }));
   }),
 );
 
@@ -302,7 +318,7 @@ router.get(
 router.get(
   '/ports',
   asyncHandler(async (req, res) => {
-    res.json(await adminService.listPorts(req.query));
+    res.json(await adminService.listPorts({ ...req.query, tenantId: tenantScope(req) }));
   }),
 );
 
@@ -320,7 +336,7 @@ router.post(
 router.get(
   '/metrics',
   asyncHandler(async (req, res) => {
-    res.json(await adminService.getMetrics());
+    res.json(await adminService.getMetrics(tenantScope(req)));
   }),
 );
 
@@ -330,7 +346,7 @@ router.get(
 router.get(
   '/usage/summary',
   asyncHandler(async (req, res) => {
-    res.json(await usageService.getCurrentPeriodSummary());
+    res.json(await usageService.getCurrentPeriodSummary({ tenantId: tenantScope(req) }));
   }),
 );
 
@@ -354,7 +370,7 @@ router.post(
 router.get(
   '/analytics/hourly-activity',
   asyncHandler(async (req, res) => {
-    res.json(await adminService.getHourlyActivity());
+    res.json(await adminService.getHourlyActivity(tenantScope(req)));
   }),
 );
 
@@ -362,7 +378,7 @@ router.get(
 router.get(
   '/analytics/usage-distribution',
   asyncHandler(async (req, res) => {
-    res.json(await adminService.getUsageDistribution());
+    res.json(await adminService.getUsageDistribution(tenantScope(req)));
   }),
 );
 
@@ -370,7 +386,7 @@ router.get(
 router.get(
   '/analytics/hourly-data-voice',
   asyncHandler(async (req, res) => {
-    res.json(await adminService.getHourlyDataVoice());
+    res.json(await adminService.getHourlyDataVoice(tenantScope(req)));
   }),
 );
 
@@ -378,7 +394,7 @@ router.get(
 router.get(
   '/analytics/hourly-messages',
   asyncHandler(async (req, res) => {
-    res.json(await adminService.getHourlyMessages());
+    res.json(await adminService.getHourlyMessages(tenantScope(req)));
   }),
 );
 
@@ -389,7 +405,7 @@ router.get(
     const period = ['day', 'week', 'month'].includes(req.query.period)
       ? req.query.period
       : 'day';
-    res.json(await adminService.getUsageTrends(period));
+    res.json(await adminService.getUsageTrends(period, tenantScope(req)));
   }),
 );
 
@@ -402,7 +418,7 @@ router.get(
     if (!isDate(from) || !isDate(to)) {
       throw errors.validation('from and to are required as YYYY-MM-DD dates.', 'from');
     }
-    res.json(await adminService.getBillingReconciliation(from, to));
+    res.json(await adminService.getBillingReconciliation(from, to, tenantScope(req)));
   }),
 );
 

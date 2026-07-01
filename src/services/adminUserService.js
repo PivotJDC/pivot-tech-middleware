@@ -18,6 +18,7 @@ const cache = require('../cache');
 const crypto = require('../utils/crypto');
 const emailClient = require('../integrations/email');
 const emailTemplates = require('./emailTemplates');
+const { DEFAULT_TENANT_ID } = require('./tenantService');
 const { errors, AppError } = require('../middleware/errorHandler');
 const { logger } = require('../utils/logger');
 
@@ -43,7 +44,7 @@ function issueToken(user) {
     throw new AppError('INTERNAL_ERROR', 'Admin authentication is not configured.');
   }
   return jwt.sign(
-    { sub: user.username, role: user.role },
+    { sub: user.username, role: user.role, tenant_id: user.tenant_id },
     config.admin.jwtSecret,
     { algorithm: 'HS256', expiresIn: config.admin.jwtTtl },
   );
@@ -51,19 +52,22 @@ function issueToken(user) {
 
 /**
  * Validate credentials and, on success, issue a token + stamp last_login_at.
- * @returns {Promise<{ token, username, role } | null>} null on any failure.
+ * An admin belongs to a specific tenant: when `tenantId` is given the lookup is
+ * scoped to it (so usernames only need to be unique per tenant). Omitting it
+ * (e.g. legacy/tests) matches by username alone.
+ * @returns {Promise<{ token, username, role, tenant_id } | null>} null on failure.
  */
-async function login(username, password) {
+async function login(username, password, tenantId) {
   if (!username || !password) return null;
 
-  const { rows } = await db.query(
-    'SELECT * FROM admin_users WHERE username = $1',
-    [username],
-  );
+  const params = [username];
+  let where = 'username = $1';
+  if (tenantId) {
+    params.push(tenantId);
+    where += ` AND tenant_id = $${params.length}`;
+  }
+  const { rows } = await db.query(`SELECT * FROM admin_users WHERE ${where}`, params);
   const user = rows[0];
-  // Compare even when the user is missing? bcrypt needs a hash; a missing user
-  // returns null quickly. The timing difference is acceptable for an
-  // IP-rate-limited admin login at MVP scale.
   if (!user) return null;
 
   const ok = await crypto.verifyPassword(password, user.password_hash);
@@ -75,7 +79,9 @@ async function login(username, password) {
   );
   logger.info({ adminUserId: user.id, username: user.username }, 'admin login');
 
-  return { token: issueToken(user), username: user.username, role: user.role };
+  return {
+    token: issueToken(user), username: user.username, role: user.role, tenant_id: user.tenant_id,
+  };
 }
 
 /**
@@ -99,15 +105,17 @@ async function createAdminUser(input = {}) {
   }
 
   const passwordHash = await crypto.hashPassword(password);
+  // The admin belongs to a tenant; default to MobilityNet (backward compatible).
+  const tenantId = input.tenant_id || DEFAULT_TENANT_ID;
 
   try {
     const { rows } = await db.query(
-      `INSERT INTO admin_users (username, email, password_hash, role)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, username, email, role, created_at, last_login_at`,
-      [username, email, passwordHash, role],
+      `INSERT INTO admin_users (username, email, password_hash, role, tenant_id)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, username, email, role, tenant_id, created_at, last_login_at`,
+      [username, email, passwordHash, role, tenantId],
     );
-    logger.info({ username, role }, 'admin user created');
+    logger.info({ username, role, tenantId }, 'admin user created');
 
     // Best-effort invite email with the plaintext temporary password. Never let
     // an email failure undo or block the (already committed) user creation.
@@ -135,12 +143,22 @@ async function countAdminUsers() {
   return rows[0].total;
 }
 
-/** List all admin users (never includes password_hash). */
-async function listAdminUsers() {
+/**
+ * List admin users (never includes password_hash). When tenantId is given, only
+ * that tenant's admins; otherwise all (super_admin cross-tenant view).
+ */
+async function listAdminUsers(tenantId) {
+  const params = [];
+  let where = '';
+  if (tenantId) {
+    params.push(tenantId);
+    where = 'WHERE tenant_id = $1';
+  }
   const { rows } = await db.query(
-    `SELECT id, username, email, role, created_at, last_login_at
-       FROM admin_users
+    `SELECT id, username, email, role, tenant_id, created_at, last_login_at
+       FROM admin_users ${where}
        ORDER BY created_at`,
+    params,
   );
   return rows;
 }

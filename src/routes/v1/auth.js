@@ -29,7 +29,7 @@ router.post(
     }
     // Throws NOT_FOUND if no matching account — surfaced as a 404.
     const account = await accountService.getAccountByEmail(email);
-    const jwt = token.signCustomerToken({ sub: account.id });
+    const jwt = token.signCustomerToken({ sub: account.id, tenant_id: account.tenant_id });
     res.json({
       token: jwt,
       account_id: account.id,

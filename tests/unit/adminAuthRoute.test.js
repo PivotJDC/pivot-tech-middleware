@@ -55,7 +55,7 @@ describe('POST /admin/login', () => {
     const res = await request(app).post('/admin/login').send({ username: 'jim', password: 'pw' });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ token: 'tok', username: 'jim', role: 'super_admin' });
-    expect(adminUserService.login).toHaveBeenCalledWith('jim', 'pw');
+    expect(adminUserService.login).toHaveBeenCalledWith('jim', 'pw', undefined);
   });
 
   it('returns 401 on invalid credentials', async () => {

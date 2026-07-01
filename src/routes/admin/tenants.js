@@ -14,6 +14,7 @@
  */
 const express = require('express');
 const tenantService = require('../../services/tenantService');
+const adminService = require('../../services/adminService');
 const { asyncHandler, errors } = require('../../middleware/errorHandler');
 const { logger } = require('../../utils/logger');
 
@@ -44,6 +45,14 @@ router.get(
     const tenant = await tenantService.getTenantById(req.params.id);
     if (!tenant) throw errors.notFound('Tenant not found.');
     res.json(tenant);
+  }),
+);
+
+// Accounts belonging to a specific tenant (super_admin cross-tenant view).
+router.get(
+  '/:id/accounts',
+  asyncHandler(async (req, res) => {
+    res.json(await adminService.listAccounts({ ...req.query, tenantId: req.params.id }));
   }),
 );
 

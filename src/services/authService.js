@@ -92,7 +92,7 @@ async function verifyCode(rawEmail, code) {
   const account = await findAccount(email);
   if (!account) return null;
 
-  const jwt = token.signCustomerToken({ sub: account.id });
+  const jwt = token.signCustomerToken({ sub: account.id, tenant_id: account.tenant_id });
   return { token: jwt, account };
 }
 

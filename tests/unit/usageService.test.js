@@ -238,7 +238,7 @@ describe('getCurrentPeriodSummary', () => {
         total_accounts: '3', total_data_mb: '900', total_overage_mb: '0', total_overage_charges: '0', total_sms_counts: '10',
       }],
     });
-    const res = await usageService.getCurrentPeriodSummary(NOW);
+    const res = await usageService.getCurrentPeriodSummary({ now: NOW });
     expect(res.totalAccounts).toBe(3);
     expect(db.query.mock.calls[0][1]).toEqual(['2026-06-01', '2026-06-24']);
   });

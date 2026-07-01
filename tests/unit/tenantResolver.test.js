@@ -5,14 +5,17 @@ jest.mock('../../src/utils/logger', () => ({
 }));
 
 const tenantService = require('../../src/services/tenantService');
-const { tenantResolver } = require('../../src/middleware/tenantResolver');
+const { tenantResolver, resetCache } = require('../../src/middleware/tenantResolver');
 
 function run(req) {
   const next = jest.fn();
   return tenantResolver(req, {}, next).then(() => ({ req, next }));
 }
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  resetCache(); // the resolver caches by domain/slug for 60s across calls
+});
 
 describe('tenantResolver', () => {
   it('resolves by Host header domain first', async () => {

@@ -51,6 +51,8 @@ router.post(
       last_name: lastName,
       service_address: serviceAddress,
       billing_address: billingAddress,
+      // Owning tenant (resolved from Host/slug/JWT); defaults to MobilityNet.
+      tenant_id: req.tenant && req.tenant.id,
     });
     // Drop raw_token from the response — the URL/QR/deep link already embed it.
     const { raw_token: rawToken, ...provisioning } = await provisioningService.issueToken(account);
@@ -99,9 +101,10 @@ router.get(
   requireSelf,
   asyncHandler(async (req, res) => {
     const { limit, offset } = req.query;
+    const tenantId = req.tenant && req.tenant.id;
     const [calls, messages] = await Promise.all([
-      cdrService.getCallHistory(req.params.id, { limit, offset }),
-      cdrService.getMessageHistory(req.params.id, { limit, offset }),
+      cdrService.getCallHistory(req.params.id, { limit, offset }, tenantId),
+      cdrService.getMessageHistory(req.params.id, { limit, offset }, tenantId),
     ]);
     res.json({ calls, messages });
   }),
@@ -113,7 +116,7 @@ router.get(
   authenticate,
   requireSelf,
   asyncHandler(async (req, res) => {
-    res.json(await adminService.getAccountUsageStats(req.params.id));
+    res.json(await adminService.getAccountUsageStats(req.params.id, req.tenant && req.tenant.id));
   }),
 );
 

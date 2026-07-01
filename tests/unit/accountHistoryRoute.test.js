@@ -39,8 +39,8 @@ describe('GET /v1/accounts/:id/history', () => {
     expect(res.status).toBe(200);
     expect(res.body.calls).toHaveLength(1);
     expect(res.body.messages).toHaveLength(1);
-    expect(cdrService.getCallHistory).toHaveBeenCalledWith('acc-1', { limit: '25', offset: '5' });
-    expect(cdrService.getMessageHistory).toHaveBeenCalledWith('acc-1', { limit: '25', offset: '5' });
+    expect(cdrService.getCallHistory).toHaveBeenCalledWith('acc-1', { limit: '25', offset: '5' }, undefined);
+    expect(cdrService.getMessageHistory).toHaveBeenCalledWith('acc-1', { limit: '25', offset: '5' }, undefined);
   });
 });
 
@@ -52,6 +52,6 @@ describe('GET /v1/accounts/:id/usage', () => {
     const res = await request(app).get('/v1/accounts/acc-1/usage');
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ data_used_mb: 12400, voice_minutes: 47 });
-    expect(adminService.getAccountUsageStats).toHaveBeenCalledWith('acc-1');
+    expect(adminService.getAccountUsageStats).toHaveBeenCalledWith('acc-1', undefined);
   });
 });

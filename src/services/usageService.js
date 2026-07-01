@@ -10,6 +10,7 @@
  */
 const db = require('../db');
 const bics = require('../integrations/bics');
+const { DEFAULT_TENANT_ID } = require('./tenantService');
 const { logger } = require('../utils/logger');
 
 // Plan economics. capMb is the full-speed allowance; overagePerGb is the $/GB
@@ -78,11 +79,12 @@ const UPSERT_SQL = `
   INSERT INTO usage_records (
     account_id, endpoint_id, period_start, period_end,
     data_uplink_mb, data_downlink_mb, data_total_mb, data_cost,
-    sms_count, plan_data_cap_mb, overage_mb, overage_charge, polled_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+    sms_count, plan_data_cap_mb, overage_mb, overage_charge, tenant_id, polled_at
+  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
   ON CONFLICT (account_id, period_start, period_end)
   DO UPDATE SET
     endpoint_id = EXCLUDED.endpoint_id,
+    tenant_id = EXCLUDED.tenant_id,
     data_uplink_mb = EXCLUDED.data_uplink_mb,
     data_downlink_mb = EXCLUDED.data_downlink_mb,
     data_total_mb = EXCLUDED.data_total_mb,
@@ -137,6 +139,7 @@ async function pollUsageForAccount(account, now = new Date()) {
     capMb,
     overageMb,
     overageCharge,
+    account.tenant_id || DEFAULT_TENANT_ID,
   ];
 
   const result = await db.query(UPSERT_SQL, params);
@@ -171,7 +174,7 @@ async function pollUsageForAccount(account, now = new Date()) {
  */
 async function pollAllActiveAccounts(now = new Date()) {
   const { rows: accounts } = await db.query(
-    `SELECT id, bics_endpoint_id, plan
+    `SELECT id, bics_endpoint_id, plan, tenant_id
        FROM accounts
       WHERE status = 'active' AND bics_endpoint_id IS NOT NULL`,
   );
@@ -229,7 +232,13 @@ async function getUsageForAccount(accountId) {
  * @param {string} periodEnd - YYYY-MM-DD
  * @returns {Promise<object>} aggregate totals for the period.
  */
-async function getUsageSummaryForPeriod(periodStart, periodEnd) {
+async function getUsageSummaryForPeriod(periodStart, periodEnd, tenantId) {
+  const params = [periodStart, periodEnd];
+  let where = 'period_start >= $1 AND period_end <= $2';
+  if (tenantId) {
+    params.push(tenantId);
+    where += ` AND tenant_id = $${params.length}`;
+  }
   const result = await db.query(
     `SELECT
        COUNT(DISTINCT account_id)            AS total_accounts,
@@ -238,8 +247,8 @@ async function getUsageSummaryForPeriod(periodStart, periodEnd) {
        COALESCE(SUM(overage_charge), 0)      AS total_overage_charges,
        COALESCE(SUM(sms_count), 0)           AS total_sms_counts
      FROM usage_records
-     WHERE period_start >= $1 AND period_end <= $2`,
-    [periodStart, periodEnd],
+     WHERE ${where}`,
+    params,
   );
   const row = result.rows[0] || {};
   return {
@@ -252,12 +261,13 @@ async function getUsageSummaryForPeriod(periodStart, periodEnd) {
 }
 
 /**
- * Usage summary for the current billing period (1st of month → today, UTC).
- * @param {Date} [now]
+ * Usage summary for the current billing period (1st of month → today, UTC),
+ * optionally scoped to a tenant.
+ * @param {{ now?: Date, tenantId?: string }} [opts]
  */
-async function getCurrentPeriodSummary(now = new Date()) {
+async function getCurrentPeriodSummary({ now = new Date(), tenantId } = {}) {
   const { periodStart, periodEnd } = billingPeriod(now);
-  return getUsageSummaryForPeriod(periodStart, periodEnd);
+  return getUsageSummaryForPeriod(periodStart, periodEnd, tenantId);
 }
 
 module.exports = {

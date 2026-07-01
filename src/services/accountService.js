@@ -14,6 +14,7 @@ const didOrchestration = require('./didOrchestrationService');
 const billingMigration = require('./billingMigrationService');
 const telgoo5Service = require('./telgoo5Service');
 const bics = require('../integrations/bics');
+const { DEFAULT_TENANT_ID } = require('./tenantService');
 const crypto = require('../utils/crypto');
 const e164 = require('../utils/e164');
 const { logger } = require('../utils/logger');
@@ -266,6 +267,9 @@ async function provisionAndPersistEsim(account) {
  */
 async function createAccount(input = {}) {
   const email = normalizeEmail(input.email);
+  // The tenant that owns this account + its DID. Defaults to MobilityNet so
+  // single-tenant signups are unchanged.
+  const tenantId = input.tenant_id || DEFAULT_TENANT_ID;
   // Market is optional. Any US area code is allowed; default to "direct" for
   // numbers outside a launched market (didOrchestration searches by area code).
   const market = (typeof input.market === 'string' && input.market.trim())
@@ -331,8 +335,8 @@ async function createAccount(input = {}) {
             sip_password_hash, parent_account_id, line_label,
             external_billing_provider, broadband_provider, broadband_account_id, promo_code,
             first_name, last_name, service_address, billing_address,
-            e911_address_id, e911_enabled)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+            e911_address_id, e911_enabled, tenant_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
          RETURNING *`,
         [
           email,
@@ -354,18 +358,20 @@ async function createAccount(input = {}) {
           billingAddress,
           credentials.e911AddressId || null,
           credentials.e911Enabled || false,
+          tenantId,
         ],
       );
       const accountId = inserted.rows[0].id;
       await client.query(
-        `INSERT INTO dids (e164, area_code, market, signalwire_sid, account_id, status)
-         VALUES ($1, $2, $3, $4, $5, 'assigned')`,
+        `INSERT INTO dids (e164, area_code, market, signalwire_sid, account_id, status, tenant_id)
+         VALUES ($1, $2, $3, $4, $5, 'assigned', $6)`,
         [
           credentials.phoneE164,
           credentials.areaCode,
           market,
           credentials.signalwireSid,
           accountId,
+          tenantId,
         ],
       );
       return inserted.rows[0];

@@ -18,7 +18,7 @@ beforeEach(() => {
 describe('recordCall', () => {
   it('inserts a new outbound call owned by the from-number account', async () => {
     db.query
-      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] }) // accountIdForNumber(from)
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID, tenant_id: 'ten-1' }] }) // accountIdForNumber(from)
       .mockResolvedValueOnce({ rows: [] }) // UPDATE (no existing row)
       .mockResolvedValueOnce({ rows: [{ id: 'cr-1', direction: 'outbound' }] }); // INSERT
 
@@ -36,13 +36,14 @@ describe('recordCall', () => {
     expect(db.query.mock.calls[0][1]).toEqual([OUR_DID]);
     const insertParams = db.query.mock.calls[2][1];
     expect(insertParams[0]).toBe(ACCOUNT_ID);
-    expect(insertParams[2]).toBe('outbound');
-    expect(insertParams[6]).toBe(42); // duration
+    expect(insertParams[1]).toBe('ten-1'); // tenant_id
+    expect(insertParams[3]).toBe('outbound');
+    expect(insertParams[7]).toBe(42); // duration
   });
 
   it('updates an existing call (upsert by call_sid) without inserting', async () => {
     db.query
-      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] }) // lookup
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID, tenant_id: 'ten-1' }] }) // lookup
       .mockResolvedValueOnce({ rows: [{ id: 'cr-1', status: 'completed' }] }); // UPDATE hit
 
     const row = await cdr.recordCall({
@@ -57,7 +58,7 @@ describe('recordCall', () => {
   it('infers inbound direction when no direction is given and the to-number is ours', async () => {
     db.query
       .mockResolvedValueOnce({ rows: [] }) // from not ours
-      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] }) // to is ours -> inbound
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID, tenant_id: 'ten-1' }] }) // to is ours -> inbound
       .mockResolvedValueOnce({ rows: [] }) // UPDATE miss
       .mockResolvedValueOnce({ rows: [{ id: 'cr-2', direction: 'inbound' }] }); // INSERT
 
@@ -66,7 +67,7 @@ describe('recordCall', () => {
     });
 
     expect(row.direction).toBe('inbound');
-    expect(db.query.mock.calls[3][1][2]).toBe('inbound');
+    expect(db.query.mock.calls[3][1][3]).toBe('inbound');
   });
 
   it('ignores a call for a number we do not own', async () => {
@@ -87,7 +88,7 @@ describe('recordCall', () => {
 describe('recordMessage', () => {
   it('inserts a new inbound message owned by the to-number account', async () => {
     db.query
-      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] }) // lookup(to) for inbound
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID, tenant_id: 'ten-1' }] }) // lookup(to) for inbound
       .mockResolvedValueOnce({ rows: [] }) // UPDATE miss
       .mockResolvedValueOnce({ rows: [{ id: 'mr-1', direction: 'inbound', message_type: 'sms' }] });
 
@@ -97,12 +98,12 @@ describe('recordMessage', () => {
 
     expect(row).toMatchObject({ id: 'mr-1', message_type: 'sms' });
     expect(db.query.mock.calls[0][1]).toEqual([OUR_DID]);
-    expect(db.query.mock.calls[2][1][2]).toBe('inbound');
+    expect(db.query.mock.calls[2][1][3]).toBe('inbound');
   });
 
   it('upserts by message_id (status update) without inserting', async () => {
     db.query
-      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] })
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID, tenant_id: 'ten-1' }] })
       .mockResolvedValueOnce({ rows: [{ id: 'mr-1', status: 'delivered' }] }); // UPDATE hit
 
     const row = await cdr.recordMessage({
@@ -114,13 +115,13 @@ describe('recordMessage', () => {
 
   it('normalizes an unknown message_type to sms', async () => {
     db.query
-      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] })
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID, tenant_id: 'ten-1' }] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [{ id: 'mr-2' }] });
     await cdr.recordMessage({
       messageId: 'MSG2', direction: 'outbound', from: OUR_DID, to: OTHER, status: 'sent', messageType: 'weird',
     });
-    expect(db.query.mock.calls[2][1][6]).toBe('sms');
+    expect(db.query.mock.calls[2][1][7]).toBe('sms');
   });
 });
 

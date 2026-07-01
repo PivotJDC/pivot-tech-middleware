@@ -23,6 +23,7 @@ const {
   notFoundHandler, errorHandler, asyncHandler, errors,
 } = require('./middleware/errorHandler');
 const adminUserService = require('./services/adminUserService');
+const { tenantResolver } = require('./middleware/tenantResolver');
 const accountsRouter = require('./routes/v1/accounts');
 const authRouter = require('./routes/v1/auth');
 const didsRouter = require('./routes/v1/dids');
@@ -108,6 +109,11 @@ function createApp() {
     limit: '1mb',
     verify: (req, res, buf) => { req.rawBody = buf; },
   }));
+
+  // Resolve the active tenant (req.tenant) for every request, after body
+  // parsing and before the routes. Best-effort + 60s cached; falls back to the
+  // default MobilityNet tenant so single-tenant behavior is unchanged.
+  app.use(tenantResolver);
 
   // Liveness probe for the App Runner health check: answers 200 as long as the
   // process is up and the event loop is serving — no dependency checks, so a

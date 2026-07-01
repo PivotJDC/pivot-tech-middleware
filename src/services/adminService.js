@@ -45,6 +45,8 @@ async function listAccounts(filters = {}) {
     params.push(`%${filters.search}%`);
     conditions.push(`(email ILIKE $${params.length} OR phone_e164 ILIKE $${params.length})`);
   }
+  // Tenant scope (omitted => all tenants, for super_admin cross-tenant view).
+  if (filters.tenantId) { params.push(filters.tenantId); conditions.push(`tenant_id = $${params.length}`); }
   const where = whereClause(conditions);
 
   const { total } = (await db.query(`SELECT COUNT(*)::int AS total FROM accounts ${where}`, params))
@@ -73,6 +75,7 @@ async function listDids(filters = {}) {
     params.push(`%${filters.search}%`);
     conditions.push(`e164 ILIKE $${params.length}`);
   }
+  if (filters.tenantId) { params.push(filters.tenantId); conditions.push(`tenant_id = $${params.length}`); }
   const where = whereClause(conditions);
 
   const { total } = (await db.query(`SELECT COUNT(*)::int AS total FROM dids ${where}`, params))
@@ -95,6 +98,11 @@ async function listPorts(filters = {}) {
   const params = [];
   if (filters.status) { params.push(filters.status); conditions.push(`status = $${params.length}`); }
   if (filters.carrier) { params.push(filters.carrier); conditions.push(`losing_carrier = $${params.length}`); }
+  // port_requests has no tenant_id; scope via the owning account.
+  if (filters.tenantId) {
+    params.push(filters.tenantId);
+    conditions.push(`account_id IN (SELECT id FROM accounts WHERE tenant_id = $${params.length})`);
+  }
   const where = whereClause(conditions);
 
   const { total } = (await db.query(`SELECT COUNT(*)::int AS total FROM port_requests ${where}`, params))
@@ -145,15 +153,24 @@ function countsByStatus(rows) {
 }
 
 /** Operational metrics: active accounts, port success rate, DID inventory. */
-async function getMetrics() {
+async function getMetrics(tenantId) {
+  const p = tenantId ? [tenantId] : [];
+  const acctWhere = tenantId ? 'WHERE tenant_id = $1' : '';
+  const didWhere = tenantId ? 'WHERE tenant_id = $1' : '';
+  // port_requests has no tenant_id; scope via the owning account.
+  const portWhere = tenantId ? 'WHERE account_id IN (SELECT id FROM accounts WHERE tenant_id = $1)' : '';
+
   const accountRows = (await db.query(
-    'SELECT status, COUNT(*)::int AS count FROM accounts GROUP BY status',
+    `SELECT status, COUNT(*)::int AS count FROM accounts ${acctWhere} GROUP BY status`,
+    p,
   )).rows;
   const portRows = (await db.query(
-    'SELECT status, COUNT(*)::int AS count FROM port_requests GROUP BY status',
+    `SELECT status, COUNT(*)::int AS count FROM port_requests ${portWhere} GROUP BY status`,
+    p,
   )).rows;
   const didRows = (await db.query(
-    'SELECT status, COUNT(*)::int AS count FROM dids GROUP BY status',
+    `SELECT status, COUNT(*)::int AS count FROM dids ${didWhere} GROUP BY status`,
+    p,
   )).rows;
 
   const accounts = countsByStatus(accountRows);
@@ -194,7 +211,9 @@ async function getMetrics() {
  * in a single round-trip. Missing data yields zeros (never null).
  * @returns {Promise<{ data_used_mb, data_cap_mb, voice_minutes, sms_count, mms_count }>}
  */
-async function getAccountUsageStats(accountId) {
+async function getAccountUsageStats(accountId, tenantId) {
+  const t = tenantId ? ' AND tenant_id = $2' : '';
+  const params = tenantId ? [accountId, tenantId] : [accountId];
   const { rows } = await db.query(
     `SELECT
        COALESCE(u.data_total_mb, 0)    AS data_used_mb,
@@ -206,24 +225,24 @@ async function getAccountUsageStats(accountId) {
      LEFT JOIN LATERAL (
        SELECT data_total_mb, plan_data_cap_mb
          FROM usage_records
-        WHERE account_id = base.account_id
+        WHERE account_id = base.account_id${t}
         ORDER BY period_start DESC, polled_at DESC
         LIMIT 1
      ) u ON TRUE
      LEFT JOIN LATERAL (
        SELECT FLOOR(COALESCE(SUM(duration_seconds), 0) / 60.0)::int AS voice_minutes
          FROM call_records
-        WHERE account_id = base.account_id
+        WHERE account_id = base.account_id${t}
           AND created_at >= date_trunc('month', now())
      ) c ON TRUE
      LEFT JOIN LATERAL (
        SELECT COUNT(*) FILTER (WHERE message_type = 'sms') AS sms_count,
               COUNT(*) FILTER (WHERE message_type = 'mms') AS mms_count
          FROM message_records
-        WHERE account_id = base.account_id
+        WHERE account_id = base.account_id${t}
           AND created_at >= date_trunc('month', now())
      ) m ON TRUE`,
-    [accountId],
+    params,
   );
   const r = rows[0] || {};
   return {
@@ -241,7 +260,9 @@ async function getAccountUsageStats(accountId) {
  * returns all 24 hours (zero-filled), ordered 0..23.
  * @returns {Promise<Array<{ hour, calls, messages }>>}
  */
-async function getHourlyActivity() {
+async function getHourlyActivity(tenantId) {
+  const t = tenantId ? ' AND tenant_id = $1' : '';
+  const params = tenantId ? [tenantId] : [];
   const { rows } = await db.query(
     `SELECT h.hour AS hour,
             COALESCE(c.calls, 0)    AS calls,
@@ -250,16 +271,17 @@ async function getHourlyActivity() {
        LEFT JOIN (
          SELECT EXTRACT(HOUR FROM created_at)::int AS hour, COUNT(*) AS calls
            FROM call_records
-          WHERE created_at >= date_trunc('month', now())
+          WHERE created_at >= date_trunc('month', now())${t}
           GROUP BY 1
        ) c ON c.hour = h.hour
        LEFT JOIN (
          SELECT EXTRACT(HOUR FROM created_at)::int AS hour, COUNT(*) AS messages
            FROM message_records
-          WHERE created_at >= date_trunc('month', now())
+          WHERE created_at >= date_trunc('month', now())${t}
           GROUP BY 1
        ) m ON m.hour = h.hour
       ORDER BY h.hour`,
+    params,
   );
   return rows.map((r) => ({
     hour: Number(r.hour),
@@ -274,11 +296,14 @@ async function getHourlyActivity() {
  * usage_records period). Always returns all six buckets in order, zero-filled.
  * @returns {Promise<Array<{ bucket, count }>>}
  */
-async function getUsageDistribution() {
+async function getUsageDistribution(tenantId) {
+  const t = tenantId ? 'WHERE tenant_id = $1' : '';
+  const params = tenantId ? [tenantId] : [];
   const { rows } = await db.query(
     `WITH latest AS (
        SELECT DISTINCT ON (account_id) account_id, data_total_mb
          FROM usage_records
+         ${t}
         ORDER BY account_id, period_start DESC, polled_at DESC
      )
      SELECT b.bucket AS bucket, COALESCE(cnt.count, 0) AS count
@@ -301,6 +326,7 @@ async function getUsageDistribution() {
           GROUP BY 1
        ) cnt ON cnt.bucket = b.bucket
       ORDER BY b.ord`,
+    params,
   );
   return rows.map((r) => ({ bucket: r.bucket, count: Number(r.count) }));
 }
@@ -311,7 +337,9 @@ async function getUsageDistribution() {
  * granularity). Zero-filled across all 24 hours.
  * @returns {Promise<Array<{ hour, voice_minutes, call_count }>>}
  */
-async function getHourlyDataVoice() {
+async function getHourlyDataVoice(tenantId) {
+  const t = tenantId ? ' AND tenant_id = $1' : '';
+  const params = tenantId ? [tenantId] : [];
   const { rows } = await db.query(
     `SELECT h.hour AS hour,
             COALESCE(c.voice_minutes, 0) AS voice_minutes,
@@ -322,10 +350,11 @@ async function getHourlyDataVoice() {
                 FLOOR(COALESCE(SUM(duration_seconds), 0) / 60.0)::int AS voice_minutes,
                 COUNT(*) AS call_count
            FROM call_records
-          WHERE created_at >= date_trunc('month', now())
+          WHERE created_at >= date_trunc('month', now())${t}
           GROUP BY 1
        ) c ON c.hour = h.hour
       ORDER BY h.hour`,
+    params,
   );
   return rows.map((r) => ({
     hour: Number(r.hour),
@@ -339,7 +368,9 @@ async function getHourlyDataVoice() {
  * month: sent (outbound) vs received (inbound). Zero-filled across 24 hours.
  * @returns {Promise<Array<{ hour, sent, received }>>}
  */
-async function getHourlyMessages() {
+async function getHourlyMessages(tenantId) {
+  const t = tenantId ? ' AND tenant_id = $1' : '';
+  const params = tenantId ? [tenantId] : [];
   const { rows } = await db.query(
     `SELECT h.hour AS hour,
             COALESCE(m.sent, 0)     AS sent,
@@ -350,10 +381,11 @@ async function getHourlyMessages() {
                 COUNT(*) FILTER (WHERE direction = 'outbound') AS sent,
                 COUNT(*) FILTER (WHERE direction = 'inbound')  AS received
            FROM message_records
-          WHERE created_at >= date_trunc('month', now())
+          WHERE created_at >= date_trunc('month', now())${t}
           GROUP BY 1
        ) m ON m.hour = h.hour
       ORDER BY h.hour`,
+    params,
   );
   return rows.map((r) => ({
     hour: Number(r.hour),
@@ -376,14 +408,17 @@ const USAGE_TREND_PERIODS = {
  * @param {'day'|'week'|'month'} [period='day']
  * @returns {Promise<Array<{ label: string, total_mb: number }>>}
  */
-async function getUsageTrends(period = 'day') {
-  const spec = USAGE_TREND_PERIODS[period] || USAGE_TREND_PERIODS.day;
+async function getUsageTrends(period, tenantId) {
+  const spec = USAGE_TREND_PERIODS[period] || USAGE_TREND_PERIODS.day; // undefined -> day
+  const t = tenantId ? ' AND tenant_id = $1' : '';
+  const params = tenantId ? [tenantId] : [];
   const { rows } = await db.query(
     `SELECT ${spec.label} AS label, SUM(data_total_mb) AS total_mb
        FROM usage_records
-      WHERE period_end >= ${spec.since}
+      WHERE period_end >= ${spec.since}${t}
       GROUP BY 1
       ORDER BY 1`,
+    params,
   );
   return rows.map((r) => ({
     // period_end / date_trunc(...)::date come back as Date objects; normalize to
@@ -405,29 +440,31 @@ const BLENDED_DATA_RATE_PER_GB = 2.0;
  * @param {string} from
  * @param {string} to
  */
-async function getBillingReconciliation(from, to) {
+async function getBillingReconciliation(from, to, tenantId) {
+  const tf = tenantId ? ' AND tenant_id = $3' : '';
+  const params = tenantId ? [from, to, tenantId] : [from, to];
   const [telnyxRes, bicsRes] = await Promise.all([
     db.query(
       `SELECT
          (SELECT COALESCE(FLOOR(SUM(duration_seconds) / 60.0), 0)::int
             FROM call_records
-           WHERE created_at BETWEEN $1 AND $2)                    AS voice_minutes,
+           WHERE created_at BETWEEN $1 AND $2${tf})               AS voice_minutes,
          (SELECT COUNT(*) FROM call_records
-           WHERE created_at BETWEEN $1 AND $2)                    AS voice_calls,
+           WHERE created_at BETWEEN $1 AND $2${tf})               AS voice_calls,
          (SELECT COUNT(*) FROM message_records
-           WHERE created_at BETWEEN $1 AND $2
+           WHERE created_at BETWEEN $1 AND $2${tf}
              AND message_type = 'sms')                            AS sms_count,
          (SELECT COUNT(*) FROM message_records
-           WHERE created_at BETWEEN $1 AND $2
+           WHERE created_at BETWEEN $1 AND $2${tf}
              AND message_type = 'mms')                            AS mms_count`,
-      [from, to],
+      params,
     ),
     db.query(
       `SELECT COALESCE(SUM(data_total_mb), 0) AS data_total_mb,
               COALESCE(SUM(data_cost), 0)     AS data_cost
          FROM usage_records
-        WHERE period_start >= $1 AND period_end <= $2`,
-      [from, to],
+        WHERE period_start >= $1 AND period_end <= $2${tf}`,
+      params,
     ),
   ]);
 

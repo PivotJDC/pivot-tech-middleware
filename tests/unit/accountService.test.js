@@ -380,6 +380,8 @@ describe('createAccount', () => {
     // $18 e911_address_id, $19 e911_enabled — from the assignDid credentials.
     expect(insertedParams[17]).toBe('addr-9');
     expect(insertedParams[18]).toBe(true);
+    // $20 tenant_id — defaults to the MobilityNet tenant when none is supplied.
+    expect(insertedParams[19]).toBe('00000000-0000-4000-a000-000000000001');
 
     // E911 enrollment context flows through to assignDid.
     expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null, {
