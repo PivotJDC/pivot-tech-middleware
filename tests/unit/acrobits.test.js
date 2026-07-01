@@ -16,14 +16,34 @@ describe('acrobits.buildAccountXml', () => {
     expect(xml).toContain('<authUsername>pivottech-abc</authUsername>');
     expect(xml).toContain('<password>sip-secret-123</password>');
     expect(xml).toContain('<domain>sip.telnyx.com</domain>');
-    expect(xml).toContain('<port>5061</port>');
-    expect(xml).toContain('<transport>TLS</transport>');
-    expect(xml).toContain('<srtp>required</srtp>');
+    // UDP without SRTP — TLS/SRTP broke SIP registration.
+    expect(xml).toContain('<port>5060</port>');
+    expect(xml).toContain('<transport>UDP</transport>');
+    expect(xml).not.toContain('<srtp>');
+    expect(xml).not.toContain('<transport>TLS</transport>');
+    expect(xml).not.toContain('<port>5061</port>');
     expect(xml).toContain('<callerID>+12085550100</callerID>');
     expect(xml).toContain('<displayName>(208) 555-0100</displayName>');
     expect(xml).toContain('<codecPriority>OPUS,ULAW,ALAW</codecPriority>');
     // The gencred must NOT be the From-header username anymore.
     expect(xml).not.toContain('<username>pivottech-abc</username>');
+  });
+
+  it('includes HTTP messaging URLs with Acrobits template variables', () => {
+    const xml = acrobits.buildAccountXml(params);
+    expect(xml).toContain('<httpMessaging>');
+    expect(xml).toContain(
+      '/v1/acrobits/send?username=%USERNAME%&amp;password=%PASSWORD%'
+      + '&amp;to=%TO_NUMBER%&amp;body=%MESSAGE_BODY%',
+    );
+    expect(xml).toContain(
+      '/v1/acrobits/fetch?username=%USERNAME%&amp;password=%PASSWORD%'
+      + '&amp;last_known=%LAST_KNOWN_SMS_ID%',
+    );
+    // URL prefix comes from config.provisioning.baseUrl (default in tests).
+    const config = require('../../src/config'); // eslint-disable-line global-require
+    expect(xml).toContain(`<sendURL>${config.provisioning.baseUrl}/v1/acrobits/send?`);
+    expect(xml).toContain(`<fetchURL>${config.provisioning.baseUrl}/v1/acrobits/fetch?`);
   });
 
   it('escapes XML special characters in values', () => {
