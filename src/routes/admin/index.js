@@ -353,4 +353,15 @@ router.get(
   }),
 );
 
+// Total data usage over time, bucketed by day (30) / week (12) / month (12).
+router.get(
+  '/analytics/usage-trends',
+  asyncHandler(async (req, res) => {
+    const period = ['day', 'week', 'month'].includes(req.query.period)
+      ? req.query.period
+      : 'day';
+    res.json(await adminService.getUsageTrends(period));
+  }),
+);
+
 module.exports = router;

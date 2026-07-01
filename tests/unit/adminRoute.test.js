@@ -234,4 +234,20 @@ describe('admin API', () => {
     expect(res.body[0]).toEqual({ hour: 10, sent: 7, received: 3 });
     expect(adminService.getHourlyMessages).toHaveBeenCalled();
   });
+
+  it('GET /admin/analytics/usage-trends passes a valid period through', async () => {
+    adminService.getUsageTrends.mockResolvedValueOnce([{ label: '2026-06-01', total_mb: 45000 }]);
+    const res = await request(app).get('/admin/analytics/usage-trends?period=week');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toEqual({ label: '2026-06-01', total_mb: 45000 });
+    expect(adminService.getUsageTrends).toHaveBeenCalledWith('week');
+  });
+
+  it('GET /admin/analytics/usage-trends defaults an invalid/absent period to day', async () => {
+    adminService.getUsageTrends.mockResolvedValue([]);
+    await request(app).get('/admin/analytics/usage-trends');
+    await request(app).get('/admin/analytics/usage-trends?period=bogus');
+    expect(adminService.getUsageTrends).toHaveBeenNthCalledWith(1, 'day');
+    expect(adminService.getUsageTrends).toHaveBeenNthCalledWith(2, 'day');
+  });
 });

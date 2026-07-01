@@ -362,6 +362,37 @@ async function getHourlyMessages() {
   }));
 }
 
+// SQL fragments per trend period: how to bucket the label and how far back to
+// look. Keyed by the validated `period` so user input never reaches the query.
+const USAGE_TREND_PERIODS = {
+  day: { label: 'period_end', since: "now() - interval '30 days'" },
+  week: { label: "date_trunc('week', period_end)::date", since: "now() - interval '12 weeks'" },
+  month: { label: "date_trunc('month', period_end)::date", since: "now() - interval '12 months'" },
+};
+
+/**
+ * Total subscriber data usage over time, bucketed by day (last 30), ISO week
+ * (last 12), or month (last 12). Returns rows oldest-first.
+ * @param {'day'|'week'|'month'} [period='day']
+ * @returns {Promise<Array<{ label: string, total_mb: number }>>}
+ */
+async function getUsageTrends(period = 'day') {
+  const spec = USAGE_TREND_PERIODS[period] || USAGE_TREND_PERIODS.day;
+  const { rows } = await db.query(
+    `SELECT ${spec.label} AS label, SUM(data_total_mb) AS total_mb
+       FROM usage_records
+      WHERE period_end >= ${spec.since}
+      GROUP BY 1
+      ORDER BY 1`,
+  );
+  return rows.map((r) => ({
+    // period_end / date_trunc(...)::date come back as Date objects; normalize to
+    // a YYYY-MM-DD label string.
+    label: r.label instanceof Date ? r.label.toISOString().slice(0, 10) : String(r.label),
+    total_mb: Number(r.total_mb) || 0,
+  }));
+}
+
 module.exports = {
   listAccounts,
   listDids,
@@ -373,5 +404,6 @@ module.exports = {
   getUsageDistribution,
   getHourlyDataVoice,
   getHourlyMessages,
+  getUsageTrends,
   serializePort,
 };

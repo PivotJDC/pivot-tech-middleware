@@ -174,6 +174,41 @@ describe('getHourlyMessages', () => {
   });
 });
 
+describe('getUsageTrends', () => {
+  it('buckets by day over the last 30 days (default) and maps Date labels', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{ label: new Date('2026-07-01T00:00:00Z'), total_mb: '45000.500' }],
+    });
+    const rows = await adminService.getUsageTrends('day');
+    expect(rows[0]).toEqual({ label: '2026-07-01', total_mb: 45000.5 });
+    const sql = db.query.mock.calls[0][0];
+    expect(sql).toMatch(/period_end AS label/);
+    expect(sql).toMatch(/interval '30 days'/);
+  });
+
+  it('buckets by ISO week over the last 12 weeks', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await adminService.getUsageTrends('week');
+    const sql = db.query.mock.calls[0][0];
+    expect(sql).toMatch(/date_trunc\('week', period_end\)::date/);
+    expect(sql).toMatch(/interval '12 weeks'/);
+  });
+
+  it('buckets by month over the last 12 months', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await adminService.getUsageTrends('month');
+    const sql = db.query.mock.calls[0][0];
+    expect(sql).toMatch(/date_trunc\('month', period_end\)::date/);
+    expect(sql).toMatch(/interval '12 months'/);
+  });
+
+  it('falls back to the day query for an unknown period', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await adminService.getUsageTrends('century');
+    expect(db.query.mock.calls[0][0]).toMatch(/interval '30 days'/);
+  });
+});
+
 describe('listDids', () => {
   it('filters by market/status/area_code', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ total: 1 }] }).mockResolvedValueOnce({ rows: [{ id: 'd1' }] });
