@@ -165,6 +165,47 @@ describe('POST /admin/users (super_admin only)', () => {
   });
 });
 
+describe('PATCH /admin/users/:id (super_admin only)', () => {
+  it('changes a role for a super_admin', async () => {
+    adminUserService.updateAdminUserRole.mockResolvedValueOnce({ id: 'u2', role: 'viewer' });
+    const res = await request(app).patch('/admin/users/u2').send({ role: 'viewer' });
+    expect(res.status).toBe(200);
+    expect(res.body.role).toBe('viewer');
+    // Caller identity (JWT sub) is passed for the self-guard.
+    expect(adminUserService.updateAdminUserRole).toHaveBeenCalledWith('u2', 'viewer', 'jim');
+  });
+
+  it('400s when role is missing', async () => {
+    const res = await request(app).patch('/admin/users/u2').send({});
+    expect(res.status).toBe(400);
+    expect(adminUserService.updateAdminUserRole).not.toHaveBeenCalled();
+  });
+
+  it('forbids a non-super_admin', async () => {
+    mockAdmin = { id: 'x', role: 'admin' };
+    const res = await request(app).patch('/admin/users/u2').send({ role: 'viewer' });
+    expect(res.status).toBe(403);
+    expect(adminUserService.updateAdminUserRole).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /admin/users/:id (super_admin only)', () => {
+  it('deletes for a super_admin', async () => {
+    adminUserService.deleteAdminUser.mockResolvedValueOnce({ deleted: true, id: 'u2' });
+    const res = await request(app).delete('/admin/users/u2');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: true, id: 'u2' });
+    expect(adminUserService.deleteAdminUser).toHaveBeenCalledWith('u2', 'jim');
+  });
+
+  it('forbids a viewer', async () => {
+    mockAdmin = { id: 'v', role: 'viewer' };
+    const res = await request(app).delete('/admin/users/u2');
+    expect(res.status).toBe(403);
+    expect(adminUserService.deleteAdminUser).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET /admin/users (super_admin only)', () => {
   it('lists users for a super_admin', async () => {
     adminUserService.listAdminUsers.mockResolvedValueOnce([

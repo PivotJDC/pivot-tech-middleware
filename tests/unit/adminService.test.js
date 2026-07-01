@@ -145,6 +145,35 @@ describe('getUsageDistribution', () => {
   });
 });
 
+describe('getHourlyDataVoice', () => {
+  it('returns hour/voice_minutes/call_count as numbers for the current month', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{ hour: 9, voice_minutes: '12', call_count: '4' }],
+    });
+    const rows = await adminService.getHourlyDataVoice();
+    expect(rows[0]).toEqual({ hour: 9, voice_minutes: 12, call_count: 4 });
+    const sql = db.query.mock.calls[0][0];
+    expect(sql).toMatch(/generate_series\(0, 23\)/);
+    expect(sql).toMatch(/SUM\(duration_seconds\)/);
+    expect(sql).toMatch(/call_records/);
+    expect(sql).toMatch(/date_trunc\('month'/);
+  });
+});
+
+describe('getHourlyMessages', () => {
+  it('splits by direction into sent/received per hour', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{ hour: 10, sent: '7', received: '3' }],
+    });
+    const rows = await adminService.getHourlyMessages();
+    expect(rows[0]).toEqual({ hour: 10, sent: 7, received: 3 });
+    const sql = db.query.mock.calls[0][0];
+    expect(sql).toMatch(/FILTER \(WHERE direction = 'outbound'\)/);
+    expect(sql).toMatch(/FILTER \(WHERE direction = 'inbound'\)/);
+    expect(sql).toMatch(/message_records/);
+  });
+});
+
 describe('listDids', () => {
   it('filters by market/status/area_code', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ total: 1 }] }).mockResolvedValueOnce({ rows: [{ id: 'd1' }] });

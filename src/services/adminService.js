@@ -305,6 +305,63 @@ async function getUsageDistribution() {
   return rows.map((r) => ({ bucket: r.bucket, count: Number(r.count) }));
 }
 
+/**
+ * Voice minutes + call volume by hour of day (0-23) for the current month.
+ * call_count doubles as a proxy for data activity (BICS gives no hourly data
+ * granularity). Zero-filled across all 24 hours.
+ * @returns {Promise<Array<{ hour, voice_minutes, call_count }>>}
+ */
+async function getHourlyDataVoice() {
+  const { rows } = await db.query(
+    `SELECT h.hour AS hour,
+            COALESCE(c.voice_minutes, 0) AS voice_minutes,
+            COALESCE(c.call_count, 0)    AS call_count
+       FROM generate_series(0, 23) AS h(hour)
+       LEFT JOIN (
+         SELECT EXTRACT(HOUR FROM created_at)::int AS hour,
+                FLOOR(COALESCE(SUM(duration_seconds), 0) / 60.0)::int AS voice_minutes,
+                COUNT(*) AS call_count
+           FROM call_records
+          WHERE created_at >= date_trunc('month', now())
+          GROUP BY 1
+       ) c ON c.hour = h.hour
+      ORDER BY h.hour`,
+  );
+  return rows.map((r) => ({
+    hour: Number(r.hour),
+    voice_minutes: Number(r.voice_minutes),
+    call_count: Number(r.call_count),
+  }));
+}
+
+/**
+ * Message volume by hour of day (0-23) split by direction for the current
+ * month: sent (outbound) vs received (inbound). Zero-filled across 24 hours.
+ * @returns {Promise<Array<{ hour, sent, received }>>}
+ */
+async function getHourlyMessages() {
+  const { rows } = await db.query(
+    `SELECT h.hour AS hour,
+            COALESCE(m.sent, 0)     AS sent,
+            COALESCE(m.received, 0) AS received
+       FROM generate_series(0, 23) AS h(hour)
+       LEFT JOIN (
+         SELECT EXTRACT(HOUR FROM created_at)::int AS hour,
+                COUNT(*) FILTER (WHERE direction = 'outbound') AS sent,
+                COUNT(*) FILTER (WHERE direction = 'inbound')  AS received
+           FROM message_records
+          WHERE created_at >= date_trunc('month', now())
+          GROUP BY 1
+       ) m ON m.hour = h.hour
+      ORDER BY h.hour`,
+  );
+  return rows.map((r) => ({
+    hour: Number(r.hour),
+    sent: Number(r.sent),
+    received: Number(r.received),
+  }));
+}
+
 module.exports = {
   listAccounts,
   listDids,
@@ -314,5 +371,7 @@ module.exports = {
   getAccountUsageStats,
   getHourlyActivity,
   getUsageDistribution,
+  getHourlyDataVoice,
+  getHourlyMessages,
   serializePort,
 };

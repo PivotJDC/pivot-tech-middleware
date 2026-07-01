@@ -214,4 +214,24 @@ describe('admin API', () => {
     expect(res.body[0]).toEqual({ bucket: '0-1 GB', count: 42 });
     expect(adminService.getUsageDistribution).toHaveBeenCalled();
   });
+
+  it('GET /admin/analytics/hourly-data-voice returns the voice/call series', async () => {
+    adminService.getHourlyDataVoice.mockResolvedValueOnce([
+      { hour: 9, voice_minutes: 12, call_count: 4 },
+    ]);
+    const res = await request(app).get('/admin/analytics/hourly-data-voice');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toEqual({ hour: 9, voice_minutes: 12, call_count: 4 });
+    expect(adminService.getHourlyDataVoice).toHaveBeenCalled();
+  });
+
+  it('GET /admin/analytics/hourly-messages returns the sent/received series', async () => {
+    adminService.getHourlyMessages.mockResolvedValueOnce([
+      { hour: 10, sent: 7, received: 3 },
+    ]);
+    const res = await request(app).get('/admin/analytics/hourly-messages');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toEqual({ hour: 10, sent: 7, received: 3 });
+    expect(adminService.getHourlyMessages).toHaveBeenCalled();
+  });
 });

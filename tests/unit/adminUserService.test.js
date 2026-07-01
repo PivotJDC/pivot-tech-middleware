@@ -140,6 +140,62 @@ describe('listAdminUsers', () => {
   });
 });
 
+describe('updateAdminUserRole', () => {
+  it('updates the role when the target is someone else', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ username: 'ops' }] }) // SELECT target
+      .mockResolvedValueOnce({ rows: [{ id: 'u2', username: 'ops', role: 'viewer' }] }); // UPDATE
+
+    const user = await adminUserService.updateAdminUserRole('u2', 'viewer', 'jim');
+
+    expect(user).toMatchObject({ role: 'viewer' });
+    expect(db.query.mock.calls[1][1]).toEqual(['viewer', 'u2']);
+  });
+
+  it('forbids changing your own role (no self-demotion)', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ username: 'jim' }] });
+    await expect(adminUserService.updateAdminUserRole('u1', 'viewer', 'jim'))
+      .rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.query).toHaveBeenCalledTimes(1); // no UPDATE
+  });
+
+  it('404s for an unknown user', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await expect(adminUserService.updateAdminUserRole('ghost', 'admin', 'jim'))
+      .rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('rejects an invalid role before any query', async () => {
+    await expect(adminUserService.updateAdminUserRole('u2', 'wizard', 'jim'))
+      .rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'role' });
+    expect(db.query).not.toHaveBeenCalled();
+  });
+});
+
+describe('deleteAdminUser', () => {
+  it('deletes another user', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ username: 'ops' }] }) // SELECT
+      .mockResolvedValueOnce({}); // DELETE
+    const res = await adminUserService.deleteAdminUser('u2', 'jim');
+    expect(res).toEqual({ deleted: true, id: 'u2' });
+    expect(db.query.mock.calls[1][0]).toMatch(/DELETE FROM admin_users/);
+  });
+
+  it('forbids deleting yourself', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ username: 'jim' }] });
+    await expect(adminUserService.deleteAdminUser('u1', 'jim'))
+      .rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.query).toHaveBeenCalledTimes(1); // no DELETE
+  });
+
+  it('404s for an unknown user', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await expect(adminUserService.deleteAdminUser('ghost', 'jim'))
+      .rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
 describe('getByUsername', () => {
   it('returns the user (no password_hash) or null', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ username: 'jim', email: 'j@p.io', role: 'admin' }] });

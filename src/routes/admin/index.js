@@ -124,6 +124,28 @@ router.get(
   }),
 );
 
+router.patch(
+  '/users/:id',
+  requireRole('super_admin'),
+  asyncHandler(async (req, res) => {
+    const { role } = req.body || {};
+    if (!role) {
+      throw errors.validation('role is required.', 'role');
+    }
+    const user = await adminUserService.updateAdminUserRole(req.params.id, role, req.admin.id);
+    res.json(user);
+  }),
+);
+
+router.delete(
+  '/users/:id',
+  requireRole('super_admin'),
+  asyncHandler(async (req, res) => {
+    const result = await adminUserService.deleteAdminUser(req.params.id, req.admin.id);
+    res.json(result);
+  }),
+);
+
 // --- Accounts ---
 
 router.get(
@@ -312,6 +334,22 @@ router.get(
   '/analytics/usage-distribution',
   asyncHandler(async (req, res) => {
     res.json(await adminService.getUsageDistribution());
+  }),
+);
+
+// Voice minutes + call volume (data-activity proxy) by hour, current month.
+router.get(
+  '/analytics/hourly-data-voice',
+  asyncHandler(async (req, res) => {
+    res.json(await adminService.getHourlyDataVoice());
+  }),
+);
+
+// Message volume by hour split by direction (sent/received), current month.
+router.get(
+  '/analytics/hourly-messages',
+  asyncHandler(async (req, res) => {
+    res.json(await adminService.getHourlyMessages());
   }),
 );
 

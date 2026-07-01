@@ -145,6 +145,48 @@ async function listAdminUsers() {
   return rows;
 }
 
+/**
+ * Change an admin user's role. Guards: the role must be valid, the target must
+ * exist, and an admin may not change their OWN role (no self-demotion, which
+ * could lock super_admins out). `currentUsername` is the caller's JWT subject.
+ * @returns {Promise<object>} the updated user (no password_hash).
+ */
+async function updateAdminUserRole(id, role, currentUsername) {
+  if (!ROLES.includes(role)) {
+    throw errors.validation(`role must be one of: ${ROLES.join(', ')}.`, 'role');
+  }
+  const { rows } = await db.query('SELECT username FROM admin_users WHERE id = $1', [id]);
+  const target = rows[0];
+  if (!target) throw errors.notFound('Admin user not found.');
+  if (target.username === currentUsername) {
+    throw errors.forbidden('You cannot change your own role.');
+  }
+  const updated = await db.query(
+    `UPDATE admin_users SET role = $1 WHERE id = $2
+     RETURNING id, username, email, role, created_at, last_login_at`,
+    [role, id],
+  );
+  logger.info({ id, role, by: currentUsername }, 'admin user role changed');
+  return updated.rows[0];
+}
+
+/**
+ * Delete an admin user. Guards: the target must exist and an admin may not
+ * delete themselves. `currentUsername` is the caller's JWT subject.
+ * @returns {Promise<{ deleted: true, id }>}
+ */
+async function deleteAdminUser(id, currentUsername) {
+  const { rows } = await db.query('SELECT username FROM admin_users WHERE id = $1', [id]);
+  const target = rows[0];
+  if (!target) throw errors.notFound('Admin user not found.');
+  if (target.username === currentUsername) {
+    throw errors.forbidden('You cannot delete your own account.');
+  }
+  await db.query('DELETE FROM admin_users WHERE id = $1', [id]);
+  logger.info({ id, by: currentUsername }, 'admin user deleted');
+  return { deleted: true, id };
+}
+
 /** Fetch one admin user by username (no password_hash), or null. */
 async function getByUsername(username) {
   const { rows } = await db.query(
@@ -210,6 +252,8 @@ module.exports = {
   ROLES,
   login,
   createAdminUser,
+  updateAdminUserRole,
+  deleteAdminUser,
   countAdminUsers,
   listAdminUsers,
   getByUsername,
