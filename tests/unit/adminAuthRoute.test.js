@@ -19,6 +19,7 @@ jest.mock('../../src/services/adminUserService');
 jest.mock('../../src/services/adminService');
 jest.mock('../../src/services/accountService');
 jest.mock('../../src/services/provisioningService');
+jest.mock('../../src/services/usageService');
 jest.mock('../../src/utils/logger', () => ({
   logger: { info: () => {}, warn: () => {}, error: () => {} },
   REDACT_PATHS: [],
@@ -27,6 +28,7 @@ jest.mock('../../src/utils/logger', () => ({
 const express = require('express');
 const request = require('supertest');
 const adminUserService = require('../../src/services/adminUserService');
+const usageService = require('../../src/services/usageService');
 const adminRouter = require('../../src/routes/admin');
 const { errorHandler } = require('../../src/middleware/errorHandler');
 
@@ -203,6 +205,24 @@ describe('DELETE /admin/users/:id (super_admin only)', () => {
     const res = await request(app).delete('/admin/users/u2');
     expect(res.status).toBe(403);
     expect(adminUserService.deleteAdminUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /admin/usage/poll (super_admin only)', () => {
+  it('runs a poll for a super_admin', async () => {
+    usageService.pollAllActiveAccounts.mockResolvedValueOnce({
+      polled: 2, succeeded: 2, failed: 0,
+    });
+    const res = await request(app).post('/admin/usage/poll');
+    expect(res.status).toBe(200);
+    expect(res.body.polled).toBe(2);
+  });
+
+  it('forbids a non-super_admin', async () => {
+    mockAdmin = { id: 'x', role: 'admin' };
+    const res = await request(app).post('/admin/usage/poll');
+    expect(res.status).toBe(403);
+    expect(usageService.pollAllActiveAccounts).not.toHaveBeenCalled();
   });
 });
 

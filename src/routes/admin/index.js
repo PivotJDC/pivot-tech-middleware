@@ -24,6 +24,7 @@ const accountService = require('../../services/accountService');
 const provisioningService = require('../../services/provisioningService');
 const adminUserService = require('../../services/adminUserService');
 const cdrService = require('../../services/cdrService');
+const usageService = require('../../services/usageService');
 const { adminAuth, requireRole } = require('../../middleware/adminAuth');
 const { rateLimit } = require('../../middleware/rateLimiter');
 const { asyncHandler, errors } = require('../../middleware/errorHandler');
@@ -316,6 +317,30 @@ router.get(
   '/metrics',
   asyncHandler(async (req, res) => {
     res.json(await adminService.getMetrics());
+  }),
+);
+
+// --- Usage ---
+
+// Current-period usage summary across all subscribers.
+router.get(
+  '/usage/summary',
+  asyncHandler(async (req, res) => {
+    res.json(await usageService.getCurrentPeriodSummary());
+  }),
+);
+
+// Manually trigger a usage poll (super_admin only); returns the run summary.
+router.post(
+  '/usage/poll',
+  requireRole('super_admin'),
+  asyncHandler(async (req, res) => {
+    const summary = await usageService.pollAllActiveAccounts();
+    logger.info(
+      { adminId: req.admin.id, polled: summary.polled, failed: summary.failed },
+      'admin triggered a manual usage poll',
+    );
+    res.json(summary);
   }),
 );
 

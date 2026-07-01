@@ -165,6 +165,15 @@ function buildConfig() {
       planId: process.env.BICS_PLAN_ID || '',
       apnGroupId: process.env.BICS_APN_GROUP_ID || '',
       roamingProfileId: process.env.BICS_ROAMING_PROFILE_ID || '',
+      // BICS data-usage counter id, used when setting the plan threshold on an
+      // endpoint. Pending from BICS (account-specific); when empty the threshold
+      // call is best-effort and simply won't take until this is configured.
+      dataCounterId: process.env.BICS_DATA_COUNTER_ID || '',
+    }),
+
+    // Usage polling scheduler.
+    usage: Object.freeze({
+      pollIntervalHours: parseIntOr(process.env.USAGE_POLL_INTERVAL_HOURS, 4),
     }),
 
     // Retained only for inbound webhook HMAC validation (webhookService); the

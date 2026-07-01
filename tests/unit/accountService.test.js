@@ -69,6 +69,7 @@ beforeEach(() => {
   bics.getNextAvailableEsim.mockReset();
   bics.createEndpoint.mockReset();
   bics.activateEndpoint.mockReset();
+  bics.updateThreshold.mockReset();
   bics.fetchSimByIccid.mockReset();
   telgoo5Service.syncAccountToTelgoo5.mockReset();
 });
@@ -188,6 +189,12 @@ describe('createAccount', () => {
       expect.objectContaining({ name: `mobilitynet-${baseRow.id.slice(0, 8)}`, iccid: 'icc-1' }),
     );
     expect(bics.activateEndpoint).toHaveBeenCalledWith('ep-bics-1');
+    // The plan's data cap (unlimited_25 = 30720 MB) is pushed to BICS as the
+    // endpoint threshold (best-effort).
+    expect(bics.updateThreshold).toHaveBeenCalledWith(
+      'ep-bics-1',
+      expect.objectContaining({ threshold: '30720' }),
+    );
     expect(result.esim).toEqual({
       iccid: 'icc-1',
       endpointId: 'ep-bics-1',

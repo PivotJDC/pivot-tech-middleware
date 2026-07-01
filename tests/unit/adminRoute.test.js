@@ -11,6 +11,7 @@ jest.mock('../../src/services/accountService');
 jest.mock('../../src/services/provisioningService');
 jest.mock('../../src/services/adminUserService');
 jest.mock('../../src/services/cdrService');
+jest.mock('../../src/services/usageService');
 
 const express = require('express');
 const request = require('supertest');
@@ -18,6 +19,7 @@ const adminService = require('../../src/services/adminService');
 const accountService = require('../../src/services/accountService');
 const provisioningService = require('../../src/services/provisioningService');
 const cdrService = require('../../src/services/cdrService');
+const usageService = require('../../src/services/usageService');
 const adminRouter = require('../../src/routes/admin');
 const { errorHandler } = require('../../src/middleware/errorHandler');
 
@@ -193,6 +195,26 @@ describe('admin API', () => {
     const res = await request(app).get('/admin/metrics');
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('accounts');
+  });
+
+  it('GET /admin/usage/summary returns the current-period summary', async () => {
+    usageService.getCurrentPeriodSummary.mockResolvedValueOnce({
+      totalAccounts: 3, totalDataMb: 900,
+    });
+    const res = await request(app).get('/admin/usage/summary');
+    expect(res.status).toBe(200);
+    expect(res.body.totalAccounts).toBe(3);
+    expect(usageService.getCurrentPeriodSummary).toHaveBeenCalled();
+  });
+
+  it('POST /admin/usage/poll triggers a poll and returns the summary', async () => {
+    usageService.pollAllActiveAccounts.mockResolvedValueOnce({
+      polled: 5, succeeded: 5, failed: 0,
+    });
+    const res = await request(app).post('/admin/usage/poll');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ polled: 5, succeeded: 5, failed: 0 });
+    expect(usageService.pollAllActiveAccounts).toHaveBeenCalled();
   });
 
   it('GET /admin/analytics/hourly-activity returns the hourly series', async () => {

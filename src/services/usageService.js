@@ -36,6 +36,25 @@ function round(value, dp) {
 const pad2 = (n) => String(n).padStart(2, '0');
 
 /**
+ * Which usage-notification thresholds a subscriber has NEWLY crossed: returns
+ * the levels ('80'|'90'|'100') where usage is at/over the percentage AND the
+ * corresponding notified_* flag is not already set. Pure — no I/O.
+ * @param {number} totalMb - usage this period.
+ * @param {number} capMb - the plan's data cap.
+ * @param {{ notified_80?, notified_90?, notified_100? }} [flags] - current row flags.
+ * @returns {string[]}
+ */
+function newThresholdFlags(totalMb, capMb, flags = {}) {
+  if (!capMb || capMb <= 0) return [];
+  const pct = totalMb / capMb;
+  const crossed = [];
+  if (pct >= 0.8 && !flags.notified_80) crossed.push('80');
+  if (pct >= 0.9 && !flags.notified_90) crossed.push('90');
+  if (pct >= 1.0 && !flags.notified_100) crossed.push('100');
+  return crossed;
+}
+
+/**
  * Current billing period for a given instant, computed in UTC so the result is
  * timezone-independent. Returns both the DB date strings (YYYY-MM-DD) and the
  * BICS query strings (YYYYMMDD).
@@ -121,7 +140,27 @@ async function pollUsageForAccount(account, now = new Date()) {
   ];
 
   const result = await db.query(UPSERT_SQL, params);
-  return result.rows[0];
+  const row = result.rows[0];
+
+  // Usage-notification thresholds: set the flag(s) newly crossed this period and
+  // log the crossing. No SMS/email yet — delivery is a follow-up; for now we
+  // just persist the flag so we can see (and later act on) the crossing.
+  const crossed = newThresholdFlags(totalMb, capMb, row);
+  if (crossed.length === 0) return row;
+
+  const setSql = crossed.map((lvl) => `notified_${lvl} = true`).join(', ');
+  const updated = await db.query(
+    `UPDATE usage_records SET ${setSql} WHERE id = $1 RETURNING *`,
+    [row.id],
+  );
+  const pct = capMb > 0 ? Math.round((totalMb / capMb) * 100) : 0;
+  crossed.forEach((lvl) => logger.warn(
+    {
+      accountId: account.id, usedMb: round(totalMb, 3), capMb, pct,
+    },
+    `usage threshold ${lvl}% crossed for account ${account.id}`,
+  ));
+  return updated.rows[0];
 }
 
 /**
@@ -212,10 +251,21 @@ async function getUsageSummaryForPeriod(periodStart, periodEnd) {
   };
 }
 
+/**
+ * Usage summary for the current billing period (1st of month → today, UTC).
+ * @param {Date} [now]
+ */
+async function getCurrentPeriodSummary(now = new Date()) {
+  const { periodStart, periodEnd } = billingPeriod(now);
+  return getUsageSummaryForPeriod(periodStart, periodEnd);
+}
+
 module.exports = {
   PLAN_CAPS,
+  newThresholdFlags,
   pollUsageForAccount,
   pollAllActiveAccounts,
   getUsageForAccount,
   getUsageSummaryForPeriod,
+  getCurrentPeriodSummary,
 };

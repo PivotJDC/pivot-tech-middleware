@@ -49,6 +49,7 @@ let config;
 let db;
 let cache;
 let runMigrations;
+let scheduler;
 let server;
 let shuttingDown = false;
 
@@ -93,6 +94,9 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   logger.info({ signal }, 'shutdown initiated, draining connections');
+
+  // Stop the background scheduler so no new poll starts mid-drain.
+  scheduler.stop();
 
   // Stop accepting new connections; callback fires once in-flight ones finish.
   server.close(async () => {
@@ -142,6 +146,8 @@ async function start() {
   const app = createApp();
   server = app.listen(config.port, () => {
     logger.info({ port: config.port, env: config.env }, 'pivot-tech-middleware listening');
+    // Start the background usage poller once the server is accepting traffic.
+    scheduler.start();
   });
 
   // listen() errors (port in use, EACCES) arrive as an 'error' event, not a
@@ -178,6 +184,7 @@ async function bootstrap() {
     config = require('./config');
     db = require('./db');
     cache = require('./cache');
+    scheduler = require('./scheduler');
     ({ run: runMigrations } = require('./db/migrate'));
     /* eslint-enable global-require */
   } catch (err) {

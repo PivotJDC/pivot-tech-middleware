@@ -6,7 +6,9 @@
  * customer-facing output is run through serializeAccount() so secrets
  * (sip_password_hash) never leave the service.
  */
+const nodeCrypto = require('crypto');
 const db = require('../db');
+const config = require('../config');
 const { errors } = require('../middleware/errorHandler');
 const didOrchestration = require('./didOrchestrationService');
 const billingMigration = require('./billingMigrationService');
@@ -15,6 +17,13 @@ const bics = require('../integrations/bics');
 const crypto = require('../utils/crypto');
 const e164 = require('../utils/e164');
 const { logger } = require('../utils/logger');
+
+// Plan data cap in MB — pushed to BICS as the endpoint's usage threshold.
+const PLAN_THRESHOLD_MB = {
+  starter_10: 1024,
+  unlimited_25: 30720,
+  unlimited_25_plus: 30720,
+};
 
 // Market used when a number is outside any launched market — customers can pick
 // any US area code, so we don't gate on market membership.
@@ -167,6 +176,28 @@ async function provisionEsim(account) {
   }
 
   await bics.activateEndpoint(endpointId);
+
+  // Best-effort: push the plan's data cap to BICS as the endpoint threshold so
+  // the network enforces it. A failure here must never fail signup.
+  // NB: BICS create/activate live here (not didOrchestrationService, which is
+  // Telnyx-only), so the threshold is set here too.
+  const thresholdMb = PLAN_THRESHOLD_MB[account.plan];
+  if (thresholdMb) {
+    try {
+      await bics.updateThreshold(endpointId, {
+        threshold: String(thresholdMb),
+        counterId: config.bics.dataCounterId,
+        // uniqueId is a per-request id for BICS; a UUID keeps each call distinct.
+        uniqueId: nodeCrypto.randomUUID(),
+      });
+      logger.info({ accountId: account.id, endpointId, thresholdMb }, 'BICS data threshold set');
+    } catch (err) {
+      logger.error(
+        { accountId: account.id, endpointId, err: err.message },
+        'BICS updateThreshold failed (best-effort)',
+      );
+    }
+  }
 
   const sim = await bics.fetchSimByIccid(iccid);
   const activation = (sim && sim.activationCode) || {};

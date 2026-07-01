@@ -178,6 +178,72 @@ describe('pollAllActiveAccounts', () => {
   });
 });
 
+describe('newThresholdFlags', () => {
+  it('flags only newly-crossed levels', () => {
+    // 85% used, none flagged yet -> just 80.
+    expect(usageService.newThresholdFlags(870, 1024, {})).toEqual(['80']);
+    // 95% used -> 80 and 90.
+    expect(usageService.newThresholdFlags(973, 1024, {})).toEqual(['80', '90']);
+    // over cap -> all three.
+    expect(usageService.newThresholdFlags(1100, 1024, {})).toEqual(['80', '90', '100']);
+  });
+
+  it('does not re-flag levels already set', () => {
+    expect(usageService.newThresholdFlags(1100, 1024, {
+      notified_80: true, notified_90: true, notified_100: false,
+    })).toEqual(['100']);
+  });
+
+  it('returns nothing under 80% or with a non-positive cap', () => {
+    expect(usageService.newThresholdFlags(700, 1024, {})).toEqual([]);
+    expect(usageService.newThresholdFlags(500, 0, {})).toEqual([]);
+  });
+});
+
+describe('usage-notification flags in pollUsageForAccount', () => {
+  it('sets the crossed flags and returns the updated row', async () => {
+    // 1000 / 1024 ~ 97% -> crosses 80 + 90 but not 100.
+    bics.getEndpointStatistics.mockResolvedValueOnce(stats({ totalVolume: 1000 }));
+    db.query
+      .mockResolvedValueOnce({ rows: [{ id: 'u1', notified_80: false, notified_90: false }] }) // UPSERT
+      .mockResolvedValueOnce({ rows: [{ id: 'u1', notified_80: true, notified_90: true }] }); // flag UPDATE
+
+    const row = await usageService.pollUsageForAccount(
+      { id: 'a', bics_endpoint_id: 'ep', plan: 'starter_10' },
+      NOW,
+    );
+
+    const updateCall = db.query.mock.calls.find(([s]) => /UPDATE usage_records SET notified_/.test(s));
+    expect(updateCall[0]).toMatch(/notified_80 = true/);
+    expect(updateCall[0]).toMatch(/notified_90 = true/);
+    expect(updateCall[0]).not.toMatch(/notified_100 = true/); // under 100%
+    expect(row).toEqual({ id: 'u1', notified_80: true, notified_90: true });
+  });
+
+  it('does not issue a flag update when under 80%', async () => {
+    bics.getEndpointStatistics.mockResolvedValueOnce(stats({ totalVolume: 500 }));
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'u1', notified_80: false }] });
+    await usageService.pollUsageForAccount(
+      { id: 'a', bics_endpoint_id: 'ep', plan: 'starter_10' },
+      NOW,
+    );
+    expect(db.query.mock.calls.some(([s]) => /UPDATE usage_records SET notified_/.test(s))).toBe(false);
+  });
+});
+
+describe('getCurrentPeriodSummary', () => {
+  it('summarizes the current billing period', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{
+        total_accounts: '3', total_data_mb: '900', total_overage_mb: '0', total_overage_charges: '0', total_sms_counts: '10',
+      }],
+    });
+    const res = await usageService.getCurrentPeriodSummary(NOW);
+    expect(res.totalAccounts).toBe(3);
+    expect(db.query.mock.calls[0][1]).toEqual(['2026-06-01', '2026-06-24']);
+  });
+});
+
 describe('getUsageForAccount', () => {
   it('returns the latest record', async () => {
     const record = { id: 'usage-9', account_id: 'acc-1', data_total_mb: '123.000' };
