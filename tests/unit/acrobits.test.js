@@ -15,13 +15,12 @@ describe('acrobits.buildAccountXml', () => {
     expect(xml).toContain('<username>+12085550100</username>');
     expect(xml).toContain('<authUsername>pivottech-abc</authUsername>');
     expect(xml).toContain('<password>sip-secret-123</password>');
-    expect(xml).toContain('<domain>sip.telnyx.com</domain>');
-    // UDP without SRTP — TLS/SRTP broke SIP registration.
-    expect(xml).toContain('<port>5060</port>');
-    expect(xml).toContain('<transport>UDP</transport>');
+    // TEST: domain/port/transport are omitted so the portal's SIP settings
+    // control transport instead of the Account XML overriding them.
+    expect(xml).not.toContain('<domain>');
+    expect(xml).not.toContain('<port>');
+    expect(xml).not.toContain('<transport>');
     expect(xml).not.toContain('<srtp>');
-    expect(xml).not.toContain('<transport>TLS</transport>');
-    expect(xml).not.toContain('<port>5061</port>');
     expect(xml).toContain('<callerID>+12085550100</callerID>');
     expect(xml).toContain('<displayName>(208) 555-0100</displayName>');
     expect(xml).toContain('<codecPriority>OPUS,ULAW,ALAW</codecPriority>');
