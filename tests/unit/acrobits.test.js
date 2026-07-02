@@ -29,11 +29,28 @@ describe('acrobits.buildAccountXml', () => {
     expect(xml).not.toContain('<username>pivottech-abc</username>');
   });
 
-  it('does NOT embed HTTP messaging URLs (configured at the Acrobits portal)', () => {
+  it('embeds the generic SMS web-service URLs with Acrobits template variables', () => {
     const xml = acrobits.buildAccountXml(params);
+    // The legacy <httpMessaging> wrapper is gone; use the standard elements.
     expect(xml).not.toContain('<httpMessaging>');
-    expect(xml).not.toContain('<sendURL>');
-    expect(xml).not.toContain('<fetchURL>');
+    const config = require('../../src/config'); // eslint-disable-line global-require
+    const base = config.provisioning.baseUrl;
+    // %account[authUsername]% (gencred) + %account[password]% resolve from this
+    // same Account XML; & separators are XML-escaped as &amp;.
+    expect(xml).toContain(
+      `<genericSmsSendUrl>${base}/v1/acrobits/send?username=%account[authUsername]%`
+      + '&amp;password=%account[password]%&amp;to=%sms_to%&amp;body=%sms_body%'
+      + '</genericSmsSendUrl>',
+    );
+    expect(xml).toContain(
+      `<genericSmsFetchUrl>${base}/v1/acrobits/fetch?username=%account[authUsername]%`
+      + '&amp;password=%account[password]%&amp;last_known=%last_known_sms_id%'
+      + '</genericSmsFetchUrl>',
+    );
+    // Must send the gencred, not the subscriber E.164.
+    expect(xml).not.toContain('%account[username]%');
+    // Raw unescaped ampersands would break the XML document.
+    expect(xml).not.toMatch(/&(?!amp;|lt;|gt;|apos;|quot;)/);
   });
 
   it('escapes XML special characters in values', () => {

@@ -5,6 +5,7 @@
  * This is the one place the plaintext SIP password is rendered into a response.
  * Callers must pass it in memory only; it is never logged or persisted here.
  */
+const config = require('../config');
 const { formatNational } = require('../utils/e164');
 
 // DECISION: Jim's migration note pointed at provisioningService.js, but the
@@ -66,9 +67,22 @@ function buildAccountXml({
     .trim() || formatNational(phoneE164);
   const callerIdNumber = phoneE164;
 
+  // Generic SMS web services: Cloud Softphone can't bridge SMS/MMS over SIP, so
+  // it calls our middleware directly. These are the Acrobits-standard Account
+  // XML elements (they take precedence over the portal's Send Message URL,
+  // which is left empty). The %account[...]% tokens resolve to <authUsername>
+  // and <password> from THIS document; %sms_to%/%sms_body%/%last_known_sms_id%
+  // are Acrobits service-specific variables. The URL is XML content so the query
+  // separators must be escaped as "&amp;".
+  //
+  // We send %account[authUsername]% (the Telnyx gencred), not %account[username]%
+  // (the subscriber E.164): authAcrobits looks up by sip_username, which is what
+  // <authUsername> carries. It also falls back to a phone_e164 lookup.
+  const base = (config.provisioning.baseUrl || '').replace(/\/+$/, '');
+  const smsSendUrl = `${base}/v1/acrobits/send?username=%account[authUsername]%&amp;password=%account[password]%&amp;to=%sms_to%&amp;body=%sms_body%`;
+  const smsFetchUrl = `${base}/v1/acrobits/fetch?username=%account[authUsername]%&amp;password=%account[password]%&amp;last_known=%last_known_sms_id%`;
+
   // NB: transport is UDP with no SRTP — TLS/SRTP broke SIP registration.
-  // Messaging (send/fetch) URLs are NOT set here: Acrobits configures the HTTP
-  // messaging endpoints at the provider-portal level, not in the Account XML.
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<account>',
@@ -85,6 +99,8 @@ function buildAccountXml({
     `  <displayName>${escapeXml(callerIdName)}</displayName>`,
     `  <callerID>${escapeXml(callerIdNumber)}</callerID>`,
     '  <codecPriority>OPUS,ULAW,ALAW</codecPriority>',
+    `  <genericSmsSendUrl>${smsSendUrl}</genericSmsSendUrl>`,
+    `  <genericSmsFetchUrl>${smsFetchUrl}</genericSmsFetchUrl>`,
     '</account>',
     '',
   ].join('\n');
