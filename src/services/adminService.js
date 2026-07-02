@@ -448,14 +448,14 @@ async function getBillingReconciliation(from, to, tenantId) {
       `SELECT
          (SELECT COALESCE(FLOOR(SUM(duration_seconds) / 60.0), 0)::int
             FROM call_records
-           WHERE created_at BETWEEN $1 AND $2${tf})               AS voice_minutes,
+           WHERE created_at BETWEEN $1::date AND ($2::date + interval '1 day')${tf})               AS voice_minutes,
          (SELECT COUNT(*) FROM call_records
-           WHERE created_at BETWEEN $1 AND $2${tf})               AS voice_calls,
+           WHERE created_at BETWEEN $1::date AND ($2::date + interval '1 day')${tf})               AS voice_calls,
          (SELECT COUNT(*) FROM message_records
-           WHERE created_at BETWEEN $1 AND $2${tf}
+           WHERE created_at BETWEEN $1::date AND ($2::date + interval '1 day')${tf}
              AND message_type = 'sms')                            AS sms_count,
          (SELECT COUNT(*) FROM message_records
-           WHERE created_at BETWEEN $1 AND $2${tf}
+           WHERE created_at BETWEEN $1::date AND ($2::date + interval '1 day')${tf}
              AND message_type = 'mms')                            AS mms_count`,
       params,
     ),
@@ -463,7 +463,7 @@ async function getBillingReconciliation(from, to, tenantId) {
       `SELECT COALESCE(SUM(data_total_mb), 0) AS data_total_mb,
               COALESCE(SUM(data_cost), 0)     AS data_cost
          FROM usage_records
-        WHERE period_start >= $1 AND period_end <= $2${tf}`,
+        WHERE period_start >= $1::date AND period_end <= ($2::date + interval '1 day')${tf}`,
       params,
     ),
   ]);

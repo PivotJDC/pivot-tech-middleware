@@ -280,7 +280,14 @@ describe('getBillingReconciliation', () => {
     // Both queries scoped to the range.
     expect(db.query.mock.calls[0][1]).toEqual(['2026-07-01', '2026-07-31']);
     expect(db.query.mock.calls[1][1]).toEqual(['2026-07-01', '2026-07-31']);
-    expect(db.query.mock.calls[1][0]).toMatch(/period_start >= \$1 AND period_end <= \$2/);
+    // End date is inclusive: upper bound is the "to" date + 1 day.
+    expect(db.query.mock.calls[1][0]).toMatch(
+      /period_start >= \$1::date AND period_end <= \(\$2::date \+ interval '1 day'\)/,
+    );
+    // Telnyx subqueries include the full "to" date too.
+    expect(db.query.mock.calls[0][0]).toMatch(
+      /created_at BETWEEN \$1::date AND \(\$2::date \+ interval '1 day'\)/,
+    );
   });
 
   it('prefers the carrier-reported data_cost when present', async () => {
