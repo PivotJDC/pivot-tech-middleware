@@ -53,6 +53,19 @@ describe('acrobits.buildAccountXml', () => {
     expect(xml).not.toMatch(/&(?!amp;|lt;|gt;|apos;|quot;)/);
   });
 
+  it('includes client-side number rewriting rules for E.164 normalization', () => {
+    const xml = acrobits.buildAccountXml(params);
+    expect(xml).toContain('<rewriting>');
+    // 10-digit US number → prepend +1.
+    expect(xml).toContain('<condition type="lengthEquals" param="10"/>');
+    expect(xml).toContain('<action type="prepend" param="+1"/>');
+    // 11-digit number starting with 1 → prepend +.
+    expect(xml).toContain('<condition type="longerThan" param="10"/>');
+    expect(xml).toContain('<condition type="startsWith" param="1"/>');
+    expect(xml).toContain('<action type="prepend" param="+"/>');
+    expect(xml).toContain('</rewriting>');
+  });
+
   it('escapes XML special characters in values', () => {
     const xml = acrobits.buildAccountXml({ ...params, sipPassword: 'a&b<c>"d\'' });
     expect(xml).toContain('<password>a&amp;b&lt;c&gt;&quot;d&apos;</password>');
