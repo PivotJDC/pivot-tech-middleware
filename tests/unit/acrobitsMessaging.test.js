@@ -53,8 +53,9 @@ describe('GET /v1/acrobits/provision', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/text\/xml/);
-    // SIP identity split: username = subscriber E.164, authUsername = gencred.
-    expect(res.text).toContain('<username>+12085550100</username>');
+    // SIP identity: both username + authUsername are the gencred (used for
+    // REGISTER); the E.164 is caller ID only.
+    expect(res.text).toContain('<username>pivottech-abc</username>');
     expect(res.text).toContain('<authUsername>pivottech-abc</authUsername>');
     // The verified plaintext password is rendered into the XML (no Telnyx call).
     expect(res.text).toContain('<password>sip-secret</password>');

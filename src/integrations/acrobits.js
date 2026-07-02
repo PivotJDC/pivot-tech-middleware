@@ -22,19 +22,15 @@ function escapeXml(value) {
 /**
  * Build the Acrobits Account XML.
  *
- * SIP identity is split across two fields (confirmed against the Acrobits
- * Account XML docs):
- *   - <username>     the user part of the SIP URI / From header. We use the
- *                    subscriber's E.164 number so outbound calls present the
- *                    subscriber's own caller identity.
- *   - <authUsername> the username used ONLY in SIP authorization (digest)
- *                    headers — the Telnyx-generated gencred credential. Acrobits
- *                    docs: "Username used in SIP authorization headers. If left
- *                    empty, the username is used." Leaving it empty would
- *                    (incorrectly) authenticate as the E.164 number, so it must
- *                    be set explicitly.
- * Both fields used to be the gencred credential, which put the gencred in the
- * From header instead of the subscriber's number (the bug fixed here).
+ * SIP identity:
+ *   - <username>     the SIP account username used for REGISTER — it must match
+ *                    what Telnyx expects, i.e. the Telnyx-generated gencred
+ *                    credential username (sipUsername). Using the E.164 number
+ *                    here breaks registration.
+ *   - <authUsername> the username used in SIP authorization (digest) headers —
+ *                    also the gencred credential, so it matches <username>.
+ * The subscriber's E.164 number is carried by <callerID> and <displayName>
+ * (below) for outbound caller-ID display, not by <username>.
  *
  * Per-subscriber caller ID:
  *   - callerIdName   = "{firstName} {lastName}" → the From-header display name
@@ -74,7 +70,7 @@ function buildAccountXml({
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<account>',
-    `  <username>${escapeXml(phoneE164)}</username>`,
+    `  <username>${escapeXml(sipUsername)}</username>`,
     `  <authUsername>${escapeXml(sipUsername)}</authUsername>`,
     `  <password>${escapeXml(sipPassword)}</password>`,
     '  <host>sip.telnyx.com</host>',
