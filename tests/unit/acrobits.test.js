@@ -24,7 +24,10 @@ describe('acrobits.buildAccountXml', () => {
     expect(xml).not.toContain('<srtp>');
     expect(xml).toContain('<pushEnabled>1</pushEnabled>');
     expect(xml).toContain('<allowMessage>1</allowMessage>');
-    expect(xml).toContain('<callerID>+12085550100</callerID>');
+    // Outbound From-header user is the E.164, via <fromUser> (not <callerID>,
+    // which isn't a recognized Acrobits Account XML property).
+    expect(xml).toContain('<fromUser>+12085550100</fromUser>');
+    expect(xml).not.toContain('<callerID>');
     expect(xml).toContain('<displayName>(208) 555-0100</displayName>');
     expect(xml).toContain('<codecPriority>OPUS,ULAW,ALAW</codecPriority>');
     // The E.164 number is caller ID only, never the SIP <username>.
@@ -76,8 +79,8 @@ describe('acrobits.buildAccountXml', () => {
   it('uses the subscriber first + last name as the caller ID display name', () => {
     const xml = acrobits.buildAccountXml({ ...params, firstName: 'Jane', lastName: 'Doe' });
     expect(xml).toContain('<displayName>Jane Doe</displayName>');
-    // Caller ID number stays the subscriber E.164.
-    expect(xml).toContain('<callerID>+12085550100</callerID>');
+    // From-header user stays the subscriber E.164.
+    expect(xml).toContain('<fromUser>+12085550100</fromUser>');
   });
 
   it('escapes XML special characters in the caller ID display name', () => {

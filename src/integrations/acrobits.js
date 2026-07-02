@@ -29,15 +29,15 @@ function escapeXml(value) {
  *                    here breaks registration.
  *   - <authUsername> the username used in SIP authorization (digest) headers —
  *                    also the gencred credential, so it matches <username>.
- * The subscriber's E.164 number is carried by <callerID> and <displayName>
+ * The subscriber's E.164 number is carried by <fromUser> and <displayName>
  * (below) for outbound caller-ID display, not by <username>.
  *
  * Per-subscriber caller ID:
  *   - callerIdName   = "{firstName} {lastName}" → the From-header display name
  *                      (rendered as <displayName>). Falls back to the
  *                      national-format number when the subscriber has no name.
- *   - callerIdNumber = phoneE164 → the From-header number (rendered as
- *                      <callerID>).
+ *   - phoneE164      → the From-header user, rendered as <fromUser> (the
+ *                      recognized Acrobits property; <callerID> is not one).
  * @param {{ sipUsername: string, sipPassword: string, phoneE164: string,
  *          firstName?: string, lastName?: string }} params
  *   sipUsername is the Telnyx gencred credential (SIP auth only); phoneE164 is
@@ -54,7 +54,6 @@ function buildAccountXml({
     .filter((part) => part && String(part).trim())
     .join(' ')
     .trim() || formatNational(phoneE164);
-  const callerIdNumber = phoneE164;
 
   // Generic SMS web services: Cloud Softphone can't bridge SMS/MMS over SIP, so
   // it calls our middleware directly. The %account[...]% tokens resolve to
@@ -71,6 +70,7 @@ function buildAccountXml({
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<account>',
     `  <username>${escapeXml(sipUsername)}</username>`,
+    `  <fromUser>${escapeXml(phoneE164)}</fromUser>`,
     `  <authUsername>${escapeXml(sipUsername)}</authUsername>`,
     `  <password>${escapeXml(sipPassword)}</password>`,
     '  <host>sip.telnyx.com</host>',
@@ -80,7 +80,6 @@ function buildAccountXml({
     '  <allowVideo>1</allowVideo>',
     '  <pushEnabled>1</pushEnabled>',
     `  <displayName>${escapeXml(callerIdName)}</displayName>`,
-    `  <callerID>${escapeXml(callerIdNumber)}</callerID>`,
     '  <codecPriority>OPUS,ULAW,ALAW</codecPriority>',
     `  <genericSmsSendUrl>${smsSendUrl}</genericSmsSendUrl>`,
     `  <genericSmsFetchUrl>${smsFetchUrl}</genericSmsFetchUrl>`,
