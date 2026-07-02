@@ -23,7 +23,11 @@ function buildApp() {
 
 const app = buildApp();
 const ACCOUNT = {
-  id: 'acc-1', sip_username: 'pivottech-abc', sip_password_hash: 'bcrypt$x', status: 'active',
+  id: 'acc-1',
+  sip_username: 'pivottech-abc',
+  sip_password_hash: 'bcrypt$x',
+  phone_e164: '+12087869908',
+  status: 'active',
 };
 
 beforeEach(() => {
@@ -260,12 +264,19 @@ describe('GET /v1/acrobits/fetch', () => {
     expect(res.text).toMatch(/<date>\d{4}-\d{2}-\d{2}T[\d:.]+Z<\/date>/);
     expect(res.text).toContain('<received_smss>');
     expect(res.text).toContain('<item>');
+    // Received: sender = external peer, recipient = the subscriber's own number
+    // (so the app threads it into the conversation, not a group chat).
     expect(res.text).toContain('<sender>+12085550142</sender>');
+    expect(res.text).toContain('<recipient>+12087869908</recipient>');
     expect(res.text).toContain('<sms_text>hi in</sms_text>');
     expect(res.text).toContain('<sms_id>r1</sms_id>');
     expect(res.text).toContain('<sent_smss>');
+    // Sent: sender = the subscriber's own number, recipient = external peer.
+    expect(res.text).toContain('<sender>+12087869908</sender>');
     expect(res.text).toContain('<recipient>+12085550143</recipient>');
     expect(res.text).toContain('<sms_text>hi out</sms_text>');
+    // Both directions thread by the external peer number.
+    expect(res.text).toContain('<stream_id>+12085550142</stream_id>');
     expect(res.text).toContain('<stream_id>+12085550143</stream_id>');
     // Legacy element names are gone.
     expect(res.text).not.toContain('<sms>');

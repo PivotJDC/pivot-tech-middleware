@@ -50,25 +50,35 @@ function okXml() {
 }
 
 /**
- * Render one <item> block (Acrobits Modern API). `peerField` is `sender`
- * (received messages) or `recipient` (sent messages).
+ * Render one <item> block (Acrobits Modern API). Both <sender> and <recipient>
+ * are emitted so the app can thread the message correctly: it needs to know the
+ * subscriber's own number (not just the peer) to place an inbound message in the
+ * conversation thread instead of a group chat. `streamId` is the peer number so
+ * inbound + outbound of the same conversation share a thread.
  */
-function smsXml(m, peerField, peerNumber) {
+function smsXml(m, sender, recipient, streamId) {
   return [
     '    <item>',
     `      <sms_id>${escapeXml(m.id)}</sms_id>`,
     `      <sending_date>${escapeXml(fmtDate(m.created_at))}</sending_date>`,
-    `      <${peerField}>${escapeXml(peerNumber)}</${peerField}>`,
+    `      <sender>${escapeXml(sender)}</sender>`,
+    `      <recipient>${escapeXml(recipient)}</recipient>`,
     `      <sms_text>${escapeXml(m.body)}</sms_text>`,
     '      <content_type>text/plain</content_type>',
-    `      <stream_id>${escapeXml(peerNumber)}</stream_id>`,
+    `      <stream_id>${escapeXml(streamId)}</stream_id>`,
     '    </item>',
   ].join('\n');
 }
 
-function fetchXml(received, sent) {
-  const recv = received.map((m) => smsXml(m, 'sender', m.from_number)).join('\n');
-  const snt = sent.map((m) => smsXml(m, 'recipient', m.to_number)).join('\n');
+function fetchXml(received, sent, subscriberNumber) {
+  // Received: sender = external peer, recipient = the subscriber; thread by peer.
+  const recv = received
+    .map((m) => smsXml(m, m.from_number, subscriberNumber, m.from_number))
+    .join('\n');
+  // Sent: sender = the subscriber, recipient = external peer; thread by peer.
+  const snt = sent
+    .map((m) => smsXml(m, subscriberNumber, m.to_number, m.to_number))
+    .join('\n');
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<response>',
@@ -169,7 +179,7 @@ router.get(
       p.last_id,
       p.last_sent_id,
     );
-    sendXml(res, 200, fetchXml(received, sent));
+    sendXml(res, 200, fetchXml(received, sent, account.phone_e164));
   }),
 );
 
