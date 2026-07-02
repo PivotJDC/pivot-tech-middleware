@@ -5,12 +5,7 @@
  * This is the one place the plaintext SIP password is rendered into a response.
  * Callers must pass it in memory only; it is never logged or persisted here.
  */
-const config = require('../config');
 const { formatNational } = require('../utils/e164');
-
-// NB: <domain>/<port>/<transport> pin direct SIP registration to Telnyx, and
-// <pushEnabled>0</pushEnabled> forces that direct path instead of routing
-// through the Acrobits SIPIS push-proxy servers.
 
 /** Escape the five XML special characters so values can't break the document. */
 function escapeXml(value) {
@@ -64,21 +59,6 @@ function buildAccountXml({
     .trim() || formatNational(phoneE164);
   const callerIdNumber = phoneE164;
 
-  // Generic SMS web services: Cloud Softphone can't bridge SMS/MMS over SIP, so
-  // it calls our middleware directly. These are the Acrobits-standard Account
-  // XML elements (they take precedence over the portal's Send Message URL,
-  // which is left empty). The %account[...]% tokens resolve to <authUsername>
-  // and <password> from THIS document; %sms_to%/%sms_body%/%last_known_sms_id%
-  // are Acrobits service-specific variables. The URL is XML content so the query
-  // separators must be escaped as "&amp;".
-  //
-  // We send %account[authUsername]% (the Telnyx gencred), not %account[username]%
-  // (the subscriber E.164): authAcrobits looks up by sip_username, which is what
-  // <authUsername> carries. It also falls back to a phone_e164 lookup.
-  const base = (config.provisioning.baseUrl || '').replace(/\/+$/, '');
-  const smsSendUrl = `${base}/v1/acrobits/send?username=%account[authUsername]%&amp;password=%account[password]%&amp;to=%sms_to%&amp;body=%sms_body%`;
-  const smsFetchUrl = `${base}/v1/acrobits/fetch?username=%account[authUsername]%&amp;password=%account[password]%&amp;last_known=%last_known_sms_id%`;
-
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<account>',
@@ -91,36 +71,10 @@ function buildAccountXml({
     '  <title>Pivot-Tech</title>',
     '  <allowMessage>1</allowMessage>',
     '  <allowVideo>1</allowVideo>',
-    '  <pushEnabled>0</pushEnabled>',
+    '  <pushEnabled>1</pushEnabled>',
     `  <displayName>${escapeXml(callerIdName)}</displayName>`,
     `  <callerID>${escapeXml(callerIdNumber)}</callerID>`,
     '  <codecPriority>OPUS,ULAW,ALAW</codecPriority>',
-    `  <genericSmsSendUrl>${smsSendUrl}</genericSmsSendUrl>`,
-    `  <genericSmsFetchUrl>${smsFetchUrl}</genericSmsFetchUrl>`,
-    // Client-side dialed-number rewriting: auto-prepend +1 to 10-digit US
-    // numbers and + to 11-digit numbers starting with 1, so calls/SMS are
-    // normalized to E.164 on the device before they reach us.
-    '  <rewriting>',
-    '    <rule>',
-    '      <conditions>',
-    '        <condition type="doesntStartWith" param="+"/>',
-    '        <condition type="lengthEquals" param="10"/>',
-    '      </conditions>',
-    '      <actions>',
-    '        <action type="prepend" param="+1"/>',
-    '      </actions>',
-    '    </rule>',
-    '    <rule>',
-    '      <conditions>',
-    '        <condition type="doesntStartWith" param="+"/>',
-    '        <condition type="longerThan" param="10"/>',
-    '        <condition type="startsWith" param="1"/>',
-    '      </conditions>',
-    '      <actions>',
-    '        <action type="prepend" param="+"/>',
-    '      </actions>',
-    '    </rule>',
-    '  </rewriting>',
     '</account>',
     '',
   ].join('\n');
