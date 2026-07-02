@@ -1,7 +1,7 @@
 {
   "name": "pivot-tech-middleware",
-  "version": "0.1.0",
-  "description": "Pivot-Tech MVNO middleware — connects BICS eSIM, Acrobits dialer, and SignalWire PSTN gateway",
+  "version": "0.5.1-alpha",
+  "description": "Pivot-Tech MVNO/MVNE middleware — connects BICS eSIM, Acrobits dialer, and Telnyx PSTN gateway",
   "type": "commonjs",
   "engines": {
     "node": ">=20.0.0"
