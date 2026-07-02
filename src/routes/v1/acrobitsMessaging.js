@@ -45,10 +45,6 @@ function errorXml(message) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<response>\n  <message>${escapeXml(message)}</message>\n</response>\n`;
 }
 
-function okXml() {
-  return '<?xml version="1.0" encoding="UTF-8"?>\n<response>\n  <status>ok</status>\n</response>\n';
-}
-
 /**
  * Render one <item> block (Acrobits Modern API). Both <sender> and <recipient>
  * are emitted so the app can thread the message correctly: it needs to know the
@@ -183,7 +179,11 @@ router.get(
   }),
 );
 
-// --- Push token registration ---
+// --- Push Token Reporter ---
+// The Acrobits app POSTs its push tokens here (form-urlencoded via
+// pushTokenReporterUrl/PostData in the Account XML). It reports two tokens: one
+// for incoming calls (VoIP) and one for "other" (messages). We authenticate by
+// SIP credentials (same as /send) and UPSERT by (account_id, selector).
 router.post(
   '/push-token',
   asyncHandler(async (req, res) => {
@@ -194,14 +194,17 @@ router.post(
       return;
     }
     try {
-      await pushService.registerToken(account.id, {
-        deviceToken: p.device_token,
+      await pushService.registerToken(account.id, account.tenant_id, {
         selector: p.selector,
-        appId: p.app_id,
-        platform: p.platform,
+        pushTokenCalls: p.pushTokenIncomingCall,
+        pushTokenOther: p.pushTokenOther,
+        pushAppIdCalls: p.pushappid_incoming_call,
+        pushAppIdOther: p.pushappid_other || p.pushappid,
         deviceId: p.device_id,
+        platform: p.platform,
       });
-      sendXml(res, 200, okXml());
+      // Acrobits ignores the body; return 200 empty.
+      res.status(200).end();
     } catch (err) {
       const status = err && err.status >= 400 ? err.status : 500;
       sendXml(res, status, errorXml((err && err.message) || 'Failed to register push token.'));

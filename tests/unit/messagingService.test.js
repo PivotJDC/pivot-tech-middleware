@@ -14,6 +14,7 @@ const db = require('../../src/db');
 const telnyx = require('../../src/integrations/telnyx');
 const accountService = require('../../src/services/accountService');
 const cdrService = require('../../src/services/cdrService');
+const pushService = require('../../src/services/pushService');
 const messaging = require('../../src/services/messagingService');
 
 const ACCOUNT_ID = '11111111-1111-4111-8111-111111111111';
@@ -24,6 +25,7 @@ beforeEach(() => {
   accountService.getAccountById.mockReset();
   accountService.lookupByPhoneE164.mockReset();
   cdrService.recordMessage.mockReset();
+  pushService.sendMessagePush.mockReset();
 });
 
 describe('sendMessage', () => {
@@ -192,6 +194,33 @@ describe('handleMessagingWebhook', () => {
       },
     });
     expect(res.handled).toBe('message.received');
+  });
+
+  it('pushes an inbound message to the account, threaded by sender', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] }) // account lookup by `to`
+      .mockResolvedValueOnce({ // inbound insert RETURNING *
+        rows: [{
+          id: 'in-9', from_number: '+12022762305', to_number: '+12085550100', body: 'Hello there',
+        }],
+      });
+    await messaging.handleMessagingWebhook({
+      data: {
+        event_type: 'message.received',
+        payload: {
+          id: 't9',
+          from: { phone_number: '+12022762305' },
+          to: [{ phone_number: '+12085550100' }],
+          text: 'Hello there',
+        },
+      },
+    });
+    expect(pushService.sendMessagePush).toHaveBeenCalledWith(ACCOUNT_ID, {
+      from: '+12022762305',
+      body: 'Hello there',
+      messageId: 'in-9',
+      streamId: '+12022762305',
+    });
   });
 
   it('routes message.delivered to a status update', async () => {

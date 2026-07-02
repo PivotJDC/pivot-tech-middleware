@@ -118,9 +118,16 @@ async function handleInboundMessage(payload = {}) {
   );
   logger.info({ accountId, telnyxMessageId }, 'inbound message stored');
   // Wake the Acrobits app so it fetches the new message (best-effort; never
-  // throws, so a push failure can't break inbound storage).
-  await pushService.sendMessageNotification(accountId, rows[0]);
-  return rows[0];
+  // throws, so a push failure can't break inbound storage). streamId is the
+  // sender's number so the push threads into the same conversation as /fetch.
+  const inbound = rows[0];
+  await pushService.sendMessagePush(accountId, {
+    from: inbound.from_number,
+    body: inbound.body,
+    messageId: inbound.id,
+    streamId: inbound.from_number,
+  });
+  return inbound;
 }
 
 /**

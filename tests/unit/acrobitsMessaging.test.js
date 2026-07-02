@@ -24,6 +24,7 @@ function buildApp() {
 const app = buildApp();
 const ACCOUNT = {
   id: 'acc-1',
+  tenant_id: 'ten-1',
   sip_username: 'pivottech-abc',
   sip_password_hash: 'bcrypt$x',
   phone_e164: '+12087869908',
@@ -297,7 +298,7 @@ describe('GET /v1/acrobits/fetch', () => {
 });
 
 describe('POST /v1/acrobits/push-token', () => {
-  it('registers the push token', async () => {
+  it('reports the push tokens and returns 200 empty body', async () => {
     pushService.registerToken.mockResolvedValueOnce({ id: 'pt-1' });
     const res = await request(app)
       .post('/v1/acrobits/push-token')
@@ -305,22 +306,41 @@ describe('POST /v1/acrobits/push-token', () => {
       .send({
         username: 'pivottech-abc',
         password: 'pw',
-        device_token: 'tok-123',
-        selector: 'sel',
-        app_id: 'io.pivot-tech.dialer',
+        selector: 'sel-abc',
+        pushTokenIncomingCall: 'voip-tok',
+        pushTokenOther: 'msg-tok',
+        pushappid_incoming_call: 'io.pivot.calls',
+        pushappid_other: 'io.pivot.other',
         platform: 'ios',
         device_id: 'dev-1',
       });
 
     expect(res.status).toBe(200);
-    expect(res.text).toContain('<status>ok</status>');
-    expect(pushService.registerToken).toHaveBeenCalledWith('acc-1', {
-      deviceToken: 'tok-123',
-      selector: 'sel',
-      appId: 'io.pivot-tech.dialer',
-      platform: 'ios',
+    expect(res.text).toBe('');
+    expect(pushService.registerToken).toHaveBeenCalledWith('acc-1', 'ten-1', {
+      selector: 'sel-abc',
+      pushTokenCalls: 'voip-tok',
+      pushTokenOther: 'msg-tok',
+      pushAppIdCalls: 'io.pivot.calls',
+      pushAppIdOther: 'io.pivot.other',
       deviceId: 'dev-1',
+      platform: 'ios',
     });
+  });
+
+  it('falls back to pushappid when pushappid_other is absent', async () => {
+    pushService.registerToken.mockResolvedValueOnce({ id: 'pt-2' });
+    await request(app)
+      .post('/v1/acrobits/push-token')
+      .type('form')
+      .send({
+        username: 'pivottech-abc', password: 'pw', selector: 'sel-y', pushappid: 'io.pivot.legacy',
+      });
+    expect(pushService.registerToken).toHaveBeenCalledWith(
+      'acc-1',
+      'ten-1',
+      expect.objectContaining({ pushAppIdOther: 'io.pivot.legacy' }),
+    );
   });
 
   it('requires authentication', async () => {
@@ -328,9 +348,7 @@ describe('POST /v1/acrobits/push-token', () => {
     const res = await request(app)
       .post('/v1/acrobits/push-token')
       .type('form')
-      .send({
-        username: 'nope', device_token: 'x', app_id: 'a', platform: 'ios',
-      });
+      .send({ username: 'nope', selector: 'x', pushTokenOther: 't' });
     expect(res.status).toBe(403);
     expect(pushService.registerToken).not.toHaveBeenCalled();
   });

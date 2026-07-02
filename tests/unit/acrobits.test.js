@@ -57,6 +57,27 @@ describe('acrobits.buildAccountXml', () => {
     expect(xml).not.toMatch(/&(?!amp;|lt;|gt;|apos;|quot;)/);
   });
 
+  it('embeds the Push Token Reporter URL, post-data, and content type', () => {
+    const xml = acrobits.buildAccountXml(params);
+    const config = require('../../src/config'); // eslint-disable-line global-require
+    const base = config.provisioning.baseUrl;
+    expect(xml).toContain(
+      `<pushTokenReporterUrl>${base}/v1/acrobits/push-token</pushTokenReporterUrl>`,
+    );
+    expect(xml).toContain(
+      '<pushTokenReporterPostData>username=%account[authUsername]%'
+      + '&amp;password=%account[password]%&amp;selector=%selector%'
+      + '&amp;pushTokenIncomingCall=%pushTokenIncomingCall%&amp;pushTokenOther=%pushTokenOther%'
+      + '&amp;pushappid_incoming_call=%pushappid_incoming_call%&amp;pushappid_other=%pushappid_other%'
+      + '</pushTokenReporterPostData>',
+    );
+    expect(xml).toContain(
+      '<pushTokenReporterContentType>application/x-www-form-urlencoded</pushTokenReporterContentType>',
+    );
+    // Still no raw unescaped ampersands anywhere in the document.
+    expect(xml).not.toMatch(/&(?!amp;|lt;|gt;|apos;|quot;)/);
+  });
+
   it('includes client-side number rewriting rules for E.164 normalization', () => {
     const xml = acrobits.buildAccountXml(params);
     expect(xml).toContain('<rewriting>');

@@ -66,6 +66,15 @@ function buildAccountXml({
   const smsSendUrl = `${base}/v1/acrobits/send?username=%account[authUsername]%&amp;password=%account[password]%&amp;to=%sms_to%&amp;body=%sms_body%`;
   const smsFetchUrl = `${base}/v1/acrobits/fetch?username=%account[authUsername]%&amp;password=%account[password]%&amp;last_known=%last_known_sms_id%`;
 
+  // Push Token Reporter: the app POSTs its push tokens (form-urlencoded) to this
+  // URL so we can wake it for inbound messages. %selector%/%pushToken*%/
+  // %pushappid_*% are Acrobits push variables; %account[...]% authenticate.
+  const pushReporterUrl = `${base}/v1/acrobits/push-token`;
+  const pushReporterPostData = 'username=%account[authUsername]%&amp;password=%account[password]%'
+    + '&amp;selector=%selector%&amp;pushTokenIncomingCall=%pushTokenIncomingCall%'
+    + '&amp;pushTokenOther=%pushTokenOther%&amp;pushappid_incoming_call=%pushappid_incoming_call%'
+    + '&amp;pushappid_other=%pushappid_other%';
+
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<account>',
@@ -83,6 +92,9 @@ function buildAccountXml({
     '  <codecPriority>OPUS,ULAW,ALAW</codecPriority>',
     `  <genericSmsSendUrl>${smsSendUrl}</genericSmsSendUrl>`,
     `  <genericSmsFetchUrl>${smsFetchUrl}</genericSmsFetchUrl>`,
+    `  <pushTokenReporterUrl>${pushReporterUrl}</pushTokenReporterUrl>`,
+    `  <pushTokenReporterPostData>${pushReporterPostData}</pushTokenReporterPostData>`,
+    '  <pushTokenReporterContentType>application/x-www-form-urlencoded</pushTokenReporterContentType>',
     // Client-side dialed-number rewriting: auto-prepend +1 to 10-digit US
     // numbers and + to 11-digit numbers starting with 1, so calls/SMS are
     // normalized to E.164 on the device before they reach us.
