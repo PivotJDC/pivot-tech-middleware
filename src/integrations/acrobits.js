@@ -95,7 +95,7 @@ function buildAccountXml({
     '  <title>Pivot-Tech</title>',
     '  <allowMessage>1</allowMessage>',
     '  <allowVideo>1</allowVideo>',
-    '  <pushEnabled>1</pushEnabled>',
+    '  <pushEnabled>0</pushEnabled>',
     `  <displayName>${escapeXml(callerIdName)}</displayName>`,
     `  <callerID>${escapeXml(callerIdNumber)}</callerID>`,
     '  <codecPriority>OPUS,ULAW,ALAW</codecPriority>',
