@@ -8,12 +8,8 @@
 const config = require('../config');
 const { formatNational } = require('../utils/e164');
 
-// DECISION: Jim's migration note pointed at provisioningService.js, but the
-// provisioning XML domain is actually constructed here. Telnyx uses a single
-// shared SIP domain (no per-customer space like SignalWire), so this is now a
-// constant rather than derived from config.
-// eslint-disable-next-line no-unused-vars -- TEST: domain temporarily omitted from Account XML
-const SIP_DOMAIN = 'sip.telnyx.com';
+// NB: <domain>/<port>/<transport> are intentionally NOT emitted in the Account
+// XML — the Acrobits portal's default SIP settings control transport instead.
 
 /** Escape the five XML special characters so values can't break the document. */
 function escapeXml(value) {
@@ -59,7 +55,6 @@ function escapeXml(value) {
 function buildAccountXml({
   sipUsername, sipPassword, phoneE164, firstName, lastName,
 }) {
-  // const domain = SIP_DOMAIN; // TEST: let the portal's SIP settings apply
   // Caller ID display name = subscriber's full name; fall back to the
   // national-format number when no name is on file (name fields are optional).
   const callerIdName = [firstName, lastName]
@@ -83,18 +78,12 @@ function buildAccountXml({
   const smsSendUrl = `${base}/v1/acrobits/send?username=%account[authUsername]%&amp;password=%account[password]%&amp;to=%sms_to%&amp;body=%sms_body%`;
   const smsFetchUrl = `${base}/v1/acrobits/fetch?username=%account[authUsername]%&amp;password=%account[password]%&amp;last_known=%last_known_sms_id%`;
 
-  // NB: transport is UDP with no SRTP — TLS/SRTP broke SIP registration.
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<account>',
     `  <username>${escapeXml(phoneE164)}</username>`,
     `  <authUsername>${escapeXml(sipUsername)}</authUsername>`,
     `  <password>${escapeXml(sipPassword)}</password>`,
-    // TEST: omit domain/port/transport so the portal's SIP settings control
-    // transport instead of this XML overriding them.
-    // `  <domain>${escapeXml(domain)}</domain>`,
-    // '  <port>5060</port>',
-    // '  <transport>UDP</transport>',
     '  <title>Pivot-Tech</title>',
     '  <allowMessage>1</allowMessage>',
     '  <allowVideo>1</allowVideo>',
