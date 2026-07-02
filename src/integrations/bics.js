@@ -257,6 +257,20 @@ async function fetchSimInventory() {
 }
 
 /**
+ * List the roaming profiles available to our account, so a valid
+ * roamingProfileId can be chosen for CreateEndPoint.
+ *
+ * NB: BICS SFT has no dedicated "GetRoamingProfiles" endpoint — per the SFT API
+ * FAQ, the roaming profile ids (together with plan ids) are returned by
+ * GET /GetPlans. We return the raw rows so the caller can read each entry's id
+ * and name and identify the correct profile. Returns [] when empty.
+ */
+async function listRoamingProfiles() {
+  const payload = await request('GET', '/GetPlans');
+  return envelopeRows(payload);
+}
+
+/**
  * Fetch a single SIM by ICCID. Returns the SIM detail object — which carries
  * the eSIM activation code used to render the install QR:
  *   activationCode.textQrCode      (the LPA string)
@@ -412,6 +426,7 @@ async function updateThreshold(endPointId, {
 module.exports = {
   authenticate,
   fetchSimInventory,
+  listRoamingProfiles,
   fetchSimByIccid,
   getNextAvailableEsim,
   createEndpoint,

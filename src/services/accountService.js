@@ -467,6 +467,24 @@ async function getAccountById(id) {
 }
 
 /**
+ * Backfill/repair an account's sip_password_hash by fetching the live SIP
+ * password from Telnyx and re-hashing it. Fixes accounts created before hash
+ * storage (NULL sip_password_hash), which fail Acrobits SIP-credential auth.
+ * @returns {Promise<{ updated: true }>}
+ */
+async function refreshSipPasswordHash(id) {
+  const account = await getAccountById(id); // throws NOT_FOUND if missing
+  if (!account.sip_endpoint_id) {
+    throw errors.validation('Account has no SIP endpoint to refresh from.', 'sip_endpoint_id');
+  }
+  const password = await didOrchestration.getSipPassword(account.sip_endpoint_id);
+  const hash = await crypto.hashPassword(password);
+  await setSipPasswordHash(id, hash);
+  logger.info({ accountId: id }, 'refreshed sip_password_hash from Telnyx');
+  return { updated: true };
+}
+
+/**
  * Look up the PRIMARY account by email (used for MVP token issuance). Child
  * lines share the primary's email, so this scopes to parent_account_id IS NULL.
  * Returns the full account or throws NOT_FOUND.
@@ -678,6 +696,7 @@ module.exports = {
   transitionStatus,
   retryBicsProvisioning,
   setSipPasswordHash,
+  refreshSipPasswordHash,
   serializeAccount,
   // exported for tests / reuse
   STATUS_TRANSITIONS,

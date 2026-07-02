@@ -29,6 +29,7 @@ jest.mock('../../src/utils/logger', () => ({
 const express = require('express');
 const request = require('supertest');
 const adminUserService = require('../../src/services/adminUserService');
+const accountService = require('../../src/services/accountService');
 const usageService = require('../../src/services/usageService');
 const tenantService = require('../../src/services/tenantService');
 const adminRouter = require('../../src/routes/admin');
@@ -268,5 +269,22 @@ describe('GET /admin/users (super_admin only)', () => {
     const res = await request(app).get('/admin/users');
     expect(res.status).toBe(403);
     expect(adminUserService.listAdminUsers).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /admin/accounts/:id/refresh-sip-credentials (super_admin only)', () => {
+  it('refreshes for a super_admin', async () => {
+    accountService.refreshSipPasswordHash.mockResolvedValueOnce({ updated: true });
+    const res = await request(app).post('/admin/accounts/a1/refresh-sip-credentials').send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ updated: true });
+    expect(accountService.refreshSipPasswordHash).toHaveBeenCalledWith('a1');
+  });
+
+  it('forbids a non-super_admin', async () => {
+    mockAdmin = { id: 'x', role: 'admin' };
+    const res = await request(app).post('/admin/accounts/a1/refresh-sip-credentials').send({});
+    expect(res.status).toBe(403);
+    expect(accountService.refreshSipPasswordHash).not.toHaveBeenCalled();
   });
 });

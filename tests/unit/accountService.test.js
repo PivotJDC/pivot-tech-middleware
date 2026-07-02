@@ -630,6 +630,39 @@ describe('getAccountById', () => {
   });
 });
 
+describe('refreshSipPasswordHash', () => {
+  it('fetches the live SIP password, hashes it, and persists the hash', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [baseRow] }) // getAccountById
+      .mockResolvedValueOnce({}); // UPDATE sip_password_hash
+    didOrchestration.getSipPassword.mockResolvedValueOnce('live-sip-pw');
+    crypto.hashPassword.mockResolvedValueOnce('bcrypt$new');
+
+    const result = await accountService.refreshSipPasswordHash(baseRow.id);
+
+    expect(result).toEqual({ updated: true });
+    expect(didOrchestration.getSipPassword).toHaveBeenCalledWith(baseRow.sip_endpoint_id);
+    expect(crypto.hashPassword).toHaveBeenCalledWith('live-sip-pw');
+    // The UPDATE persists the new hash for the account.
+    const updateCall = db.query.mock.calls.find(([sql]) => /UPDATE accounts SET sip_password_hash/.test(sql));
+    expect(updateCall[1]).toEqual(['bcrypt$new', baseRow.id]);
+  });
+
+  it('404s when the account does not exist', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await expect(accountService.refreshSipPasswordHash(baseRow.id))
+      .rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(didOrchestration.getSipPassword).not.toHaveBeenCalled();
+  });
+
+  it('rejects an account with no SIP endpoint', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ ...baseRow, sip_endpoint_id: null }] });
+    await expect(accountService.refreshSipPasswordHash(baseRow.id))
+      .rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'sip_endpoint_id' });
+    expect(didOrchestration.getSipPassword).not.toHaveBeenCalled();
+  });
+});
+
 describe('updateAccount status machine', () => {
   it('activates a pending account and stamps activated_at', async () => {
     db.query

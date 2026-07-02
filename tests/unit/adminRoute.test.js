@@ -168,6 +168,14 @@ describe('admin API', () => {
     expect(provisioningService.reissueToken).toHaveBeenCalledWith('a1');
   });
 
+  it('POST /admin/accounts/:id/refresh-sip-credentials backfills the hash', async () => {
+    accountService.refreshSipPasswordHash.mockResolvedValueOnce({ updated: true });
+    const res = await request(app).post('/admin/accounts/a1/refresh-sip-credentials').send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ updated: true });
+    expect(accountService.refreshSipPasswordHash).toHaveBeenCalledWith('a1');
+  });
+
   it('GET /admin/dids lists inventory', async () => {
     adminService.listDids.mockResolvedValueOnce({ dids: [], pagination: {} });
     const res = await request(app).get('/admin/dids?market=lewiston-id&area_code=208');
