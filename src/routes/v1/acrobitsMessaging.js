@@ -118,6 +118,7 @@ function sendXml(res, status, xml) {
 
 // --- Send (GET or POST) ---
 async function sendHandler(req, res) {
+  console.log("SEND_DEBUG", JSON.stringify({ query: req.query, body: req.body }));
   const p = params(req);
   const account = await authAcrobits(p);
   if (!account) {
