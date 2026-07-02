@@ -139,7 +139,7 @@ async function sendHandler(req, res) {
   try {
     const message = await messagingService.sendMessage(account.id, {
       to: toNumber,
-      body: p.sms_body,
+      body: p.body || p.sms_body || p.message_body,
     });
     sendXml(res, 200, sendOkXml(message.id));
   } catch (err) {
