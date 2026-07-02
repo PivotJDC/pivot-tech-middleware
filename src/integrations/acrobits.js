@@ -5,7 +5,6 @@
  * This is the one place the plaintext SIP password is rendered into a response.
  * Callers must pass it in memory only; it is never logged or persisted here.
  */
-const config = require('../config');
 const { formatNational } = require('../utils/e164');
 
 // DECISION: Jim's migration note pointed at provisioningService.js, but the
@@ -67,21 +66,9 @@ function buildAccountXml({
     .trim() || formatNational(phoneE164);
   const callerIdNumber = phoneE164;
 
-  // HTTP messaging: Cloud Softphone can't bridge SMS/MMS over SIP, so it calls
-  // our middleware directly. The %UPPERCASE% tokens are Acrobits template
-  // variables the app substitutes at runtime; the query separators are literal
-  // "&amp;" (XML-escaped ampersands). The base URL comes from config so it isn't
-  // hardcoded per environment.
   // NB: transport is UDP with no SRTP — TLS/SRTP broke SIP registration.
-  //
-  // We send %AUTH_USERNAME% (not %USERNAME%): %USERNAME% maps to <username> =
-  // the subscriber E.164, but authAcrobits looks up by sip_username (the Telnyx
-  // gencred), which is what <authUsername>/%AUTH_USERNAME% carries. authAcrobits
-  // also falls back to a phone_e164 lookup, so an E.164 value still resolves.
-  const base = (config.provisioning.baseUrl || '').replace(/\/+$/, '');
-  const sendURL = `${base}/v1/acrobits/send?username=%AUTH_USERNAME%&amp;password=%PASSWORD%&amp;to=%TO_NUMBER%&amp;body=%MESSAGE_BODY%`;
-  const fetchURL = `${base}/v1/acrobits/fetch?username=%AUTH_USERNAME%&amp;password=%PASSWORD%&amp;last_known=%LAST_KNOWN_SMS_ID%`;
-
+  // Messaging (send/fetch) URLs are NOT set here: Acrobits configures the HTTP
+  // messaging endpoints at the provider-portal level, not in the Account XML.
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<account>',
@@ -98,10 +85,6 @@ function buildAccountXml({
     `  <displayName>${escapeXml(callerIdName)}</displayName>`,
     `  <callerID>${escapeXml(callerIdNumber)}</callerID>`,
     '  <codecPriority>OPUS,ULAW,ALAW</codecPriority>',
-    '  <httpMessaging>',
-    `    <sendURL>${sendURL}</sendURL>`,
-    `    <fetchURL>${fetchURL}</fetchURL>`,
-    '  </httpMessaging>',
     '</account>',
     '',
   ].join('\n');
