@@ -85,7 +85,7 @@ function buildAccountXml({
     '  <host>sip.telnyx.com</host>',
     '  <transport>udp</transport>',
     '  <title>Pivot-Tech</title>',
-    '  <allowMessage>1</allowMessage>',
+    '  <allowMessage>0</allowMessage>',
     '  <allowVideo>1</allowVideo>',
     '  <pushEnabled>1</pushEnabled>',
     `  <displayName>${escapeXml(callerIdName)}</displayName>`,

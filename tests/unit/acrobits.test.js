@@ -23,7 +23,8 @@ describe('acrobits.buildAccountXml', () => {
     expect(xml).not.toContain('<port>');
     expect(xml).not.toContain('<srtp>');
     expect(xml).toContain('<pushEnabled>1</pushEnabled>');
-    expect(xml).toContain('<allowMessage>1</allowMessage>');
+    // SIMPLE messaging off — messaging runs via genericSmsSendUrl, not SIP SIMPLE.
+    expect(xml).toContain('<allowMessage>0</allowMessage>');
     // Outbound From-header user is the E.164, via <fromUser> (not <callerID>,
     // which isn't a recognized Acrobits Account XML property).
     expect(xml).toContain('<fromUser>+12085550100</fromUser>');

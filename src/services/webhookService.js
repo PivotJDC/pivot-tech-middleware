@@ -39,7 +39,7 @@ const RANK = {
  * Validate an inbound webhook's HMAC-SHA256 signature against
  * SIGNALWIRE_WEBHOOK_SECRET, in constant time.
  * @param {Buffer|string} rawBody - the raw request body (pre-JSON-parse)
- * @param {string} signature - the x-signalwire-signature header (hex)
+ * @param {string} signature - the x-telnyx-signature header (hex)
  * @returns {boolean}
  */
 function verifySignature(rawBody, signature) {
@@ -232,18 +232,18 @@ async function handlePortEvent(event) {
 }
 
 /**
- * Process a general SignalWire event (calls, SMS/MMS delivery). MVP: log + ack;
- * specific handling is added as those flows are built out.
+ * Process a general Telnyx event (delivery, misc). MVP: log + ack; specific
+ * handling is added as those flows are built out.
  */
-async function handleSignalwireEvent(event) {
-  logger.info({ type: eventType(event) }, 'signalwire general event received (MVP no-op)');
+async function handleGeneralEvent(event) {
+  logger.info({ type: eventType(event) }, 'general webhook event received (MVP no-op)');
   return { handled: true };
 }
 
 module.exports = {
   verifySignature,
   handlePortEvent,
-  handleSignalwireEvent,
+  handleGeneralEvent,
   // exported for tests
   completePort,
 };

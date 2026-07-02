@@ -128,9 +128,9 @@ describe('handlePortEvent — idempotency / ordering', () => {
   });
 });
 
-describe('handleSignalwireEvent', () => {
+describe('handleGeneralEvent', () => {
   it('acks general events', async () => {
-    const res = await webhookService.handleSignalwireEvent({ type: 'call.ended' });
+    const res = await webhookService.handleGeneralEvent({ type: 'call.ended' });
     expect(res).toEqual({ handled: true });
   });
 });

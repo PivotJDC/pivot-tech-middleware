@@ -25,8 +25,8 @@ describe('webhook routes', () => {
     webhookService.verifySignature.mockReturnValue(false);
     const res = await request(app)
       .post('/v1/webhooks/port')
-      .set('x-signalwire-signature', 'bad')
-      .send({ type: 'port.submitted', data: { port_id: 'swp1' } });
+      .set('x-telnyx-signature', 'bad')
+      .send({ type: 'port.submitted', data: { port_id: 'p1' } });
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('FORBIDDEN');
     expect(webhookService.handlePortEvent).not.toHaveBeenCalled();
@@ -37,29 +37,18 @@ describe('webhook routes', () => {
     webhookService.handlePortEvent.mockResolvedValueOnce({ handled: true, status: 'submitted' });
     const res = await request(app)
       .post('/v1/webhooks/port')
-      .set('x-signalwire-signature', 'good')
-      .send({ type: 'port.submitted', data: { port_id: 'swp1' } });
+      .set('x-telnyx-signature', 'good')
+      .send({ type: 'port.submitted', data: { port_id: 'p1' } });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ received: true, handled: true, status: 'submitted' });
   });
 
-  it('processes a general event on the legacy /signalwire alias', async () => {
+  it('processes a general event on the /telnyx route', async () => {
     webhookService.verifySignature.mockReturnValue(true);
-    webhookService.handleSignalwireEvent.mockResolvedValueOnce({ handled: true });
-    const res = await request(app)
-      .post('/v1/webhooks/signalwire')
-      .set('x-signalwire-signature', 'good')
-      .send({ type: 'call.ended' });
-    expect(res.status).toBe(200);
-    expect(res.body.received).toBe(true);
-  });
-
-  it('processes a general event on the canonical /telnyx route', async () => {
-    webhookService.verifySignature.mockReturnValue(true);
-    webhookService.handleSignalwireEvent.mockResolvedValueOnce({ handled: true });
+    webhookService.handleGeneralEvent.mockResolvedValueOnce({ handled: true });
     const res = await request(app)
       .post('/v1/webhooks/telnyx')
-      .set('x-signalwire-signature', 'good')
+      .set('x-telnyx-signature', 'good')
       .send({ type: 'message.finalized' });
     expect(res.status).toBe(200);
     expect(res.body.received).toBe(true);
