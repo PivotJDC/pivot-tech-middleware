@@ -22,6 +22,7 @@ beforeEach(() => {
   db.query.mockReset();
   telnyx.sendMessage.mockReset();
   accountService.getAccountById.mockReset();
+  accountService.lookupByPhoneE164.mockReset();
   cdrService.recordMessage.mockReset();
 });
 
@@ -242,6 +243,53 @@ describe('handleMessagingWebhook', () => {
       to: '+12085550142',
       status: 'delivered',
       messageType: 'sms',
+    }));
+  });
+
+  it('tags the CDR with the owning account + tenant looked up by number', async () => {
+    // Outbound: the subscriber's number is `from`.
+    accountService.lookupByPhoneE164.mockResolvedValueOnce({ id: ACCOUNT_ID, tenant_id: 'ten-7' });
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'm1', status: 'delivered' }] });
+    await messaging.handleMessagingWebhook({
+      data: {
+        event_type: 'message.delivered',
+        payload: {
+          id: 'tmsg-9',
+          direction: 'outbound',
+          from: { phone_number: '+12085550100' },
+          to: [{ phone_number: '+12085550142' }],
+        },
+      },
+    });
+    expect(accountService.lookupByPhoneE164).toHaveBeenCalledWith('+12085550100');
+    expect(cdrService.recordMessage).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: ACCOUNT_ID,
+      tenantId: 'ten-7',
+    }));
+  });
+
+  it('looks up the subscriber by the to-number for inbound events', async () => {
+    accountService.lookupByPhoneE164.mockResolvedValueOnce({ id: ACCOUNT_ID, tenant_id: 'ten-8' });
+    db.query
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] }) // handleInboundMessage lookup
+      .mockResolvedValueOnce({ rows: [{ id: 'in-2' }] }); // inbound insert
+    await messaging.handleMessagingWebhook({
+      data: {
+        event_type: 'message.received',
+        payload: {
+          id: 'tmsg-10',
+          direction: 'inbound',
+          from: { phone_number: '+12085550142' },
+          to: [{ phone_number: '+12085550100' }],
+          text: 'hi',
+        },
+      },
+    });
+    // Inbound: subscriber number is the `to` (our DID).
+    expect(accountService.lookupByPhoneE164).toHaveBeenCalledWith('+12085550100');
+    expect(cdrService.recordMessage).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: ACCOUNT_ID,
+      tenantId: 'ten-8',
     }));
   });
 

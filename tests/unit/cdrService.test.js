@@ -113,6 +113,44 @@ describe('recordMessage', () => {
     expect(db.query).toHaveBeenCalledTimes(2);
   });
 
+  it('prefers an explicit accountId/tenantId and skips the ownership lookup', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [] }) // UPDATE miss
+      .mockResolvedValueOnce({ rows: [{ id: 'mr-9', direction: 'inbound' }] }); // INSERT
+    await cdr.recordMessage({
+      messageId: 'MSG9',
+      direction: 'inbound',
+      from: OTHER,
+      to: OUR_DID,
+      status: 'received',
+      accountId: ACCOUNT_ID,
+      tenantId: 'ten-9',
+    });
+    // No accountForNumber SELECT — first call is the UPDATE.
+    expect(db.query.mock.calls[0][0]).toMatch(/UPDATE message_records/);
+    // INSERT carries the explicit account_id + tenant_id.
+    const insertParams = db.query.mock.calls[1][1];
+    expect(insertParams[0]).toBe(ACCOUNT_ID);
+    expect(insertParams[1]).toBe('ten-9');
+  });
+
+  it('backfills account_id/tenant_id on the status-update path', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'mr-1', status: 'delivered' }] }); // UPDATE hit
+    await cdr.recordMessage({
+      messageId: 'MSG1',
+      direction: 'outbound',
+      from: OUR_DID,
+      to: OTHER,
+      status: 'delivered',
+      accountId: ACCOUNT_ID,
+      tenantId: 'ten-1',
+    });
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/account_id = COALESCE\(account_id, \$2\)/);
+    expect(sql).toMatch(/tenant_id = COALESCE\(tenant_id, \$3\)/);
+    expect(params).toEqual(['delivered', ACCOUNT_ID, 'ten-1', 'MSG1']);
+  });
+
   it('normalizes an unknown message_type to sms', async () => {
     db.query
       .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID, tenant_id: 'ten-1' }] })

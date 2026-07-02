@@ -239,6 +239,14 @@ async function handleMessagingWebhook(body = {}) {
     const from = (payload.from && payload.from.phone_number) || payload.from || '';
     const toEntry = Array.isArray(payload.to) ? payload.to[0] : payload.to;
     const to = (toEntry && toEntry.phone_number) || toEntry || '';
+
+    // Tag the CDR with the owning account (and its tenant) so tenant-scoped
+    // admin views can see it. For inbound the subscriber's number is `to`; for
+    // outbound it's `from`. DECISION: use the existing lookupByPhoneE164 (raw
+    // row with id + tenant_id) rather than a separate lookupByPhone helper.
+    const subscriberNumber = payload.direction === 'inbound' ? to : from;
+    const account = await accountService.lookupByPhoneE164(subscriberNumber);
+
     try {
       await cdrService.recordMessage({
         messageId: payload.id,
@@ -249,6 +257,8 @@ async function handleMessagingWebhook(body = {}) {
         to,
         status: CDR_STATUS_BY_EVENT[eventType],
         messageType: String(payload.type || '').toLowerCase() === 'mms' ? 'mms' : 'sms',
+        accountId: account ? account.id : null,
+        tenantId: account ? account.tenant_id : null,
       });
     } catch (err) {
       logger.error({ err: err.message, messageId: payload.id }, 'failed to record message CDR');

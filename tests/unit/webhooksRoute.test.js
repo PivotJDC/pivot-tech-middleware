@@ -43,13 +43,24 @@ describe('webhook routes', () => {
     expect(res.body).toMatchObject({ received: true, handled: true, status: 'submitted' });
   });
 
-  it('processes a general signalwire event', async () => {
+  it('processes a general event on the legacy /signalwire alias', async () => {
     webhookService.verifySignature.mockReturnValue(true);
     webhookService.handleSignalwireEvent.mockResolvedValueOnce({ handled: true });
     const res = await request(app)
       .post('/v1/webhooks/signalwire')
       .set('x-signalwire-signature', 'good')
       .send({ type: 'call.ended' });
+    expect(res.status).toBe(200);
+    expect(res.body.received).toBe(true);
+  });
+
+  it('processes a general event on the canonical /telnyx route', async () => {
+    webhookService.verifySignature.mockReturnValue(true);
+    webhookService.handleSignalwireEvent.mockResolvedValueOnce({ handled: true });
+    const res = await request(app)
+      .post('/v1/webhooks/telnyx')
+      .set('x-signalwire-signature', 'good')
+      .send({ type: 'message.finalized' });
     expect(res.status).toBe(200);
     expect(res.body.received).toBe(true);
   });

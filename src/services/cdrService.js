@@ -117,14 +117,28 @@ async function recordCall({
 /**
  * Record (or update) a message from a messaging webhook. UPSERT by message_id.
  * Returns the row, or null when no account owns either number.
- * @param {{ messageId, direction?, from, to, status?, messageType? }} input
+ *
+ * Ownership: an explicit accountId/tenantId (resolved by the caller from the
+ * subscriber's number) is preferred; otherwise it's inferred from from/to. The
+ * UPDATE path backfills account_id/tenant_id when they were previously null, so
+ * older rows (stored before ownership tagging) get repaired on the next event.
+ * @param {{ messageId, direction?, from, to, status?, messageType?,
+ *           accountId?, tenantId? }} input
  */
 async function recordMessage({
-  messageId, direction, from, to, status, messageType,
+  messageId, direction, from, to, status, messageType, accountId, tenantId,
 } = {}) {
   if (!messageId) return null;
-  const { accountId, tenantId, direction: dir } = await resolveOwnership(direction, from, to);
-  if (!accountId) {
+  let ownerAccountId = accountId || null;
+  let ownerTenantId = tenantId || null;
+  let dir = direction;
+  if (!ownerAccountId) {
+    const owner = await resolveOwnership(direction, from, to);
+    ownerAccountId = owner.accountId;
+    ownerTenantId = owner.tenantId;
+    dir = owner.direction;
+  }
+  if (!ownerAccountId) {
     logger.warn({ messageId }, 'message record for a number we do not own; ignored');
     return null;
   }
@@ -132,8 +146,13 @@ async function recordMessage({
   const type = messageType === 'mms' ? 'mms' : 'sms';
 
   const updated = await db.query(
-    'UPDATE message_records SET status = $1 WHERE message_id = $2 RETURNING *',
-    [finalStatus, messageId],
+    `UPDATE message_records
+        SET status = $1,
+            account_id = COALESCE(account_id, $2),
+            tenant_id = COALESCE(tenant_id, $3)
+      WHERE message_id = $4
+    RETURNING *`,
+    [finalStatus, ownerAccountId, ownerTenantId, messageId],
   );
   if (updated.rows[0]) return updated.rows[0];
 
@@ -142,9 +161,9 @@ async function recordMessage({
        (account_id, tenant_id, message_id, direction, from_number, to_number, status, message_type)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
-    [accountId, tenantId, messageId, dir, from, to, finalStatus, type],
+    [ownerAccountId, ownerTenantId, messageId, dir, from, to, finalStatus, type],
   );
-  logger.info({ accountId, messageId, direction: dir }, 'message record stored');
+  logger.info({ accountId: ownerAccountId, messageId, direction: dir }, 'message record stored');
   return inserted.rows[0];
 }
 
