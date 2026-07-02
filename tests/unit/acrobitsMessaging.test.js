@@ -32,6 +32,63 @@ beforeEach(() => {
   crypto.verifyPassword.mockResolvedValue(true);
 });
 
+describe('GET /v1/acrobits/provision', () => {
+  const PROV_ACCOUNT = {
+    id: 'acc-1',
+    sip_username: 'pivottech-abc',
+    sip_password_hash: 'bcrypt$x',
+    phone_e164: '+12085550100',
+    first_name: 'Jane',
+    last_name: 'Doe',
+    status: 'active',
+  };
+
+  it('returns the Account XML (text/xml) for valid SIP credentials', async () => {
+    accountService.lookupBySipUsername.mockResolvedValueOnce(PROV_ACCOUNT);
+    crypto.verifyPassword.mockResolvedValueOnce(true);
+
+    const res = await request(app)
+      .get('/v1/acrobits/provision')
+      .query({ username: 'pivottech-abc', password: 'sip-secret', initialScreen: 'dialer' });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/xml/);
+    // SIP identity split: username = subscriber E.164, authUsername = gencred.
+    expect(res.text).toContain('<username>+12085550100</username>');
+    expect(res.text).toContain('<authUsername>pivottech-abc</authUsername>');
+    // The verified plaintext password is rendered into the XML (no Telnyx call).
+    expect(res.text).toContain('<password>sip-secret</password>');
+    expect(res.text).toContain('<displayName>Jane Doe</displayName>');
+    expect(crypto.verifyPassword).toHaveBeenCalledWith('sip-secret', 'bcrypt$x');
+  });
+
+  it('rejects a wrong SIP password with 403', async () => {
+    accountService.lookupBySipUsername.mockResolvedValueOnce(PROV_ACCOUNT);
+    crypto.verifyPassword.mockResolvedValueOnce(false);
+    const res = await request(app)
+      .get('/v1/acrobits/provision')
+      .query({ username: 'pivottech-abc', password: 'wrong' });
+    expect(res.status).toBe(403);
+    expect(res.text).not.toContain('<account>');
+  });
+
+  it('rejects an unknown SIP username with 403', async () => {
+    accountService.lookupBySipUsername.mockResolvedValueOnce(null);
+    const res = await request(app)
+      .get('/v1/acrobits/provision')
+      .query({ username: 'nobody', password: 'x' });
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects a missing password without a DB lookup', async () => {
+    const res = await request(app)
+      .get('/v1/acrobits/provision')
+      .query({ username: 'pivottech-abc' });
+    expect(res.status).toBe(403);
+    expect(accountService.lookupBySipUsername).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET/POST /v1/acrobits/send', () => {
   it('sends a message and returns the sms_id as XML', async () => {
     messagingService.sendMessage.mockResolvedValueOnce({ id: 'msg-1' });

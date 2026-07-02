@@ -18,6 +18,7 @@ const express = require('express');
 const accountService = require('../../services/accountService');
 const messagingService = require('../../services/messagingService');
 const pushService = require('../../services/pushService');
+const acrobits = require('../../integrations/acrobits');
 const crypto = require('../../utils/crypto');
 const { asyncHandler } = require('../../middleware/errorHandler');
 
@@ -168,6 +169,38 @@ router.post(
       const status = err && err.status >= 400 ? err.status : 500;
       sendXml(res, status, errorXml((err && err.message) || 'Failed to register push token.'));
     }
+  }),
+);
+
+// --- External Provisioning (Account XML) ---
+// Acrobits calls this REPEATEDLY (not single-use like the token flow) with the
+// SIP username + password templated in. We authenticate by SIP credentials
+// (same pattern as /send) and return the Account XML. Because the caller proved
+// it knows the SIP password (verified against sip_password_hash), that value IS
+// the plaintext to render into the XML — no Telnyx round-trip needed.
+//
+// Ignored Acrobits params: cloud_id, cloud_password, initialScreen.
+router.get(
+  '/provision',
+  asyncHandler(async (req, res) => {
+    const p = params(req);
+    if (!p.username || !p.password) {
+      sendXml(res, 403, errorXml('Authentication failed.'));
+      return;
+    }
+    const account = await authAcrobits(p);
+    if (!account) {
+      sendXml(res, 403, errorXml('Authentication failed.'));
+      return;
+    }
+    const xml = acrobits.buildAccountXml({
+      sipUsername: account.sip_username,
+      sipPassword: p.password, // verified above; the caller's SIP password
+      phoneE164: account.phone_e164,
+      firstName: account.first_name,
+      lastName: account.last_name,
+    });
+    res.status(200).type('text/xml').send(xml);
   }),
 );
 
