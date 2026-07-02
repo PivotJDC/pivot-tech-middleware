@@ -15,9 +15,9 @@ describe('acrobits.buildAccountXml', () => {
     expect(xml).toContain('<username>+12085550100</username>');
     expect(xml).toContain('<authUsername>pivottech-abc</authUsername>');
     expect(xml).toContain('<password>sip-secret-123</password>');
-    // domain/port/transport are omitted so the Acrobits portal's SIP settings
-    // control transport instead of the Account XML overriding them.
-    expect(xml).not.toContain('<domain>');
+    // <domain> is set (Telnyx SIP domain); port/transport are omitted so the
+    // Acrobits portal's SIP settings control transport.
+    expect(xml).toContain('<domain>sip.telnyx.com</domain>');
     expect(xml).not.toContain('<port>');
     expect(xml).not.toContain('<transport>');
     expect(xml).not.toContain('<srtp>');

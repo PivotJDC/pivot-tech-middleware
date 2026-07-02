@@ -8,8 +8,9 @@
 const config = require('../config');
 const { formatNational } = require('../utils/e164');
 
-// NB: <domain>/<port>/<transport> are intentionally NOT emitted in the Account
-// XML — the Acrobits portal's default SIP settings control transport instead.
+// NB: <port>/<transport> are intentionally NOT emitted in the Account XML — the
+// Acrobits portal's default SIP settings control transport. <domain> is still
+// set (the Telnyx SIP domain).
 
 /** Escape the five XML special characters so values can't break the document. */
 function escapeXml(value) {
@@ -84,6 +85,7 @@ function buildAccountXml({
     `  <username>${escapeXml(phoneE164)}</username>`,
     `  <authUsername>${escapeXml(sipUsername)}</authUsername>`,
     `  <password>${escapeXml(sipPassword)}</password>`,
+    '  <domain>sip.telnyx.com</domain>',
     '  <title>Pivot-Tech</title>',
     '  <allowMessage>1</allowMessage>',
     '  <allowVideo>1</allowVideo>',
