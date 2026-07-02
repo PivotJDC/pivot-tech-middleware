@@ -49,26 +49,30 @@ function okXml() {
   return '<?xml version="1.0" encoding="UTF-8"?>\n<response>\n  <status>ok</status>\n</response>\n';
 }
 
-/** Render one <sms> block. `peerField` is sms_from (received) or sms_to (sent). */
+/**
+ * Render one <item> block (Acrobits Modern API). `peerField` is `sender`
+ * (received messages) or `recipient` (sent messages).
+ */
 function smsXml(m, peerField, peerNumber) {
   return [
-    '    <sms>',
+    '    <item>',
     `      <sms_id>${escapeXml(m.id)}</sms_id>`,
-    `      <${peerField}>${escapeXml(peerNumber)}</${peerField}>`,
-    `      <body>${escapeXml(m.body)}</body>`,
     `      <sending_date>${escapeXml(fmtDate(m.created_at))}</sending_date>`,
+    `      <${peerField}>${escapeXml(peerNumber)}</${peerField}>`,
+    `      <sms_text>${escapeXml(m.body)}</sms_text>`,
     '      <content_type>text/plain</content_type>',
     `      <stream_id>${escapeXml(peerNumber)}</stream_id>`,
-    '    </sms>',
+    '    </item>',
   ].join('\n');
 }
 
 function fetchXml(received, sent) {
-  const recv = received.map((m) => smsXml(m, 'sms_from', m.from_number)).join('\n');
-  const snt = sent.map((m) => smsXml(m, 'sms_to', m.to_number)).join('\n');
+  const recv = received.map((m) => smsXml(m, 'sender', m.from_number)).join('\n');
+  const snt = sent.map((m) => smsXml(m, 'recipient', m.to_number)).join('\n');
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<response>',
+    `  <date>${new Date().toISOString()}</date>`,
     '  <received_smss>',
     recv,
     '  </received_smss>',

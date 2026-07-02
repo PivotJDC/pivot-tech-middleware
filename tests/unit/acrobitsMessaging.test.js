@@ -256,12 +256,22 @@ describe('GET /v1/acrobits/fetch', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/application\/xml/);
+    // Modern API: <date> at top, <item> blocks, sender/recipient, sms_text.
+    expect(res.text).toMatch(/<date>\d{4}-\d{2}-\d{2}T[\d:.]+Z<\/date>/);
     expect(res.text).toContain('<received_smss>');
-    expect(res.text).toContain('<sms_from>+12085550142</sms_from>');
+    expect(res.text).toContain('<item>');
+    expect(res.text).toContain('<sender>+12085550142</sender>');
+    expect(res.text).toContain('<sms_text>hi in</sms_text>');
     expect(res.text).toContain('<sms_id>r1</sms_id>');
     expect(res.text).toContain('<sent_smss>');
-    expect(res.text).toContain('<sms_to>+12085550143</sms_to>');
+    expect(res.text).toContain('<recipient>+12085550143</recipient>');
+    expect(res.text).toContain('<sms_text>hi out</sms_text>');
     expect(res.text).toContain('<stream_id>+12085550143</stream_id>');
+    // Legacy element names are gone.
+    expect(res.text).not.toContain('<sms>');
+    expect(res.text).not.toContain('<sms_from>');
+    expect(res.text).not.toContain('<sms_to>');
+    expect(res.text).not.toContain('<body>');
     expect(messagingService.fetchForAcrobits).toHaveBeenCalledWith('acc-1', 'r0', 's0');
   });
 
