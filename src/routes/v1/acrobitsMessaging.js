@@ -184,18 +184,22 @@ router.get(
   '/provision',
   asyncHandler(async (req, res) => {
     const p = params(req);
-    if (!p.username || !p.password) {
+    // External Provisioning doesn't template %USERNAME%/%PASSWORD%; Acrobits
+    // appends cloud_username/cloud_password automatically. Accept either.
+    const username = p.username || p.cloud_username;
+    const password = p.password || p.cloud_password;
+    if (!username || !password) {
       sendXml(res, 403, errorXml('Authentication failed.'));
       return;
     }
-    const account = await authAcrobits(p);
+    const account = await authAcrobits({ username, password });
     if (!account) {
       sendXml(res, 403, errorXml('Authentication failed.'));
       return;
     }
     const xml = acrobits.buildAccountXml({
       sipUsername: account.sip_username,
-      sipPassword: p.password, // verified above; the caller's SIP password
+      sipPassword: password, // verified above; the caller's SIP password
       phoneE164: account.phone_e164,
       firstName: account.first_name,
       lastName: account.last_name,

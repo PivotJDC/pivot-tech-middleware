@@ -62,6 +62,22 @@ describe('GET /v1/acrobits/provision', () => {
     expect(crypto.verifyPassword).toHaveBeenCalledWith('sip-secret', 'bcrypt$x');
   });
 
+  it('authenticates via cloud_username/cloud_password (External Provisioning)', async () => {
+    accountService.lookupBySipUsername.mockResolvedValueOnce(PROV_ACCOUNT);
+    crypto.verifyPassword.mockResolvedValueOnce(true);
+
+    const res = await request(app)
+      .get('/v1/acrobits/provision')
+      .query({ cloud_username: 'pivottech-abc', cloud_password: 'sip-secret' });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/xml/);
+    expect(res.text).toContain('<authUsername>pivottech-abc</authUsername>');
+    expect(res.text).toContain('<password>sip-secret</password>');
+    expect(accountService.lookupBySipUsername).toHaveBeenCalledWith('pivottech-abc');
+    expect(crypto.verifyPassword).toHaveBeenCalledWith('sip-secret', 'bcrypt$x');
+  });
+
   it('rejects a wrong SIP password with 403', async () => {
     accountService.lookupBySipUsername.mockResolvedValueOnce(PROV_ACCOUNT);
     crypto.verifyPassword.mockResolvedValueOnce(false);
