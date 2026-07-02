@@ -124,9 +124,21 @@ async function sendHandler(req, res) {
     sendXml(res, 403, errorXml('Authentication failed.'));
     return;
   }
+  // Acrobits may send the destination unprefixed (e.g. a 10-digit US number);
+  // normalize to E.164 before handing it to Telnyx.
+  let toNumber = p.to || p.sms_to;
+  if (toNumber && !toNumber.startsWith('+')) {
+    if (toNumber.length === 10) {
+      toNumber = `+1${toNumber}`;
+    } else if (toNumber.length === 11 && toNumber.startsWith('1')) {
+      toNumber = `+${toNumber}`;
+    } else {
+      toNumber = `+${toNumber}`;
+    }
+  }
   try {
     const message = await messagingService.sendMessage(account.id, {
-      to: p.sms_to,
+      to: toNumber,
       body: p.sms_body,
     });
     sendXml(res, 200, sendOkXml(message.id));

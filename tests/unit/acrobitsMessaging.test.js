@@ -128,6 +128,32 @@ describe('GET/POST /v1/acrobits/send', () => {
     });
   });
 
+  it('normalizes a bare 10-digit destination to E.164 before sending', async () => {
+    messagingService.sendMessage.mockResolvedValueOnce({ id: 'msg-3' });
+    const res = await request(app)
+      .get('/v1/acrobits/send')
+      .query({
+        username: 'pivottech-abc', password: 'pw', sms_to: '2085550142', sms_body: 'hi',
+      });
+    expect(res.status).toBe(200);
+    expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
+      to: '+12085550142', body: 'hi',
+    });
+  });
+
+  it('prefixes an 11-digit US number (leading 1) with +', async () => {
+    messagingService.sendMessage.mockResolvedValueOnce({ id: 'msg-4' });
+    const res = await request(app)
+      .get('/v1/acrobits/send')
+      .query({
+        username: 'pivottech-abc', password: 'pw', sms_to: '12085550142', sms_body: 'hi',
+      });
+    expect(res.status).toBe(200);
+    expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
+      to: '+12085550142', body: 'hi',
+    });
+  });
+
   it('works via POST too', async () => {
     messagingService.sendMessage.mockResolvedValueOnce({ id: 'msg-2' });
     const res = await request(app)
