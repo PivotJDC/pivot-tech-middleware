@@ -142,6 +142,7 @@ describe('GET/POST /v1/acrobits/send', () => {
 
   it('returns 403 XML when the SIP username is unknown', async () => {
     accountService.lookupBySipUsername.mockResolvedValueOnce(null);
+    accountService.lookupByPhoneE164.mockResolvedValueOnce(null);
     const res = await request(app)
       .get('/v1/acrobits/send')
       .query({
@@ -150,6 +151,38 @@ describe('GET/POST /v1/acrobits/send', () => {
     expect(res.status).toBe(403);
     expect(res.text).toContain('<message>Authentication failed.</message>');
     expect(messagingService.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a phone_e164 lookup when the identifier is an E.164', async () => {
+    // %USERNAME% substitutes the subscriber E.164, not the gencred, so the
+    // sip_username lookup misses and we resolve by phone number instead.
+    accountService.lookupBySipUsername.mockResolvedValueOnce(null);
+    accountService.lookupByPhoneE164.mockResolvedValueOnce(ACCOUNT);
+    messagingService.sendMessage.mockResolvedValueOnce({ id: 'msg-9' });
+    const res = await request(app)
+      .get('/v1/acrobits/send')
+      .query({
+        username: '+12085550100', password: 'pw', sms_to: '+12085550142', sms_body: 'hi',
+      });
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<sms_id>msg-9</sms_id>');
+    expect(accountService.lookupByPhoneE164).toHaveBeenCalledWith('+12085550100');
+    expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
+      to: '+12085550142', body: 'hi',
+    });
+  });
+
+  it('authenticates via cloud_username/cloud_password on /send', async () => {
+    messagingService.sendMessage.mockResolvedValueOnce({ id: 'msg-10' });
+    const res = await request(app)
+      .get('/v1/acrobits/send')
+      .query({
+        cloud_username: 'pivottech-abc', cloud_password: 'pw', sms_to: '+1', sms_body: 'hi',
+      });
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<sms_id>msg-10</sms_id>');
+    expect(accountService.lookupBySipUsername).toHaveBeenCalledWith('pivottech-abc');
+    expect(crypto.verifyPassword).toHaveBeenCalledWith('pw', 'bcrypt$x');
   });
 
   it('returns 403 XML when the password does not match', async () => {

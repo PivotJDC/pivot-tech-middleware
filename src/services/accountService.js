@@ -545,6 +545,28 @@ async function lookupBySipUsername(username) {
 }
 
 /**
+ * Look up an account by subscriber phone number (E.164), returning the RAW row
+ * (including sip_password_hash) for credential checks. This is a fallback for the
+ * Acrobits messaging web services: some app template variables substitute the
+ * subscriber E.164 (%USERNAME%) rather than the gencred (%AUTH_USERNAME%), so we
+ * must be able to authenticate by phone number too. Internal use only — the
+ * result must never be returned to a client unserialized.
+ * @param {string} phone - a phone number (normalized to E.164 when possible).
+ * @returns {Promise<object|null>}
+ */
+async function lookupByPhoneE164(phone) {
+  if (!phone) return null;
+  let normalized = phone;
+  try {
+    normalized = e164.toE164(phone);
+  } catch {
+    normalized = phone;
+  }
+  const { rows } = await db.query('SELECT * FROM accounts WHERE phone_e164 = $1', [normalized]);
+  return rows[0] || null;
+}
+
+/**
  * Return all child lines under a primary account (the customer dashboard's
  * "manage lines" view and the billing roll-up consume this).
  * @param {string} accountId - the primary account id.
@@ -691,6 +713,7 @@ module.exports = {
   getAccountLines,
   findByEmailOrPhone,
   lookupBySipUsername,
+  lookupByPhoneE164,
   getAccountStatus,
   updateAccount,
   transitionStatus,

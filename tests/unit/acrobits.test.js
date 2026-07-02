@@ -32,14 +32,17 @@ describe('acrobits.buildAccountXml', () => {
   it('includes HTTP messaging URLs with Acrobits template variables', () => {
     const xml = acrobits.buildAccountXml(params);
     expect(xml).toContain('<httpMessaging>');
+    // %AUTH_USERNAME% (the gencred), NOT %USERNAME% (the subscriber E.164):
+    // authAcrobits looks up by sip_username, which is what <authUsername> carries.
     expect(xml).toContain(
-      '/v1/acrobits/send?username=%USERNAME%&amp;password=%PASSWORD%'
+      '/v1/acrobits/send?username=%AUTH_USERNAME%&amp;password=%PASSWORD%'
       + '&amp;to=%TO_NUMBER%&amp;body=%MESSAGE_BODY%',
     );
     expect(xml).toContain(
-      '/v1/acrobits/fetch?username=%USERNAME%&amp;password=%PASSWORD%'
+      '/v1/acrobits/fetch?username=%AUTH_USERNAME%&amp;password=%PASSWORD%'
       + '&amp;last_known=%LAST_KNOWN_SMS_ID%',
     );
+    expect(xml).not.toContain('username=%USERNAME%');
     // URL prefix comes from config.provisioning.baseUrl (default in tests).
     const config = require('../../src/config'); // eslint-disable-line global-require
     expect(xml).toContain(`<sendURL>${config.provisioning.baseUrl}/v1/acrobits/send?`);

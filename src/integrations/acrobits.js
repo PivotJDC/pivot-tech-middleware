@@ -73,9 +73,14 @@ function buildAccountXml({
   // "&amp;" (XML-escaped ampersands). The base URL comes from config so it isn't
   // hardcoded per environment.
   // NB: transport is UDP with no SRTP — TLS/SRTP broke SIP registration.
+  //
+  // We send %AUTH_USERNAME% (not %USERNAME%): %USERNAME% maps to <username> =
+  // the subscriber E.164, but authAcrobits looks up by sip_username (the Telnyx
+  // gencred), which is what <authUsername>/%AUTH_USERNAME% carries. authAcrobits
+  // also falls back to a phone_e164 lookup, so an E.164 value still resolves.
   const base = (config.provisioning.baseUrl || '').replace(/\/+$/, '');
-  const sendURL = `${base}/v1/acrobits/send?username=%USERNAME%&amp;password=%PASSWORD%&amp;to=%TO_NUMBER%&amp;body=%MESSAGE_BODY%`;
-  const fetchURL = `${base}/v1/acrobits/fetch?username=%USERNAME%&amp;password=%PASSWORD%&amp;last_known=%LAST_KNOWN_SMS_ID%`;
+  const sendURL = `${base}/v1/acrobits/send?username=%AUTH_USERNAME%&amp;password=%PASSWORD%&amp;to=%TO_NUMBER%&amp;body=%MESSAGE_BODY%`;
+  const fetchURL = `${base}/v1/acrobits/fetch?username=%AUTH_USERNAME%&amp;password=%PASSWORD%&amp;last_known=%LAST_KNOWN_SMS_ID%`;
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',

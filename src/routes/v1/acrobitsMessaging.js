@@ -88,13 +88,24 @@ function params(req) {
 /**
  * Resolve + authenticate the account from SIP username (+ password when the
  * caller supplies one). Returns the raw account row, or null on failure.
+ *
+ * The identifier is accepted from either `username`/`password` (our templated
+ * URLs) or `cloud_username`/`cloud_password` (which Acrobits appends
+ * automatically for External Provisioning). Lookup is by sip_username first
+ * (the gencred that %AUTH_USERNAME% carries), then falls back to phone_e164 —
+ * because %USERNAME% substitutes the subscriber E.164, not the gencred.
  */
 async function authAcrobits(p) {
-  const account = await accountService.lookupBySipUsername(p.username);
+  const username = p.username || p.cloud_username;
+  const password = p.password || p.cloud_password;
+  let account = await accountService.lookupBySipUsername(username);
+  if (!account) {
+    account = await accountService.lookupByPhoneE164(username);
+  }
   if (!account) return null;
-  if (p.password) {
+  if (password) {
     const ok = account.sip_password_hash
-      ? await crypto.verifyPassword(p.password, account.sip_password_hash)
+      ? await crypto.verifyPassword(password, account.sip_password_hash)
       : false;
     if (!ok) return null;
   }
