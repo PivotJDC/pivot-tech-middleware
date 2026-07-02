@@ -94,6 +94,30 @@ describe('updateTenant', () => {
     expect(params).toEqual(['New', '{"color":"cyan"}', 't1']);
   });
 
+  it('accepts the onboarding-wizard blobs together (brand_config, plans, billing_config)', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ id: 't1' }] });
+    await tenantService.updateTenant('t1', {
+      name: 'FoxFi Mobile',
+      domain: 'app.foxfi-mobile.com',
+      roaming_profile_id: '19855',
+      brand_config: { brand_name: 'FoxFi', markets: { area_codes: ['208'] } },
+      plans: [{ name: 'Unlimited', monthly_price: 25 }],
+      billing_config: { contract_tier: 'starter', csr_addon: true },
+    });
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/UPDATE tenants SET/);
+    // JSONB blobs are stringified; scalar columns pass through verbatim.
+    expect(params).toEqual([
+      'FoxFi Mobile',
+      'app.foxfi-mobile.com',
+      '{"brand_name":"FoxFi","markets":{"area_codes":["208"]}}',
+      '[{"name":"Unlimited","monthly_price":25}]',
+      '19855',
+      '{"contract_tier":"starter","csr_addon":true}',
+      't1',
+    ]);
+  });
+
   it('returns the current row when no updatable fields are given', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ id: 't1' }] }); // getTenantById
     const t = await tenantService.updateTenant('t1', { not_a_field: 1 });
