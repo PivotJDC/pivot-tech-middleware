@@ -295,6 +295,29 @@ async function provisionPhoneNumber(e164) {
 }
 
 /**
+ * Update a phone number's settings. Used to register outbound CNAM (the
+ * caller-ID name shown on the far end), which on Telnyx lives on the number's
+ * `voice` sub-resource as a `cnam_listing` object. The sub-resource path is
+ * keyed by the numeric resource id, so we resolve it from the E.164 first.
+ * @param {string} e164
+ * @param {{ cnam_listing_enabled?: boolean, caller_id_name_as?: string }} fields
+ * @returns {Promise<object>} the updated voice sub-resource.
+ */
+async function updatePhoneNumber(e164, fields = {}) {
+  const resourceId = await findPhoneNumberId(e164);
+  const numberId = resourceId || e164;
+  const body = {};
+  if (fields.cnam_listing_enabled !== undefined || fields.caller_id_name_as !== undefined) {
+    body.cnam_listing = {
+      cnam_listing_enabled: Boolean(fields.cnam_listing_enabled),
+      // PSTN CNAM is capped at 15 chars; callers pass an already-trimmed name.
+      cnam_listing_details: fields.caller_id_name_as,
+    };
+  }
+  return unwrap(await request('PATCH', `/phone_numbers/${numberId}/voice`, body));
+}
+
+/**
  * Create a SIP credential set on Telnyx. Telnyx auto-generates the SIP
  * username/password tied to TELNYX_SIP_CONNECTION_ID — the `password`/`callerId`
  * we receive are NOT sent (the connection's outbound caller ID governs that).
@@ -554,6 +577,7 @@ module.exports = {
   resetWebhookPublicKeyCache,
   purchaseNumber,
   provisionPhoneNumber,
+  updatePhoneNumber,
   createSipEndpoint,
   getSipEndpoint,
   updateSipEndpoint,

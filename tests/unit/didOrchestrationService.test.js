@@ -41,6 +41,11 @@ describe('assignDid', () => {
     // The number's connection_id stays on the TeXML app (set by
     // provisionPhoneNumber); we must NOT reassign it to the SIP connection.
     expect(telnyx.assignNumberToEndpoint).not.toHaveBeenCalled();
+    // CNAM registered with the brand fallback when there's no subscriber name.
+    expect(telnyx.updatePhoneNumber).toHaveBeenCalledWith('+12085550100', {
+      cnam_listing_enabled: true,
+      caller_id_name_as: 'MobilityNet',
+    });
   });
 
   it('provisions E911 (best-effort) when an enrollment serviceAddress is supplied', async () => {
@@ -72,6 +77,37 @@ describe('assignDid', () => {
     // The number (signalwireSid), not the SIP credential, gets E911 enabled.
     expect(telnyx.enableE911).toHaveBeenCalledWith({ phoneNumberId: 'sid-1', addressId: 'addr-9' });
     expect(cred).toMatchObject({ e911AddressId: 'addr-9', e911Enabled: true });
+    // CNAM uses the subscriber's name (15-char PSTN cap).
+    expect(telnyx.updatePhoneNumber).toHaveBeenCalledWith('+12085550100', {
+      cnam_listing_enabled: true,
+      caller_id_name_as: 'Jane Doe',
+    });
+  });
+
+  it('does not fail account creation when CNAM registration throws', async () => {
+    telnyx.searchAvailableNumbers.mockResolvedValueOnce([{ number: '+12085550100' }]);
+    telnyx.provisionPhoneNumber.mockResolvedValueOnce({ id: 'sid-1' });
+    telnyx.createSipEndpoint.mockResolvedValueOnce({
+      id: 'ep-1', sip_username: 'u', sip_password: 'p',
+    });
+    telnyx.updatePhoneNumber.mockRejectedValueOnce(new Error('telnyx 422'));
+
+    const cred = await did.assignDid('lewiston-id');
+    expect(cred).toMatchObject({ phoneE164: '+12085550100', sipEndpointId: 'ep-1' });
+  });
+
+  it('truncates a long subscriber name to the 15-char CNAM limit', async () => {
+    telnyx.searchAvailableNumbers.mockResolvedValueOnce([{ number: '+12085550100' }]);
+    telnyx.provisionPhoneNumber.mockResolvedValueOnce({ id: 'sid-1' });
+    telnyx.createSipEndpoint.mockResolvedValueOnce({
+      id: 'ep-1', sip_username: 'u', sip_password: 'p',
+    });
+
+    await did.assignDid('lewiston-id', null, { firstName: 'Bartholomew', lastName: 'Cumberbatch' });
+    expect(telnyx.updatePhoneNumber).toHaveBeenCalledWith('+12085550100', {
+      cnam_listing_enabled: true,
+      caller_id_name_as: 'Bartholomew Cum', // 'Bartholomew Cumberbatch'.substring(0,15)
+    });
   });
 
   it('does not call E911 when no serviceAddress is supplied', async () => {

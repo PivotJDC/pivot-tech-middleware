@@ -153,6 +153,23 @@ async function assignDid(market, requestedAreaCode = null, enrollment = {}) {
     }
   }
 
+  // Best-effort CNAM: register the outbound caller-ID name (the name shown on
+  // the far end). PSTN CNAM is capped at 15 characters; fall back to the brand
+  // name when we don't have a full subscriber name. A failure here never fails
+  // account creation.
+  const { firstName, lastName } = enrollment;
+  try {
+    await telnyx.updatePhoneNumber(e164, {
+      cnam_listing_enabled: true,
+      caller_id_name_as: firstName && lastName
+        ? `${firstName} ${lastName}`.substring(0, 15)
+        : 'MobilityNet',
+    });
+    logger.info({ phoneE164: e164 }, 'CNAM registered on Telnyx');
+  } catch (err) {
+    logger.error({ phoneE164: e164, err: err.message }, 'CNAM registration failed (best-effort)');
+  }
+
   // Never log sipPassword (CLAUDE.md security rule #1).
   logger.info({
     market, areaCode, phoneE164: e164, sipEndpointId, e911Enabled,

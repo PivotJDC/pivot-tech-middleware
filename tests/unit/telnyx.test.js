@@ -119,6 +119,29 @@ describe('typed API calls', () => {
     expect(JSON.parse(calls[3][1].body)).toEqual({ messaging_profile_id: 'mp-1' });
   });
 
+  it('updatePhoneNumber sets CNAM on the voice sub-resource by numeric resource id', async () => {
+    global.fetch
+      .mockResolvedValueOnce(ok({
+        data: [{ id: '2990277475533063368', phone_number: '+12085550100' }],
+      })) // GET /phone_numbers?filter -> numeric resource id
+      // PATCH /voice
+      .mockResolvedValueOnce(ok({ data: { cnam_listing: { cnam_listing_enabled: true } } }));
+
+    const res = await telnyx.updatePhoneNumber('+12085550100', {
+      cnam_listing_enabled: true,
+      caller_id_name_as: 'Jane Doe',
+    });
+    expect(res.cnam_listing.cnam_listing_enabled).toBe(true);
+
+    const { calls } = global.fetch.mock;
+    expect(decodeURIComponent(calls[0][0])).toContain('filter[phone_number]=+12085550100');
+    expect(calls[1][0]).toBe('https://api.telnyx.com/v2/phone_numbers/2990277475533063368/voice');
+    expect(calls[1][1].method).toBe('PATCH');
+    expect(JSON.parse(calls[1][1].body)).toEqual({
+      cnam_listing: { cnam_listing_enabled: true, cnam_listing_details: 'Jane Doe' },
+    });
+  });
+
   it('provisionPhoneNumber retries the messaging PATCH once on a 404 (sub-resource not ready)', async () => {
     global.fetch
       .mockResolvedValueOnce(ok({
