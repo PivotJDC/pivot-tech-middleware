@@ -101,7 +101,6 @@ function voicemailPromptXml(account, accountId, from) {
   const base = baseUrl();
   const q = `?accountId=${encodeURIComponent(accountId || '')}`;
   const completeAction = `${base}/v1/voice/voicemail-complete${q}&amp;from=${encodeURIComponent(from || '')}`;
-  const transcribeCb = `${base}/v1/voice/voicemail-transcription${q}`;
   const greeting = account && account.voicemail_greeting_url
     ? `  <Play>${escapeXml(account.voicemail_greeting_url)}</Play>`
     : `  <Say voice="alice">You have reached ${escapeXml(displayNameFor(account))}. `
@@ -111,8 +110,9 @@ function voicemailPromptXml(account, accountId, from) {
     '<Response>',
     greeting,
     '  <Say voice="alice">Or press star to reach the voicemail menu.</Say>',
-    `  <Record maxLength="120" action="${completeAction}" playBeep="true" finishOnKey="#"`
-      + ` transcribe="true" transcribeCallback="${transcribeCb}"/>`,
+    // Transcription intentionally omitted for now — we can add it later via a
+    // separate Telnyx API call rather than the Record transcribe attributes.
+    `  <Record maxLength="120" action="${completeAction}" playBeep="true" finishOnKey="#"/>`,
     '  <Say voice="alice">Thank you. Goodbye.</Say>',
     '</Response>',
     '',

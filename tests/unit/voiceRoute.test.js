@@ -272,7 +272,9 @@ describe('POST /v1/voice/voicemail-handler', () => {
     expect(res.text).toContain('Or press star to reach the voicemail menu.');
     expect(res.text).toContain('<Record maxLength="120"');
     expect(res.text).toContain('/v1/voice/voicemail-complete?accountId=a1&amp;from=');
-    expect(res.text).toContain('transcribeCallback=');
+    // Transcription attributes are intentionally omitted for now.
+    expect(res.text).not.toContain('transcribe=');
+    expect(res.text).not.toContain('transcribeCallback=');
     expect(res.text).toContain('Thank you. Goodbye.');
   });
 
