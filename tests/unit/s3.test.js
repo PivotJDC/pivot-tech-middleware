@@ -25,10 +25,11 @@ afterAll(() => {
 });
 
 describe('archiveRecording', () => {
-  it('downloads the source and uploads it to the recordings bucket', async () => {
+  it('uploads as audio/wav, ignoring the download response content-type', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: true,
-      headers: { get: () => 'audio/wav' },
+      // Telnyx may report a type <Play> rejects — it must be ignored.
+      headers: { get: () => 'application/octet-stream' },
       arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
     });
     mockSend.mockResolvedValueOnce({});
@@ -43,6 +44,21 @@ describe('archiveRecording', () => {
     expect(cmd.Put.Bucket).toBe('mobilitynet-recordings');
     expect(cmd.Put.Key).toBe('voicemails/acc-1/vm-1.wav');
     expect(cmd.Put.ContentType).toBe('audio/wav');
+  });
+
+  it('honors an explicit contentType (e.g. a greeting)', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      headers: { get: () => null },
+      arrayBuffer: async () => new Uint8Array([1]).buffer,
+    });
+    mockSend.mockResolvedValueOnce({});
+    await s3.archiveRecording({
+      key: 'greetings/acc-1/greeting.wav',
+      sourceUrl: 'https://telnyx.example/greet',
+      contentType: 'audio/wav',
+    });
+    expect(mockSend.mock.calls[0][0].Put.ContentType).toBe('audio/wav');
   });
 
   it('throws (and never uploads) when the download fails', async () => {

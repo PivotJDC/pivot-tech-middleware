@@ -45,11 +45,14 @@ async function archiveRecording({ key, sourceUrl, contentType }) {
   }
   const body = Buffer.from(await res.arrayBuffer());
 
+  // Telnyx <Play> only accepts audio/wav or audio/mpeg, and the download's own
+  // content-type header can be a variant Telnyx rejects — so never trust it;
+  // default to audio/wav (callers pass an explicit type only when it differs).
   await getClient().send(new PutObjectCommand({
     Bucket: bucket(),
     Key: key,
     Body: body,
-    ContentType: contentType || res.headers.get('content-type') || 'audio/wav',
+    ContentType: contentType || 'audio/wav',
   }));
   logger.info({ key, bytes: body.length }, 'voicemail recording archived to S3');
   return { key };
