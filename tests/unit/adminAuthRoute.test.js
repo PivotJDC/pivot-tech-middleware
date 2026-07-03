@@ -21,6 +21,7 @@ jest.mock('../../src/services/accountService');
 jest.mock('../../src/services/provisioningService');
 jest.mock('../../src/services/usageService');
 jest.mock('../../src/services/tenantService');
+jest.mock('../../src/services/voicemailService');
 jest.mock('../../src/utils/logger', () => ({
   logger: { info: () => {}, warn: () => {}, error: () => {} },
   REDACT_PATHS: [],
@@ -32,6 +33,7 @@ const adminUserService = require('../../src/services/adminUserService');
 const accountService = require('../../src/services/accountService');
 const usageService = require('../../src/services/usageService');
 const tenantService = require('../../src/services/tenantService');
+const voicemailService = require('../../src/services/voicemailService');
 const adminRouter = require('../../src/routes/admin');
 const { errorHandler } = require('../../src/middleware/errorHandler');
 
@@ -311,5 +313,29 @@ describe('POST /admin/accounts/:id/esim-qr (super_admin + admin)', () => {
     const res = await request(app).post('/admin/accounts/a1/esim-qr').send({});
     expect(res.status).toBe(403);
     expect(accountService.getEsimQr).not.toHaveBeenCalled();
+  });
+});
+
+describe('voicemail admin routes (super_admin + admin)', () => {
+  it('allows an admin to list account voicemails', async () => {
+    mockAdmin = { id: 'a', role: 'admin' };
+    voicemailService.getVoicemails.mockResolvedValueOnce([]);
+    const res = await request(app).get('/admin/accounts/a1/voicemails');
+    expect(res.status).toBe(200);
+    expect(voicemailService.getVoicemails).toHaveBeenCalled();
+  });
+
+  it('forbids a viewer from listing voicemails', async () => {
+    mockAdmin = { id: 'v', role: 'viewer' };
+    const res = await request(app).get('/admin/accounts/a1/voicemails');
+    expect(res.status).toBe(403);
+    expect(voicemailService.getVoicemails).not.toHaveBeenCalled();
+  });
+
+  it('forbids a viewer from deleting a voicemail', async () => {
+    mockAdmin = { id: 'v', role: 'viewer' };
+    const res = await request(app).delete('/admin/voicemails/vm-1');
+    expect(res.status).toBe(403);
+    expect(voicemailService.deleteVoicemail).not.toHaveBeenCalled();
   });
 });

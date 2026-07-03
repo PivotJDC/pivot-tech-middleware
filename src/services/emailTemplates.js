@@ -90,8 +90,29 @@ function adminPasswordReset({ resetLink }) {
   return { subject, text, html };
 }
 
+/**
+ * New-voicemail notification.
+ * @param {{ callerNumber: string, durationSeconds: number, recordingUrl: string }} params
+ */
+function voicemailNotification({ callerNumber, durationSeconds, recordingUrl }) {
+  const subject = `New voicemail from ${callerNumber}`;
+  const text = [
+    `You received a ${durationSeconds}s voicemail from ${callerNumber}.`,
+    '',
+    `Listen: ${recordingUrl}`,
+  ].join('\n');
+  const html = htmlShell([
+    '<h2>New voicemail</h2>',
+    `<p>You received a ${esc(String(durationSeconds))}s voicemail from `
+      + `<strong>${esc(callerNumber)}</strong>.</p>`,
+    `<p><a href="${esc(recordingUrl)}">Listen to the voicemail</a></p>`,
+  ].join(''));
+  return { subject, text, html };
+}
+
 module.exports = {
   adminInvite,
   customerVerificationCode,
   adminPasswordReset,
+  voicemailNotification,
 };

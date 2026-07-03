@@ -25,6 +25,7 @@ const provisioningService = require('../../services/provisioningService');
 const adminUserService = require('../../services/adminUserService');
 const cdrService = require('../../services/cdrService');
 const usageService = require('../../services/usageService');
+const voicemailService = require('../../services/voicemailService');
 const tenantsRouter = require('./tenants');
 const { adminAuth, requireRole } = require('../../middleware/adminAuth');
 const { rateLimit } = require('../../middleware/rateLimiter');
@@ -193,6 +194,47 @@ router.get(
       cdrService.getMessageHistory(req.params.id, { limit, offset }, tenantId),
     ]);
     res.json({ calls, messages });
+  }),
+);
+
+// Voicemails for an account (admin + super_admin).
+router.get(
+  '/accounts/:id/voicemails',
+  requireRole('super_admin', 'admin'),
+  asyncHandler(async (req, res) => {
+    const { limit, offset } = req.query;
+    const voicemails = await voicemailService.getVoicemails(
+      req.params.id,
+      { limit, offset },
+      tenantScope(req),
+    );
+    res.json({ voicemails });
+  }),
+);
+
+// Mark a voicemail read.
+router.patch(
+  '/voicemails/:id/read',
+  requireRole('super_admin', 'admin'),
+  asyncHandler(async (req, res) => {
+    const voicemail = await voicemailService.markAsRead(req.params.id, {
+      tenantId: tenantScope(req),
+    });
+    if (!voicemail) throw errors.notFound('Voicemail not found.');
+    res.json(voicemail);
+  }),
+);
+
+// Delete a voicemail.
+router.delete(
+  '/voicemails/:id',
+  requireRole('super_admin', 'admin'),
+  asyncHandler(async (req, res) => {
+    const result = await voicemailService.deleteVoicemail(req.params.id, {
+      tenantId: tenantScope(req),
+    });
+    if (!result) throw errors.notFound('Voicemail not found.');
+    res.json(result);
   }),
 );
 

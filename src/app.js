@@ -32,6 +32,7 @@ const webhooksRouter = require('./routes/v1/webhooks');
 const messagesRouter = require('./routes/v1/messages');
 const acrobitsMessagingRouter = require('./routes/v1/acrobitsMessaging');
 const voiceRouter = require('./routes/v1/voice');
+const voicemailsRouter = require('./routes/v1/voicemails');
 const billingRouter = require('./routes/v1/billing');
 const partnerRouter = require('./routes/v1/partner');
 const adminRouter = require('./routes/admin');
@@ -145,6 +146,7 @@ function createApp() {
   app.use('/v1/messages', messagesRouter);
   app.use('/v1/acrobits', acrobitsMessagingRouter);
   app.use('/v1/voice', voiceRouter);
+  app.use('/v1/account', voicemailsRouter);
   app.use('/v1/billing', billingRouter);
   app.use('/v1/partner', partnerRouter);
 

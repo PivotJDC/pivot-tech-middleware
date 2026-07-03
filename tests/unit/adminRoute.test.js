@@ -12,6 +12,7 @@ jest.mock('../../src/services/provisioningService');
 jest.mock('../../src/services/adminUserService');
 jest.mock('../../src/services/cdrService');
 jest.mock('../../src/services/usageService');
+jest.mock('../../src/services/voicemailService');
 
 const express = require('express');
 const request = require('supertest');
@@ -20,6 +21,7 @@ const accountService = require('../../src/services/accountService');
 const provisioningService = require('../../src/services/provisioningService');
 const cdrService = require('../../src/services/cdrService');
 const usageService = require('../../src/services/usageService');
+const voicemailService = require('../../src/services/voicemailService');
 const adminRouter = require('../../src/routes/admin');
 const { errorHandler } = require('../../src/middleware/errorHandler');
 
@@ -193,6 +195,38 @@ describe('admin API', () => {
     const res = await request(app).post('/admin/accounts/a1/esim-qr').send({ regenerate: true });
     expect(res.status).toBe(200);
     expect(accountService.getEsimQr).toHaveBeenCalledWith('a1', { regenerate: true });
+  });
+
+  it('GET /admin/accounts/:id/voicemails lists voicemails', async () => {
+    voicemailService.getVoicemails.mockResolvedValueOnce([{ id: 'vm-1' }]);
+    const res = await request(app).get('/admin/accounts/a1/voicemails?limit=10');
+    expect(res.status).toBe(200);
+    expect(res.body.voicemails).toEqual([{ id: 'vm-1' }]);
+    expect(voicemailService.getVoicemails).toHaveBeenCalledWith(
+      'a1',
+      { limit: '10', offset: undefined },
+      null, // tenantScope: super_admin sees all
+    );
+  });
+
+  it('PATCH /admin/voicemails/:id/read marks a voicemail read', async () => {
+    voicemailService.markAsRead.mockResolvedValueOnce({ id: 'vm-1', is_read: true });
+    const res = await request(app).patch('/admin/voicemails/vm-1/read').send({});
+    expect(res.status).toBe(200);
+    expect(res.body.is_read).toBe(true);
+  });
+
+  it('PATCH /admin/voicemails/:id/read 404s when missing', async () => {
+    voicemailService.markAsRead.mockResolvedValueOnce(null);
+    const res = await request(app).patch('/admin/voicemails/vm-x/read').send({});
+    expect(res.status).toBe(404);
+  });
+
+  it('DELETE /admin/voicemails/:id deletes a voicemail', async () => {
+    voicemailService.deleteVoicemail.mockResolvedValueOnce({ deleted: true, id: 'vm-1' });
+    const res = await request(app).delete('/admin/voicemails/vm-1');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: true, id: 'vm-1' });
   });
 
   it('GET /admin/dids lists inventory', async () => {

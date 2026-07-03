@@ -11,8 +11,14 @@
  * urlencoded parser so req.body is populated; JSON bodies also work.
  */
 const express = require('express');
+const config = require('../../config');
 const voiceService = require('../../services/voiceService');
 const cdrService = require('../../services/cdrService');
+const accountService = require('../../services/accountService');
+const voicemailService = require('../../services/voicemailService');
+const pushService = require('../../services/pushService');
+const emailClient = require('../../integrations/email');
+const emailTemplates = require('../../services/emailTemplates');
 const { asyncHandler } = require('../../middleware/errorHandler');
 const { verifyTelnyxWebhook } = require('../../middleware/telnyxWebhookVerify');
 const { logger } = require('../../utils/logger');
@@ -21,6 +27,11 @@ const router = express.Router();
 
 // Telnyx's single shared SIP domain (no per-customer space).
 const SIP_DOMAIN = 'sip.telnyx.com';
+
+/** Base URL for TeXML action callbacks (no trailing slash). */
+function baseUrl() {
+  return (config.provisioning.baseUrl || '').replace(/\/+$/, '');
+}
 
 /** Escape the five XML special characters so values can't break the document. */
 function escapeXml(value) {
@@ -43,21 +54,78 @@ function normalizePhone(raw) {
 
 /**
  * TeXML that bridges the call to the subscriber's SIP credential.
- * - timeout="30": give the dialer time to ring (the default can be very short).
+ * - timeout="25": ring the dialer, then fall through to voicemail.
  * - answerOnBridge="true": the caller hears the remote ringing instead of
  *   silence until the dialer answers.
  * - callerId: the original PSTN caller's number, so it shows on the device.
+ * - action: fires with the dial result (unanswered/busy/declined) so the
+ *   voicemail handler can take a message. accountId + from ride as query params.
  */
-function dialXml(sipUsername, from) {
+function dialXml(sipUsername, from, accountId) {
+  const action = `${baseUrl()}/v1/voice/voicemail-handler`
+    + `?accountId=${encodeURIComponent(accountId || '')}`
+    + `&amp;from=${encodeURIComponent(from || '')}`;
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<Response>',
-    `  <Dial timeout="30" answerOnBridge="true" callerId="${escapeXml(from || '')}">`,
+    `  <Dial timeout="25" answerOnBridge="true" callerId="${escapeXml(from || '')}" action="${action}">`,
     `    <Sip>sip:${escapeXml(sipUsername)}@${SIP_DOMAIN}</Sip>`,
     '  </Dial>',
     '</Response>',
     '',
   ].join('\n');
+}
+
+/** Minimal empty TeXML response (nothing more to do). */
+function emptyResponseXml() {
+  return '<?xml version="1.0" encoding="UTF-8"?>\n<Response/>\n';
+}
+
+/** Subscriber display name for the voicemail greeting. */
+function displayNameFor(account) {
+  if (!account) return 'this number';
+  const name = [account.first_name, account.last_name]
+    .filter((p) => p && String(p).trim())
+    .join(' ')
+    .trim();
+  return name || account.phone_e164 || 'this number';
+}
+
+/**
+ * TeXML that greets the caller and records a voicemail. Uses a custom greeting
+ * (<Play>) when the account has one, else a synthesized <Say>. After the
+ * recording, Telnyx POSTs to voicemail-complete and (async) the transcription
+ * callback.
+ */
+function voicemailPromptXml(account, accountId, from) {
+  const base = baseUrl();
+  const q = `?accountId=${encodeURIComponent(accountId || '')}`;
+  const completeAction = `${base}/v1/voice/voicemail-complete${q}&amp;from=${encodeURIComponent(from || '')}`;
+  const transcribeCb = `${base}/v1/voice/voicemail-transcription${q}`;
+  const greeting = account && account.voicemail_greeting_url
+    ? `  <Play>${escapeXml(account.voicemail_greeting_url)}</Play>`
+    : `  <Say voice="alice">You have reached ${escapeXml(displayNameFor(account))}. `
+      + 'Please leave a message after the beep.</Say>';
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<Response>',
+    greeting,
+    `  <Record maxLength="120" action="${completeAction}" playBeep="true" finishOnKey="#"`
+      + ` transcribe="true" transcribeCallback="${transcribeCb}"/>`,
+    '  <Say voice="alice">Thank you. Goodbye.</Say>',
+    '</Response>',
+    '',
+  ].join('\n');
+}
+
+/** Non-throwing account fetch by id (webhook context — a bad id must not 500). */
+async function safeGetAccount(accountId) {
+  if (!accountId) return null;
+  try {
+    return await accountService.getAccountById(accountId);
+  } catch {
+    return null;
+  }
 }
 
 /** TeXML that rejects the call (unknown number or inactive account). */
@@ -94,7 +162,9 @@ router.all(
     );
 
     res.type('application/xml').status(200);
-    res.send(active ? dialXml(match.sip_username, from) : rejectXml());
+    // lookupByCalledNumber returns account_id (not id) — pass it so the Dial
+    // action URL can route an unanswered call to voicemail for this account.
+    res.send(active ? dialXml(match.sip_username, from, match.account_id) : rejectXml());
   }),
 );
 
@@ -183,6 +253,128 @@ router.post(
       });
     } catch (err) {
       logger.error({ err: err.message, callId: event.callSid }, 'failed to record call CDR');
+    }
+
+    res.status(200).json({ received: true });
+  }),
+);
+
+// --- Voicemail ------------------------------------------------------------
+// These are Telnyx TeXML action callbacks (continuations of the inbound Dial),
+// not the configured webhook, so — like /status — they aren't signature-verified.
+
+/**
+ * Dial-result handler. When the dialer answered (completed) there's nothing to
+ * do; otherwise greet the caller and record a voicemail (if enabled).
+ */
+router.post(
+  '/voicemail-handler',
+  asyncHandler(async (req, res) => {
+    const params = { ...req.query, ...req.body };
+    const { accountId } = params;
+    const from = normalizePhone(params.from);
+    const dialStatus = params.DialCallStatus || params.dial_call_status || params.DialStatus || '';
+
+    res.type('application/xml').status(200);
+
+    // Call was answered — no voicemail.
+    if (dialStatus === 'completed' || dialStatus === 'answered') {
+      res.send(emptyResponseXml());
+      return;
+    }
+
+    const account = await safeGetAccount(accountId);
+    // Respect the per-subscriber toggle: if voicemail is off, just hang up.
+    if (account && account.voicemail_enabled === false) {
+      res.send(emptyResponseXml());
+      return;
+    }
+
+    logger.info({ accountId, from, dialStatus }, 'inbound call unanswered; taking voicemail');
+    res.send(voicemailPromptXml(account, accountId, from));
+  }),
+);
+
+/**
+ * Recording-complete callback. Persists the voicemail, then best-effort push +
+ * email notifications. Returns an empty TeXML response (the call is done).
+ */
+router.post(
+  '/voicemail-complete',
+  asyncHandler(async (req, res) => {
+    const params = { ...req.query, ...req.body };
+    const { accountId } = params;
+    const from = normalizePhone(params.from) || 'unknown';
+    const recordingUrl = params.RecordingUrl || params.recording_url || null;
+    const recordingSid = params.RecordingSid || params.recording_sid || null;
+    const durationSeconds = Number.parseInt(
+      params.RecordingDuration || params.recording_duration || '0',
+      10,
+    ) || 0;
+
+    try {
+      const account = await safeGetAccount(accountId);
+      if (account && recordingUrl) {
+        const voicemail = await voicemailService.createVoicemail({
+          accountId: account.id,
+          tenantId: account.tenant_id,
+          callerNumber: from,
+          recordingUrl,
+          recordingSid,
+          durationSeconds,
+        });
+
+        // Best-effort: wake the app (reuses the message push, which never throws).
+        await pushService.sendMessagePush(account.id, {
+          from,
+          body: `New voicemail (${durationSeconds}s)`,
+          messageId: voicemail.id,
+          streamId: from,
+        });
+
+        // Best-effort: email the subscriber a link to the recording.
+        if (account.email) {
+          try {
+            const tpl = emailTemplates.voicemailNotification({
+              callerNumber: from,
+              durationSeconds,
+              recordingUrl,
+            });
+            await emailClient.sendEmail({
+              to: account.email,
+              subject: tpl.subject,
+              textBody: tpl.text,
+              htmlBody: tpl.html,
+            });
+          } catch (err) {
+            logger.error({ accountId: account.id, err: err.message }, 'voicemail email failed');
+          }
+        }
+      }
+    } catch (err) {
+      logger.error({ accountId, err: err.message }, 'failed to store voicemail');
+    }
+
+    res.type('application/xml').status(200).send(emptyResponseXml());
+  }),
+);
+
+/** Transcription callback — attaches the text to the stored voicemail. */
+router.post(
+  '/voicemail-transcription',
+  asyncHandler(async (req, res) => {
+    const params = { ...req.query, ...req.body };
+    const { accountId } = params;
+    const recordingSid = params.RecordingSid || params.recording_sid || null;
+    const transcription = params.TranscriptionText
+      || params.transcription_text || params.transcription || '';
+
+    try {
+      if (transcription && (accountId || recordingSid)) {
+        await voicemailService.attachTranscription({ accountId, recordingSid, transcription });
+      }
+    } catch (err) {
+      logger.error({ accountId, err: err.message }, 'failed to store voicemail transcription');
     }
 
     res.status(200).json({ received: true });
