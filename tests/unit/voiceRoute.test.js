@@ -323,6 +323,22 @@ describe('POST /v1/voice/voicemail-handler', () => {
     expect(res.text).toContain('<Play>https://signed.example/greet</Play>');
   });
 
+  it('XML-escapes the & in a presigned S3 <Play> URL (greeting playback)', async () => {
+    accountService.getAccountById.mockResolvedValueOnce({
+      id: 'a1', voicemail_enabled: true, voicemail_greeting_s3_key: 'greetings/a1/greeting.wav',
+    });
+    s3.bucket.mockReturnValueOnce('mobilitynet-recordings');
+    const presigned = 'https://b.s3.amazonaws.com/greetings/a1/greeting.wav?X-Amz-Algorithm=AWS4-HMAC-SHA256'
+      + '&X-Amz-Signature=def456&X-Amz-Expires=86400';
+    s3.getSignedRecordingUrl.mockResolvedValueOnce(presigned);
+    const res = await request(app)
+      .post('/v1/voice/voicemail-handler?accountId=a1&from=%2B1')
+      .type('form')
+      .send({ DialCallStatus: 'no-answer' });
+    expect(res.text).toContain(`<Play>${presigned.replace(/&/g, '&amp;')}</Play>`);
+    expect(res.text).not.toMatch(/&X-Amz/);
+  });
+
   it('hangs up (empty Response) when voicemail is disabled', async () => {
     accountService.getAccountById.mockResolvedValueOnce({ id: 'a1', voicemail_enabled: false });
     const res = await request(app)
@@ -580,6 +596,23 @@ describe('POST /v1/voice/voicemail-menu-action', () => {
     expect(res.text).toContain('12 seconds.');
     expect(res.text).toContain('<Play>https://signed.example/rec1</Play>');
     expect(res.text).toContain('/v1/voice/voicemail-message-action?accountId=acc-1&amp;vmId=vm-1');
+  });
+
+  it('XML-escapes the & in a presigned S3 <Play> URL (message playback)', async () => {
+    voicemailService.getVoicemails.mockResolvedValueOnce([{
+      id: 'vm-1', caller_number: '+1', duration_seconds: 5, recording_s3_key: 'k',
+    }]);
+    // A realistic presigned URL: query params joined by raw & (breaks XML if unescaped).
+    const presigned = 'https://b.s3.amazonaws.com/mms/x.wav?X-Amz-Algorithm=AWS4-HMAC-SHA256'
+      + '&X-Amz-Signature=abc123&X-Amz-Date=20260101T000000Z';
+    s3.signedUrlForVoicemail.mockResolvedValueOnce(presigned);
+    const res = await request(app)
+      .post('/v1/voice/voicemail-menu-action?accountId=acc-1')
+      .type('form')
+      .send({ Digits: '1' });
+    // & must be escaped to &amp; so the TeXML parses; no raw &X-Amz.
+    expect(res.text).toContain(`<Play>${presigned.replace(/&/g, '&amp;')}</Play>`);
+    expect(res.text).not.toMatch(/&X-Amz/);
   });
 
   it('digit 1 says "Recording unavailable" when no URL can be resolved', async () => {
