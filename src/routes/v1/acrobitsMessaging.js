@@ -126,6 +126,37 @@ function sendXml(res, status, xml) {
   res.status(status).type('application/xml').send(xml);
 }
 
+/**
+ * Parse an Acrobits send body into { text, mediaUrls }.
+ *
+ * MMS arrives as a JSON body carrying an `attachments` array — each attachment
+ * has a `content-url`, `content-type`, and (sometimes) an `encryption-key`. Any
+ * `text` alongside the attachments becomes the message body; attachments-only
+ * sends have an empty body. Anything that isn't JSON-with-attachments (plain
+ * SMS text, or JSON without attachments) is treated as literal SMS text.
+ *
+ * NOTE (encryption): an attachment may include an `encryption-key`, meaning the
+ * media at `content-url` is encrypted. For now we hand the URL straight to
+ * Telnyx; if Telnyx can't fetch/decrypt it, the next step is to download +
+ * decrypt + re-upload to S3 and pass that URL instead.
+ */
+function parseSendBody(rawBody) {
+  if (!rawBody) return { text: '', mediaUrls: [] };
+  try {
+    const parsed = JSON.parse(rawBody);
+    if (parsed && Array.isArray(parsed.attachments)) {
+      const mediaUrls = parsed.attachments
+        .map((a) => a && (a['content-url'] || a.content_url))
+        .filter(Boolean);
+      const text = typeof parsed.text === 'string' ? parsed.text : '';
+      return { text, mediaUrls };
+    }
+  } catch {
+    // Not JSON — a plain-text SMS body.
+  }
+  return { text: rawBody, mediaUrls: [] };
+}
+
 // --- Send (GET or POST) ---
 async function sendHandler(req, res) {
   const p = params(req);
@@ -146,10 +177,13 @@ async function sendHandler(req, res) {
       toNumber = `+${toNumber}`;
     }
   }
+  // SMS vs MMS: an attachments JSON body yields media_urls; plain text is SMS.
+  const { text, mediaUrls } = parseSendBody(p.body || p.sms_body || p.message_body);
   try {
     const message = await messagingService.sendMessage(account.id, {
       to: toNumber,
-      body: p.body || p.sms_body || p.message_body,
+      body: text,
+      mediaUrls,
     });
     sendXml(res, 200, sendOkXml(message.id));
   } catch (err) {

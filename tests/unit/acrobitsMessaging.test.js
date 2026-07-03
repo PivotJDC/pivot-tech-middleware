@@ -130,7 +130,64 @@ describe('GET/POST /v1/acrobits/send', () => {
     expect(accountService.lookupBySipUsername).toHaveBeenCalledWith('pivottech-abc');
     expect(crypto.verifyPassword).toHaveBeenCalledWith('pw', 'bcrypt$x');
     expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
-      to: '+12085550142', body: 'Hello',
+      to: '+12085550142', body: 'Hello', mediaUrls: [],
+    });
+  });
+
+  it('sends an MMS: parses a JSON attachments body into media_urls', async () => {
+    messagingService.sendMessage.mockResolvedValueOnce({ id: 'mms-1' });
+    const body = JSON.stringify({
+      attachments: [
+        { 'content-url': 'https://media/1.jpg', 'content-type': 'image/jpeg', 'encryption-key': 'k' },
+        { 'content-url': 'https://media/2.png', 'content-type': 'image/png' },
+      ],
+    });
+    const res = await request(app)
+      .post('/v1/acrobits/send')
+      .type('form')
+      .send({
+        username: 'pivottech-abc', password: 'pw', sms_to: '+12085550142', sms_body: body,
+      });
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<sms_id>mms-1</sms_id>');
+    // Media-only MMS → empty body, both content-urls as media.
+    expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
+      to: '+12085550142',
+      body: '',
+      mediaUrls: ['https://media/1.jpg', 'https://media/2.png'],
+    });
+  });
+
+  it('sends an MMS with text alongside the attachments', async () => {
+    messagingService.sendMessage.mockResolvedValueOnce({ id: 'mms-2' });
+    const body = JSON.stringify({
+      text: 'check this out',
+      attachments: [{ 'content-url': 'https://media/3.gif', 'content-type': 'image/gif' }],
+    });
+    await request(app)
+      .post('/v1/acrobits/send')
+      .type('form')
+      .send({
+        username: 'pivottech-abc', password: 'pw', sms_to: '+12085550142', sms_body: body,
+      });
+    expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
+      to: '+12085550142',
+      body: 'check this out',
+      mediaUrls: ['https://media/3.gif'],
+    });
+  });
+
+  it('treats a JSON body without an attachments array as plain SMS text', async () => {
+    messagingService.sendMessage.mockResolvedValueOnce({ id: 'sms-json' });
+    const body = '{"text":"not an mms"}';
+    await request(app)
+      .post('/v1/acrobits/send')
+      .type('form')
+      .send({
+        username: 'pivottech-abc', password: 'pw', sms_to: '+12085550142', sms_body: body,
+      });
+    expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
+      to: '+12085550142', body, mediaUrls: [],
     });
   });
 
@@ -143,7 +200,7 @@ describe('GET/POST /v1/acrobits/send', () => {
       });
     expect(res.status).toBe(200);
     expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
-      to: '+12085550142', body: 'hi',
+      to: '+12085550142', body: 'hi', mediaUrls: [],
     });
   });
 
@@ -156,7 +213,7 @@ describe('GET/POST /v1/acrobits/send', () => {
       });
     expect(res.status).toBe(200);
     expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
-      to: '+12085550142', body: 'hi',
+      to: '+12085550142', body: 'hi', mediaUrls: [],
     });
   });
 
@@ -200,7 +257,7 @@ describe('GET/POST /v1/acrobits/send', () => {
     expect(res.text).toContain('<sms_id>msg-9</sms_id>');
     expect(accountService.lookupByPhoneE164).toHaveBeenCalledWith('+12085550100');
     expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
-      to: '+12085550142', body: 'hi',
+      to: '+12085550142', body: 'hi', mediaUrls: [],
     });
   });
 
