@@ -141,6 +141,7 @@ function sendXml(res, status, xml) {
  * decrypt + re-upload to S3 and pass that URL instead.
  */
 function parseSendBody(rawBody) {
+  console.log("PARSE_DEBUG", typeof rawBody, rawBody && rawBody.substring(0, 100));
   if (!rawBody) return { text: '', mediaUrls: [] };
   try {
     const parsed = JSON.parse(rawBody);
