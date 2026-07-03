@@ -521,6 +521,15 @@ describe('POST /v1/voice/voicemail-menu-action', () => {
     voicemailService.clearGreeting.mockReset();
   });
 
+  it('accepts a GET (Telnyx calls the Gather action via GET when it was served over GET)', async () => {
+    voicemailService.getVoicemails.mockResolvedValueOnce([]);
+    const res = await request(app)
+      .get('/v1/voice/voicemail-menu-action?accountId=acc-1&Digits=1');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/xml/);
+    expect(res.text).toContain('You have no messages.');
+  });
+
   it('digit 1 with no messages redirects to the menu', async () => {
     voicemailService.getVoicemails.mockResolvedValueOnce([]);
     const res = await request(app)

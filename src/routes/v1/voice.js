@@ -545,8 +545,8 @@ router.post(
   }),
 );
 
-/** Main-menu keypress handler. */
-router.post(
+/** Main-menu keypress handler. Telnyx may call a Gather action via GET or POST. */
+router.all(
   '/voicemail-menu-action',
   asyncHandler(async (req, res) => {
     const params = { ...req.query, ...req.body };
@@ -593,8 +593,8 @@ router.post(
   }),
 );
 
-/** Save a recorded greeting, then return to the menu. */
-router.post(
+/** Save a recorded greeting, then return to the menu. Accept GET or POST. */
+router.all(
   '/voicemail-greeting-save',
   asyncHandler(async (req, res) => {
     const params = { ...req.query, ...req.body };
@@ -613,8 +613,8 @@ router.post(
   }),
 );
 
-/** Per-message keypress handler (delete / next / main menu). */
-router.post(
+/** Per-message keypress handler (delete / next / main menu). Accept GET or POST. */
+router.all(
   '/voicemail-message-action',
   asyncHandler(async (req, res) => {
     const params = { ...req.query, ...req.body };
