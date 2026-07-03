@@ -297,7 +297,7 @@ describe('POST /v1/voice/voicemail-handler', () => {
     expect(res.text).toContain('Thank you. Goodbye.');
   });
 
-  it('plays a custom greeting when the account has one', async () => {
+  it('plays a custom greeting from the stored URL fallback', async () => {
     accountService.getAccountById.mockResolvedValueOnce({
       id: 'a1', voicemail_enabled: true, voicemail_greeting_url: 'https://cdn/greet.mp3',
     });
@@ -307,6 +307,20 @@ describe('POST /v1/voice/voicemail-handler', () => {
       .send({ DialCallStatus: 'busy' });
     expect(res.text).toContain('<Play>https://cdn/greet.mp3</Play>');
     expect(res.text).not.toContain('<Say voice="alice">You have reached');
+  });
+
+  it('plays an archived greeting via a fresh signed S3 URL', async () => {
+    accountService.getAccountById.mockResolvedValueOnce({
+      id: 'a1', voicemail_enabled: true, voicemail_greeting_s3_key: 'greetings/a1/greeting.wav',
+    });
+    s3.bucket.mockReturnValueOnce('mobilitynet-recordings');
+    s3.getSignedRecordingUrl.mockResolvedValueOnce('https://signed.example/greet');
+    const res = await request(app)
+      .post('/v1/voice/voicemail-handler?accountId=a1&from=%2B1')
+      .type('form')
+      .send({ DialCallStatus: 'no-answer' });
+    expect(s3.getSignedRecordingUrl).toHaveBeenCalledWith('greetings/a1/greeting.wav', 86400);
+    expect(res.text).toContain('<Play>https://signed.example/greet</Play>');
   });
 
   it('hangs up (empty Response) when voicemail is disabled', async () => {
@@ -549,21 +563,37 @@ describe('POST /v1/voice/voicemail-menu-action', () => {
     expect(res.text).toContain('/v1/voice/voicemail-menu?accountId=acc-1');
   });
 
-  it('digit 1 with messages plays the newest and offers per-message actions', async () => {
+  it('digit 1 plays the newest with a fresh signed URL and per-message actions', async () => {
     voicemailService.getVoicemails.mockResolvedValueOnce([{
       id: 'vm-1',
       caller_number: '+12022762305',
       duration_seconds: 12,
-      recording_url: 'https://rec/1.mp3',
+      recording_s3_key: 'mms/acc-1/vm-1.wav',
       created_at: '2026-07-01T00:00:00.000Z',
     }]);
+    s3.signedUrlForVoicemail.mockResolvedValueOnce('https://signed.example/rec1');
     const res = await request(app)
       .post('/v1/voice/voicemail-menu-action?accountId=acc-1')
       .type('form')
       .send({ Digits: '1' });
     expect(res.text).toContain('Message from +12022762305');
     expect(res.text).toContain('12 seconds.');
-    expect(res.text).toContain('<Play>https://rec/1.mp3</Play>');
+    expect(res.text).toContain('<Play>https://signed.example/rec1</Play>');
+    expect(res.text).toContain('/v1/voice/voicemail-message-action?accountId=acc-1&amp;vmId=vm-1');
+  });
+
+  it('digit 1 says "Recording unavailable" when no URL can be resolved', async () => {
+    voicemailService.getVoicemails.mockResolvedValueOnce([{
+      id: 'vm-1', caller_number: '+12022762305', duration_seconds: 5,
+    }]);
+    s3.signedUrlForVoicemail.mockResolvedValueOnce(null);
+    const res = await request(app)
+      .post('/v1/voice/voicemail-menu-action?accountId=acc-1')
+      .type('form')
+      .send({ Digits: '1' });
+    expect(res.text).toContain('Recording unavailable.');
+    expect(res.text).not.toContain('<Play>');
+    // Still offers the per-message Gather so the caller can move on.
     expect(res.text).toContain('/v1/voice/voicemail-message-action?accountId=acc-1&amp;vmId=vm-1');
   });
 
@@ -599,17 +629,43 @@ describe('POST /v1/voice/voicemail-menu-action', () => {
 });
 
 describe('POST /v1/voice/voicemail-greeting-save', () => {
-  beforeEach(() => voicemailService.setGreeting.mockReset());
+  beforeEach(() => {
+    voicemailService.setGreeting.mockReset();
+    s3.bucket.mockReset();
+    s3.archiveRecording.mockReset();
+  });
 
-  it('saves the greeting and returns to the menu', async () => {
+  it('archives the greeting to S3 and stores the key', async () => {
+    s3.bucket.mockReturnValue('mobilitynet-recordings');
+    s3.archiveRecording.mockResolvedValueOnce({ key: 'greetings/acc-1/greeting.wav' });
     voicemailService.setGreeting.mockResolvedValueOnce({ id: 'acc-1' });
     const res = await request(app)
       .post('/v1/voice/voicemail-greeting-save?accountId=acc-1')
       .type('form')
-      .send({ RecordingUrl: 'https://rec/greet.mp3' });
-    expect(voicemailService.setGreeting).toHaveBeenCalledWith('acc-1', 'https://rec/greet.mp3');
+      .send({ RecordingUrl: 'https://telnyx/greet' });
+    expect(s3.archiveRecording).toHaveBeenCalledWith({
+      key: 'greetings/acc-1/greeting.wav',
+      sourceUrl: 'https://telnyx/greet',
+      contentType: 'audio/wav',
+    });
+    expect(voicemailService.setGreeting).toHaveBeenCalledWith('acc-1', {
+      url: null, s3Key: 'greetings/acc-1/greeting.wav',
+    });
     expect(res.text).toContain('Your greeting has been saved.');
     expect(res.text).toContain('/v1/voice/voicemail-menu?accountId=acc-1');
+  });
+
+  it('falls back to the Telnyx URL when S3 archival fails', async () => {
+    s3.bucket.mockReturnValue('mobilitynet-recordings');
+    s3.archiveRecording.mockRejectedValueOnce(new Error('s3 down'));
+    voicemailService.setGreeting.mockResolvedValueOnce({ id: 'acc-1' });
+    await request(app)
+      .post('/v1/voice/voicemail-greeting-save?accountId=acc-1')
+      .type('form')
+      .send({ RecordingUrl: 'https://telnyx/greet' });
+    expect(voicemailService.setGreeting).toHaveBeenCalledWith('acc-1', {
+      url: 'https://telnyx/greet', s3Key: null,
+    });
   });
 });
 

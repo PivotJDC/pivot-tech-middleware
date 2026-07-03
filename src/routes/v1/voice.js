@@ -93,17 +93,33 @@ function displayNameFor(account) {
 }
 
 /**
- * TeXML that greets the caller and records a voicemail. Uses a custom greeting
- * (<Play>) when the account has one, else a synthesized <Say>. After the
- * recording, Telnyx POSTs to voicemail-complete and (async) the transcription
- * callback.
+ * Resolve a playable greeting URL for an account: a fresh 24h signed S3 URL when
+ * a greeting was archived, else the stored (Telnyx) URL fallback, else null.
  */
-function voicemailPromptXml(account, accountId, from) {
+async function resolveGreetingUrl(account) {
+  if (!account) return null;
+  if (account.voicemail_greeting_s3_key && s3.bucket()) {
+    try {
+      return await s3.getSignedRecordingUrl(account.voicemail_greeting_s3_key, 86400);
+    } catch {
+      return account.voicemail_greeting_url || null;
+    }
+  }
+  return account.voicemail_greeting_url || null;
+}
+
+/**
+ * TeXML that greets the caller and records a voicemail. Uses a custom greeting
+ * (<Play> the resolved greetingUrl) when the account has one, else a synthesized
+ * <Say>. After the recording, Telnyx POSTs to voicemail-complete and (async) the
+ * transcription callback.
+ */
+function voicemailPromptXml(account, accountId, from, greetingUrl) {
   const base = baseUrl();
   const q = `?accountId=${encodeURIComponent(accountId || '')}`;
   const completeAction = `${base}/v1/voice/voicemail-complete${q}&amp;from=${encodeURIComponent(from || '')}`;
-  const greeting = account && account.voicemail_greeting_url
-    ? `  <Play>${escapeXml(account.voicemail_greeting_url)}</Play>`
+  const greeting = greetingUrl
+    ? `  <Play>${escapeXml(greetingUrl)}</Play>`
     : `  <Say voice="alice">You have reached ${escapeXml(displayNameFor(account))}. `
       + 'Please leave a message after the beep.</Say>';
   return [
@@ -189,8 +205,11 @@ function spokenDate(iso) {
   return Number.isNaN(d.getTime()) ? '' : d.toDateString();
 }
 
-/** Play one voicemail + the per-message Gather. `prefixSay` is optional. */
-function messageXml(accountId, vm, prefixSay) {
+/**
+ * Play one voicemail + the per-message Gather. `playUrl` is a fresh, fetchable
+ * recording URL (null → "Recording unavailable"); `prefixSay` is optional.
+ */
+function messageXml(accountId, vm, playUrl, prefixSay) {
   const action = `${baseUrl()}/v1/voice/voicemail-message-action`
     + `?accountId=${encodeURIComponent(accountId || '')}`
     + `&amp;vmId=${encodeURIComponent(vm.id)}`;
@@ -201,7 +220,11 @@ function messageXml(accountId, vm, prefixSay) {
   const lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>'];
   if (prefixSay) lines.push(`  <Say voice="alice">${escapeXml(prefixSay)}</Say>`);
   lines.push(`  <Say voice="alice">${header}</Say>`);
-  if (vm.recording_url) lines.push(`  <Play>${escapeXml(vm.recording_url)}</Play>`);
+  if (playUrl) {
+    lines.push(`  <Play>${escapeXml(playUrl)}</Play>`);
+  } else {
+    lines.push('  <Say voice="alice">Recording unavailable.</Say>');
+  }
   lines.push(
     `  <Gather numDigits="1" action="${action}">`,
     '    <Say voice="alice">Press 3 to delete this message. Press 4 for next message. '
@@ -211,6 +234,17 @@ function messageXml(accountId, vm, prefixSay) {
     '',
   );
   return lines.join('\n');
+}
+
+/** Resolve a fresh signed recording URL for a voicemail and render its XML. */
+async function buildMessageXml(accountId, vm, prefixSay) {
+  let playUrl = null;
+  try {
+    playUrl = await s3.signedUrlForVoicemail(vm, 3600);
+  } catch {
+    playUrl = null;
+  }
+  return messageXml(accountId, vm, playUrl, prefixSay);
 }
 
 /** The pressed digit from a Gather callback (TeXML `Digits`). */
@@ -409,7 +443,8 @@ router.post(
     }
 
     logger.info({ accountId, from, dialStatus }, 'inbound call unanswered; taking voicemail');
-    res.send(voicemailPromptXml(account, accountId, from));
+    const greetingUrl = await resolveGreetingUrl(account);
+    res.send(voicemailPromptXml(account, accountId, from, greetingUrl));
   }),
 );
 
@@ -562,7 +597,7 @@ router.all(
         res.send(redirectMenuXml(accountId, 'You have no messages.'));
         return;
       }
-      res.send(messageXml(accountId, voicemails[0]));
+      res.send(await buildMessageXml(accountId, voicemails[0]));
       return;
     }
 
@@ -603,12 +638,30 @@ router.all(
     const recordingUrl = params.RecordingUrl || params.recording_url || null;
     res.type('application/xml').status(200);
 
-    try {
-      if (accountId && recordingUrl) {
-        await voicemailService.setGreeting(accountId, recordingUrl);
+    if (accountId && recordingUrl) {
+      // Archive the greeting to S3 (Telnyx URLs expire); keep the Telnyx URL as
+      // a fallback if archival is unavailable. Store the key; playback renders a
+      // fresh signed URL from it.
+      let s3Key = null;
+      let url = recordingUrl;
+      if (s3.bucket()) {
+        try {
+          const key = `greetings/${accountId}/greeting.wav`;
+          await s3.archiveRecording({ key, sourceUrl: recordingUrl, contentType: 'audio/wav' });
+          s3Key = key;
+          url = null;
+        } catch (err) {
+          logger.error(
+            { accountId, err: err.message },
+            'voicemail greeting S3 archival failed; keeping Telnyx URL',
+          );
+        }
       }
-    } catch (err) {
-      logger.error({ accountId, err: err.message }, 'failed to save voicemail greeting');
+      try {
+        await voicemailService.setGreeting(accountId, { url, s3Key });
+      } catch (err) {
+        logger.error({ accountId, err: err.message }, 'failed to save voicemail greeting');
+      }
     }
     res.send(redirectMenuXml(accountId, 'Your greeting has been saved.'));
   }),
@@ -634,7 +687,7 @@ router.all(
       }
       const after = accountId ? await voicemailService.getVoicemails(accountId, {}) : [];
       if (idx >= 0 && idx < after.length) {
-        res.send(messageXml(accountId, after[idx], 'Message deleted.'));
+        res.send(await buildMessageXml(accountId, after[idx], 'Message deleted.'));
         return;
       }
       res.send(redirectMenuXml(accountId, 'Message deleted.'));
@@ -647,7 +700,7 @@ router.all(
       const idx = list.findIndex((v) => String(v.id) === String(vmId));
       const nextIdx = idx >= 0 ? idx + 1 : 0;
       if (nextIdx < list.length) {
-        res.send(messageXml(accountId, list[nextIdx]));
+        res.send(await buildMessageXml(accountId, list[nextIdx]));
         return;
       }
       res.send(redirectMenuXml(accountId, 'No more messages.'));

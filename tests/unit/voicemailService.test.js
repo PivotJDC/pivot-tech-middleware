@@ -118,20 +118,28 @@ describe('setRecording', () => {
 });
 
 describe('setGreeting / clearGreeting', () => {
-  it('setGreeting updates the account greeting URL', async () => {
+  it('setGreeting stores the S3 key (and nulls the fallback url)', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ id: 'acc-1' }] });
-    const row = await vm.setGreeting('acc-1', 'https://rec/greet.mp3');
+    const row = await vm.setGreeting('acc-1', { s3Key: 'greetings/acc-1/greeting.wav' });
     expect(row).toEqual({ id: 'acc-1' });
     const [sql, params] = db.query.mock.calls[0];
-    expect(sql).toMatch(/UPDATE accounts SET voicemail_greeting_url = \$1 WHERE id = \$2/);
-    expect(params).toEqual(['https://rec/greet.mp3', 'acc-1']);
+    expect(sql).toMatch(/voicemail_greeting_url = \$1/);
+    expect(sql).toMatch(/voicemail_greeting_s3_key = \$2/);
+    expect(params).toEqual([null, 'greetings/acc-1/greeting.wav', 'acc-1']);
   });
 
-  it('clearGreeting nulls the greeting URL', async () => {
+  it('setGreeting stores a fallback url when there is no S3 key', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'acc-1' }] });
+    await vm.setGreeting('acc-1', { url: 'https://telnyx/greet' });
+    expect(db.query.mock.calls[0][1]).toEqual(['https://telnyx/greet', null, 'acc-1']);
+  });
+
+  it('clearGreeting nulls both the url and the S3 key', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ id: 'acc-1' }] });
     await vm.clearGreeting('acc-1');
     const [sql, params] = db.query.mock.calls[0];
-    expect(sql).toMatch(/SET voicemail_greeting_url = NULL WHERE id = \$1/);
+    expect(sql).toMatch(/voicemail_greeting_url = NULL/);
+    expect(sql).toMatch(/voicemail_greeting_s3_key = NULL/);
     expect(params).toEqual(['acc-1']);
   });
 });

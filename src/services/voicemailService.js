@@ -163,20 +163,32 @@ async function attachTranscription({ accountId, recordingSid, transcription } = 
   return rows[0] || null;
 }
 
-/** Set an account's custom voicemail greeting URL (recorded via the IVR). */
-async function setGreeting(accountId, greetingUrl) {
+/**
+ * Set an account's custom voicemail greeting (recorded via the IVR). Prefer the
+ * S3 key (fresh signed URLs generated on playback); `url` is the raw Telnyx URL
+ * kept only as a best-effort fallback when S3 archival is unavailable.
+ * @param {string} accountId
+ * @param {{ url?: string, s3Key?: string }} greeting
+ */
+async function setGreeting(accountId, { url, s3Key } = {}) {
   const { rows } = await db.query(
-    'UPDATE accounts SET voicemail_greeting_url = $1 WHERE id = $2 RETURNING id',
-    [greetingUrl || null, accountId],
+    `UPDATE accounts
+        SET voicemail_greeting_url = $1, voicemail_greeting_s3_key = $2
+      WHERE id = $3
+    RETURNING id`,
+    [url || null, s3Key || null, accountId],
   );
-  logger.info({ accountId }, 'voicemail greeting set');
+  logger.info({ accountId, archived: !!s3Key }, 'voicemail greeting set');
   return rows[0] || null;
 }
 
 /** Clear an account's custom greeting (fall back to the default <Say>). */
 async function clearGreeting(accountId) {
   const { rows } = await db.query(
-    'UPDATE accounts SET voicemail_greeting_url = NULL WHERE id = $1 RETURNING id',
+    `UPDATE accounts
+        SET voicemail_greeting_url = NULL, voicemail_greeting_s3_key = NULL
+      WHERE id = $1
+    RETURNING id`,
     [accountId],
   );
   logger.info({ accountId }, 'voicemail greeting cleared');
