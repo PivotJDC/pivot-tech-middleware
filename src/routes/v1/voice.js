@@ -522,8 +522,9 @@ router.post(
 // DID (inbound handler) or an in-call redirect. The subscriber is identified by
 // caller ID on first entry; accountId then rides on every action URL.
 
-/** Main menu. Resolve the account (by accountId on redirects, else caller ID). */
-router.post(
+/** Main menu. Resolve the account (by accountId on redirects, else caller ID).
+ *  Accept GET or POST — Telnyx re-fetches a <Redirect> with the served method. */
+router.all(
   '/voicemail-menu',
   asyncHandler(async (req, res) => {
     const params = { ...req.query, ...req.body };

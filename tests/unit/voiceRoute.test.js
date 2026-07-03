@@ -503,6 +503,14 @@ describe('POST /v1/voice/voicemail-menu', () => {
     expect(res.text).toContain('<Hangup/>');
   });
 
+  it('accepts a GET (in-IVR <Redirect> re-fetches via GET)', async () => {
+    accountService.getAccountById.mockResolvedValueOnce({ id: 'acc-1' });
+    const res = await request(app).get('/v1/voice/voicemail-menu?accountId=acc-1');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/xml/);
+    expect(res.text).toContain('Voicemail menu.');
+  });
+
   it('resolves by accountId on an in-IVR redirect', async () => {
     accountService.getAccountById.mockResolvedValueOnce({ id: 'acc-1' });
     const res = await request(app)
