@@ -10,13 +10,14 @@ const db = require('../db');
 /**
  * Resolve the account that owns a called MobilityNet number.
  * @param {string} e164 - the dialed number (the TeXML `To`).
- * @returns {Promise<{ account_id: string, sip_username: string, status: string }|null>}
- *   the match (including status so the caller can require 'active'), or null.
+ * @returns {Promise<{ account_id, sip_username, status, phone_e164 }|null>}
+ *   the match (including status so the caller can require 'active', and
+ *   phone_e164 so the caller can detect a self-dial), or null.
  */
 async function lookupByCalledNumber(e164) {
   if (!e164) return null;
   const { rows } = await db.query(
-    'SELECT id, sip_username, status FROM accounts WHERE phone_e164 = $1',
+    'SELECT id, sip_username, status, phone_e164 FROM accounts WHERE phone_e164 = $1',
     [e164],
   );
   if (rows.length === 0) return null;
@@ -24,6 +25,7 @@ async function lookupByCalledNumber(e164) {
     account_id: rows[0].id,
     sip_username: rows[0].sip_username,
     status: rows[0].status,
+    phone_e164: rows[0].phone_e164,
   };
 }
 

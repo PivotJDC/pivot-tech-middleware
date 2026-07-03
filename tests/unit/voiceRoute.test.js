@@ -47,9 +47,26 @@ beforeEach(() => {
 });
 
 describe('POST /v1/voice/inbound', () => {
+  it('routes a self-dial (from === own number) to the voicemail menu', async () => {
+    voiceService.lookupByCalledNumber.mockResolvedValueOnce({
+      account_id: 'a1', sip_username: 'pivottech-abc', status: 'active', phone_e164: '+12085550100',
+    });
+    const res = await request(app)
+      .post('/v1/voice/inbound')
+      .type('form')
+      .send({ To: '+12085550100', From: '+12085550100', CallSid: 'CAself' });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/xml/);
+    expect(res.text).toContain('<Redirect>');
+    expect(res.text).toContain('/v1/voice/voicemail-menu?accountId=a1');
+    // Did NOT ring the subscriber's own phone.
+    expect(res.text).not.toContain('<Dial');
+  });
+
   it('returns <Dial> to the SIP credential for an active account', async () => {
     voiceService.lookupByCalledNumber.mockResolvedValueOnce({
-      account_id: 'a1', sip_username: 'pivottech-abc', status: 'active',
+      account_id: 'a1', sip_username: 'pivottech-abc', status: 'active', phone_e164: '+12085550100',
     });
     const res = await request(app)
       .post('/v1/voice/inbound')

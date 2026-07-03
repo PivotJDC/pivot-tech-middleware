@@ -262,6 +262,17 @@ router.all(
     const match = await voiceService.lookupByCalledNumber(to);
     const active = !!match && match.status === 'active';
 
+    // Self-dial: a subscriber calling their own number checks voicemail (the
+    // standard carrier experience) rather than ringing their own phone.
+    if (match && from === match.phone_e164) {
+      logger.info(
+        { from, accountId: match.account_id },
+        'self-dial detected; routing to voicemail menu',
+      );
+      res.send(redirectMenuXml(match.account_id));
+      return;
+    }
+
     logger.info(
       {
         to, from, callId, matched: !!match, active,
