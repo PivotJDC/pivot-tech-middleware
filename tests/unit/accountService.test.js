@@ -637,13 +637,14 @@ describe('getAccountById', () => {
 describe('getEsimQr', () => {
   const LPA = 'LPA:1$thales3.prod.ondemandconnectivity.com$MATCH-1';
 
-  it('renders the QR from a stored activation code without hitting BICS', async () => {
+  it('renders the QR from a stored activation code (increments the download count)', async () => {
     db.query.mockResolvedValueOnce({
       rows: [{
         ...baseRow,
         bics_endpoint_id: 'ep-bics-1',
         bics_iccid: 'icc-1',
         esim_activation_code: LPA,
+        esim_download_count: 1,
       }],
     });
     const result = await accountService.getEsimQr(baseRow.id);
@@ -651,10 +652,33 @@ describe('getEsimQr', () => {
     expect(result.iccid).toBe('icc-1');
     expect(result.endpoint_id).toBe('ep-bics-1');
     expect(result.activation_code).toBe(LPA);
-    // No BICS calls, no writes.
+    // Reuse — no BICS calls — but the download counter is bumped (now 2 of 3).
     expect(bics.fetchSimByIccid).not.toHaveBeenCalled();
     expect(bics.getNextAvailableEsim).not.toHaveBeenCalled();
-    expect(db.query).toHaveBeenCalledTimes(1);
+    const inc = db.query.mock.calls.find(([sql]) => /esim_download_count = \$1/.test(sql));
+    expect(inc[1]).toEqual([2, baseRow.id]);
+  });
+
+  it('forces a fresh BICS endpoint on the 3rd download instead of reusing', async () => {
+    db.query
+      .mockResolvedValueOnce({
+        rows: [{
+          ...baseRow,
+          bics_endpoint_id: 'ep-old',
+          bics_iccid: 'icc-old',
+          esim_activation_code: 'LPA:old',
+          esim_download_count: 2,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ ...baseRow, bics_endpoint_id: 'ep-new' }] }); // persistEsim
+    wireBicsSuccess('icc-new', 'ep-new');
+    const result = await accountService.getEsimQr(baseRow.id);
+    // Count would reach 3 → regenerate a new eSIM, do NOT reuse the old code.
+    expect(bics.getNextAvailableEsim).toHaveBeenCalled();
+    expect(result.endpoint_id).toBe('ep-new');
+    // It regenerated rather than doing a plain download-count increment.
+    const inc = db.query.mock.calls.find(([sql]) => /SET esim_download_count = \$1/.test(sql));
+    expect(inc).toBeUndefined();
   });
 
   it('reads the code live from BICS when an endpoint exists but no code is stored', async () => {

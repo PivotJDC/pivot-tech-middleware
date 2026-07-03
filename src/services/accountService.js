@@ -225,7 +225,8 @@ async function persistEsim(id, esim) {
             bics_iccid = $2,
             esim_iccid = $2,
             esim_activation_code = $3,
-            bics_provisioned = true
+            bics_provisioned = true,
+            esim_download_count = 1
       WHERE id = $4
     RETURNING *`,
     [esim.endpointId, esim.iccid, esim.activationCode, id],
@@ -727,6 +728,8 @@ async function retryBicsProvisioning(id) {
  * @param {{ regenerate?: boolean }} [opts]
  * @returns {Promise<{ qr_code_url, iccid, endpoint_id, activation_code, sm_dp_address }>}
  */
+const ESIM_DOWNLOAD_LIMIT = 3;
+
 async function getEsimQr(id, { regenerate = false } = {}) {
   assertUuid(id);
   const { rows } = await db.query('SELECT * FROM accounts WHERE id = $1', [id]);
@@ -738,7 +741,22 @@ async function getEsimQr(id, { regenerate = false } = {}) {
   let activationCode;
   let smDpAddress = null;
 
-  if (regenerate || !account.bics_endpoint_id) {
+  // Re-download tracking: reusing an existing eSIM's QR counts as a download.
+  // The Nth (limit) download forces a fresh BICS endpoint instead of reuse.
+  let forceRegenerate = regenerate;
+  if (!regenerate && account.bics_endpoint_id) {
+    const nextCount = (account.esim_download_count || 1) + 1;
+    if (nextCount >= ESIM_DOWNLOAD_LIMIT) {
+      forceRegenerate = true; // too many downloads — issue a new eSIM
+    } else {
+      await db.query('UPDATE accounts SET esim_download_count = $1 WHERE id = $2', [nextCount, id]);
+      if (nextCount === 2) {
+        logger.warn({ accountId: id, count: nextCount }, 'eSIM has been downloaded 2 of 3 allowed times.');
+      }
+    }
+  }
+
+  if (forceRegenerate || !account.bics_endpoint_id) {
     // Regenerate, or first-time provisioning: create a fresh BICS endpoint.
     const esim = await provisionEsim(account);
     await persistEsim(id, esim);
@@ -771,7 +789,10 @@ async function getEsimQr(id, { regenerate = false } = {}) {
   }
 
   const qrCodeUrl = await qrcode.toDataURL(activationCode, { errorCorrectionLevel: 'M' });
-  logger.info({ accountId: id, endpointId, regenerate }, 'eSIM QR generated for admin');
+  logger.info(
+    { accountId: id, endpointId, regenerate: forceRegenerate },
+    'eSIM QR generated for admin',
+  );
   return {
     qr_code_url: qrCodeUrl,
     iccid: iccid || null,
