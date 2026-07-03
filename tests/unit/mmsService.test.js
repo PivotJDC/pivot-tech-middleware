@@ -12,12 +12,10 @@ const mms = require('../../src/services/mmsService');
 const HEX_KEY = '000102030405060708090a0b0c0d0e0f';
 const KEY = Buffer.from(HEX_KEY, 'hex');
 
-function ecbEncrypt(plaintext) {
-  const cipher = nodeCrypto.createCipheriv('aes-128-ecb', KEY, null);
-  return Buffer.concat([cipher.update(plaintext), cipher.final()]);
-}
-function cbcEncrypt(plaintext) {
-  const cipher = nodeCrypto.createCipheriv('aes-128-cbc', KEY, Buffer.alloc(16));
+// Mirror the production decryptMedia: AES-128-CTR with a zero nonce.
+function ctrEncrypt(plaintext) {
+  const cipher = nodeCrypto.createCipheriv('aes-128-ctr', KEY, Buffer.alloc(16, 0));
+  cipher.setAutoPadding(false);
   return Buffer.concat([cipher.update(plaintext), cipher.final()]);
 }
 
@@ -33,21 +31,20 @@ afterAll(() => {
 });
 
 describe('decryptMedia', () => {
-  it('decrypts AES-128-ECB ciphertext', () => {
+  it('decrypts AES-128-CTR ciphertext (zero nonce)', () => {
     const plain = Buffer.from('hello mms media payload');
-    const out = mms.decryptMedia(ecbEncrypt(plain), HEX_KEY);
+    const out = mms.decryptMedia(ctrEncrypt(plain), HEX_KEY);
     expect(out.equals(plain)).toBe(true);
   });
 
-  it('falls back to AES-128-CBC (zero IV) when ECB fails', () => {
-    // 16-byte plaintext so unpadded ECB wouldn't obviously error — use CBC input.
-    const plain = Buffer.from('another payload!');
-    const out = mms.decryptMedia(cbcEncrypt(plain), HEX_KEY);
+  it('round-trips arbitrary-length data (CTR is a stream cipher, no padding)', () => {
+    const plain = nodeCrypto.randomBytes(37); // not a 16-byte multiple
+    const out = mms.decryptMedia(ctrEncrypt(plain), HEX_KEY);
     expect(out.equals(plain)).toBe(true);
   });
 
-  it('returns null for a too-short key', () => {
-    expect(mms.decryptMedia(Buffer.from('x'), 'ab')).toBeNull();
+  it('throws on an invalid key (the caller skips the attachment)', () => {
+    expect(() => mms.decryptMedia(Buffer.from('x'), 'ab')).toThrow();
   });
 });
 
@@ -75,7 +72,7 @@ describe('resolveMediaUrls', () => {
 
   it('downloads, decrypts, uploads, and returns a presigned URL for encrypted media', async () => {
     const plain = Buffer.from('secret image bytes');
-    const ct = ecbEncrypt(plain);
+    const ct = ctrEncrypt(plain);
     global.fetch.mockResolvedValueOnce({
       ok: true,
       arrayBuffer: async () => new Uint8Array(ct).buffer,
@@ -113,8 +110,20 @@ describe('resolveMediaUrls', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
+  it('skips (best-effort) when decryption throws — e.g. an invalid key', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+    });
+    const urls = await mms.resolveMediaUrls('acc-1', [
+      { url: 'https://acrobits/enc', contentType: 'image/jpeg', encryptionKey: 'zz' }, // bad hex → key too short
+    ]);
+    expect(urls).toEqual([]);
+    expect(s3.uploadObject).not.toHaveBeenCalled();
+  });
+
   it('preserves order across a mix of plain and encrypted attachments', async () => {
-    const ct = ecbEncrypt(Buffer.from('bytes-16-exactly'));
+    const ct = ctrEncrypt(Buffer.from('any length works'));
     global.fetch.mockResolvedValueOnce({
       ok: true,
       arrayBuffer: async () => new Uint8Array(ct).buffer,

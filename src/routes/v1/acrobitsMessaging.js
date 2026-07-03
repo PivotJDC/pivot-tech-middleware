@@ -185,9 +185,16 @@ async function sendHandler(req, res) {
   try {
     // Resolve encrypted Acrobits media to Telnyx-fetchable URLs (best-effort).
     const mediaUrls = await mmsService.resolveMediaUrls(account.id, attachments);
+    // Fallback: if the MMS had attachments but none could be resolved
+    // (download/decrypt/upload failed) and there's no text, send a plain SMS
+    // placeholder instead of failing the whole message.
+    let body = text;
+    if (!body && mediaUrls.length === 0 && attachments.length > 0) {
+      body = '[Photo message]';
+    }
     const message = await messagingService.sendMessage(account.id, {
       to: toNumber,
-      body: text,
+      body,
       mediaUrls,
     });
     sendXml(res, 200, sendOkXml(message.id));

@@ -188,6 +188,27 @@ describe('GET/POST /v1/acrobits/send', () => {
     });
   });
 
+  it('falls back to a "[Photo message]" SMS when media fails to resolve', async () => {
+    messagingService.sendMessage.mockResolvedValueOnce({ id: 'mms-fallback' });
+    // All attachments failed (download/decrypt) → no resolved media, no text.
+    mmsService.resolveMediaUrls.mockResolvedValueOnce([]);
+    const body = JSON.stringify({
+      attachments: [{ 'content-url': 'https://acrobits/enc', 'content-type': 'image/jpeg', 'encryption-key': 'ab12' }],
+    });
+    const res = await request(app)
+      .post('/v1/acrobits/send')
+      .type('form')
+      .send({
+        username: 'pivottech-abc', password: 'pw', sms_to: '+12085550142', sms_body: body,
+      });
+    expect(res.status).toBe(200);
+    expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
+      to: '+12085550142',
+      body: '[Photo message]',
+      mediaUrls: [],
+    });
+  });
+
   it('sends an MMS with text alongside the attachments', async () => {
     messagingService.sendMessage.mockResolvedValueOnce({ id: 'mms-2' });
     const body = JSON.stringify({
