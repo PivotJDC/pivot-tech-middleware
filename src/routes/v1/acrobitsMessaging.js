@@ -17,6 +17,7 @@
 const express = require('express');
 const accountService = require('../../services/accountService');
 const messagingService = require('../../services/messagingService');
+const mmsService = require('../../services/mmsService');
 const pushService = require('../../services/pushService');
 const acrobits = require('../../integrations/acrobits');
 const crypto = require('../../utils/crypto');
@@ -127,7 +128,7 @@ function sendXml(res, status, xml) {
 }
 
 /**
- * Parse an Acrobits send body into { text, mediaUrls }.
+ * Parse an Acrobits send body into { text, attachments }.
  *
  * MMS arrives as a JSON body carrying an `attachments` array — each attachment
  * has a `content-url`, `content-type`, and (sometimes) an `encryption-key`. Any
@@ -135,27 +136,28 @@ function sendXml(res, status, xml) {
  * sends have an empty body. Anything that isn't JSON-with-attachments (plain
  * SMS text, or JSON without attachments) is treated as literal SMS text.
  *
- * NOTE (encryption): an attachment may include an `encryption-key`, meaning the
- * media at `content-url` is encrypted. For now we hand the URL straight to
- * Telnyx; if Telnyx can't fetch/decrypt it, the next step is to download +
- * decrypt + re-upload to S3 and pass that URL instead.
+ * The encrypted media is resolved to Telnyx-fetchable URLs separately by
+ * mmsService (download + AES-decrypt + re-host on S3) — see sendHandler.
  */
 function parseSendBody(rawBody) {
-  console.log("PARSE_DEBUG", typeof rawBody, rawBody && rawBody.substring(0, 100));
-  if (!rawBody) return { text: '', mediaUrls: [] };
+  if (!rawBody) return { text: '', attachments: [] };
   try {
     const parsed = JSON.parse(rawBody);
     if (parsed && Array.isArray(parsed.attachments)) {
-      const mediaUrls = parsed.attachments
-        .map((a) => a && (a['content-url'] || a.content_url))
-        .filter(Boolean);
+      const attachments = parsed.attachments
+        .map((a) => (a ? {
+          url: a['content-url'] || a.content_url,
+          contentType: a['content-type'] || a.content_type,
+          encryptionKey: a['encryption-key'] || a.encryption_key,
+        } : null))
+        .filter((a) => a && a.url);
       const text = typeof parsed.text === 'string' ? parsed.text : '';
-      return { text, mediaUrls };
+      return { text, attachments };
     }
   } catch {
     // Not JSON — a plain-text SMS body.
   }
-  return { text: rawBody, mediaUrls: [] };
+  return { text: rawBody, attachments: [] };
 }
 
 // --- Send (GET or POST) ---
@@ -178,9 +180,11 @@ async function sendHandler(req, res) {
       toNumber = `+${toNumber}`;
     }
   }
-  // SMS vs MMS: an attachments JSON body yields media_urls; plain text is SMS.
-  const { text, mediaUrls } = parseSendBody(p.body || p.sms_body || p.message_body);
+  // SMS vs MMS: an attachments JSON body yields media; plain text is SMS.
+  const { text, attachments } = parseSendBody(p.body || p.sms_body || p.message_body);
   try {
+    // Resolve encrypted Acrobits media to Telnyx-fetchable URLs (best-effort).
+    const mediaUrls = await mmsService.resolveMediaUrls(account.id, attachments);
     const message = await messagingService.sendMessage(account.id, {
       to: toNumber,
       body: text,

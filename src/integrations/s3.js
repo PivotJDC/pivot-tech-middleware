@@ -56,6 +56,22 @@ async function archiveRecording({ key, sourceUrl, contentType }) {
 }
 
 /**
+ * Upload a Buffer to the bucket under `key`. Used for decrypted MMS media.
+ * @param {{ key: string, body: Buffer, contentType?: string }} input
+ * @returns {Promise<{ key: string }>}
+ */
+async function uploadObject({ key, body, contentType }) {
+  if (!bucket()) throw new Error('no S3 bucket configured');
+  await getClient().send(new PutObjectCommand({
+    Bucket: bucket(),
+    Key: key,
+    Body: body,
+    ContentType: contentType || 'application/octet-stream',
+  }));
+  return { key };
+}
+
+/**
  * Generate a short-lived signed GET URL for an object key.
  * @param {string} key
  * @param {number} [expiresIn] seconds (default 3600 = 1 hour)
@@ -89,6 +105,7 @@ async function signedUrlForVoicemail(vm, expiresIn = 3600) {
 
 module.exports = {
   archiveRecording,
+  uploadObject,
   getSignedRecordingUrl,
   signedUrlForVoicemail,
   objectUrl,

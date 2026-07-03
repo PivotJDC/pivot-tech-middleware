@@ -1,5 +1,6 @@
 jest.mock('../../src/services/accountService');
 jest.mock('../../src/services/messagingService');
+jest.mock('../../src/services/mmsService');
 jest.mock('../../src/services/pushService');
 jest.mock('../../src/utils/crypto');
 
@@ -7,6 +8,7 @@ const express = require('express');
 const request = require('supertest');
 const accountService = require('../../src/services/accountService');
 const messagingService = require('../../src/services/messagingService');
+const mmsService = require('../../src/services/mmsService');
 const pushService = require('../../src/services/pushService');
 const crypto = require('../../src/utils/crypto');
 const acrobitsRouter = require('../../src/routes/v1/acrobitsMessaging');
@@ -35,6 +37,10 @@ beforeEach(() => {
   jest.clearAllMocks();
   accountService.lookupBySipUsername.mockResolvedValue(ACCOUNT);
   crypto.verifyPassword.mockResolvedValue(true);
+  // Default: media resolution passes attachment URLs through (no encryption).
+  mmsService.resolveMediaUrls.mockImplementation(
+    (accountId, atts) => Promise.resolve((atts || []).map((a) => a.url)),
+  );
 });
 
 describe('GET /v1/acrobits/provision', () => {
@@ -150,11 +156,35 @@ describe('GET/POST /v1/acrobits/send', () => {
       });
     expect(res.status).toBe(200);
     expect(res.text).toContain('<sms_id>mms-1</sms_id>');
-    // Media-only MMS → empty body, both content-urls as media.
+    // The attachments (with encryption metadata) go to mmsService to resolve.
+    expect(mmsService.resolveMediaUrls).toHaveBeenCalledWith('acc-1', [
+      { url: 'https://media/1.jpg', contentType: 'image/jpeg', encryptionKey: 'k' },
+      { url: 'https://media/2.png', contentType: 'image/png', encryptionKey: undefined },
+    ]);
+    // Media-only MMS → empty body, resolved URLs as media.
     expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
       to: '+12085550142',
       body: '',
       mediaUrls: ['https://media/1.jpg', 'https://media/2.png'],
+    });
+  });
+
+  it('proxies encrypted media through mmsService (S3 URLs) before sending', async () => {
+    messagingService.sendMessage.mockResolvedValueOnce({ id: 'mms-enc' });
+    mmsService.resolveMediaUrls.mockResolvedValueOnce(['https://s3/mms/acc-1/uuid.jpg']);
+    const body = JSON.stringify({
+      attachments: [{ 'content-url': 'https://acrobits/enc', 'content-type': 'image/jpeg', 'encryption-key': 'ab12' }],
+    });
+    await request(app)
+      .post('/v1/acrobits/send')
+      .type('form')
+      .send({
+        username: 'pivottech-abc', password: 'pw', sms_to: '+12085550142', sms_body: body,
+      });
+    expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
+      to: '+12085550142',
+      body: '',
+      mediaUrls: ['https://s3/mms/acc-1/uuid.jpg'],
     });
   });
 
