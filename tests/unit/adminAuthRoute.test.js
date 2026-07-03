@@ -288,3 +288,28 @@ describe('POST /admin/accounts/:id/refresh-sip-credentials (super_admin only)', 
     expect(accountService.refreshSipPasswordHash).not.toHaveBeenCalled();
   });
 });
+
+describe('POST /admin/accounts/:id/esim-qr (super_admin + admin)', () => {
+  it('allows an admin', async () => {
+    mockAdmin = { id: 'a', role: 'admin' };
+    accountService.getEsimQr.mockResolvedValueOnce({ qr_code_url: 'data:image/png;base64,AAA' });
+    const res = await request(app).post('/admin/accounts/a1/esim-qr').send({});
+    expect(res.status).toBe(200);
+    expect(accountService.getEsimQr).toHaveBeenCalledWith('a1', { regenerate: false });
+  });
+
+  it('allows a super_admin', async () => {
+    mockAdmin = { id: 'jim', role: 'super_admin' };
+    accountService.getEsimQr.mockResolvedValueOnce({ qr_code_url: 'data:image/png;base64,AAA' });
+    const res = await request(app).post('/admin/accounts/a1/esim-qr').send({ regenerate: true });
+    expect(res.status).toBe(200);
+    expect(accountService.getEsimQr).toHaveBeenCalledWith('a1', { regenerate: true });
+  });
+
+  it('forbids a viewer', async () => {
+    mockAdmin = { id: 'v', role: 'viewer' };
+    const res = await request(app).post('/admin/accounts/a1/esim-qr').send({});
+    expect(res.status).toBe(403);
+    expect(accountService.getEsimQr).not.toHaveBeenCalled();
+  });
+});

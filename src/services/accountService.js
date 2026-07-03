@@ -7,6 +7,7 @@
  * (sip_password_hash) never leave the service.
  */
 const nodeCrypto = require('crypto');
+const qrcode = require('qrcode');
 const db = require('../db');
 const config = require('../config');
 const { errors } = require('../middleware/errorHandler');
@@ -212,6 +213,27 @@ async function provisionEsim(account) {
 }
 
 /**
+ * Persist a BICS eSIM result on the account. Writes both bics_iccid and the
+ * legacy esim_iccid (kept in sync so the ICCID is never left NULL) plus the
+ * activation code (LPA string) so the QR can be re-rendered without BICS.
+ * @returns {Promise<object|null>} the updated account row.
+ */
+async function persistEsim(id, esim) {
+  const { rows } = await db.query(
+    `UPDATE accounts
+        SET bics_endpoint_id = $1,
+            bics_iccid = $2,
+            esim_iccid = $2,
+            esim_activation_code = $3,
+            bics_provisioned = true
+      WHERE id = $4
+    RETURNING *`,
+    [esim.endpointId, esim.iccid, esim.activationCode, id],
+  );
+  return rows[0] || null;
+}
+
+/**
  * Attempt eSIM provisioning and persist the result. Best-effort: a BICS failure
  * is logged and swallowed (the account + DID are already created), leaving
  * bics_provisioned=false for a later retry. Returns the (possibly updated)
@@ -220,18 +242,12 @@ async function provisionEsim(account) {
 async function provisionAndPersistEsim(account) {
   try {
     const esim = await provisionEsim(account);
-    const { rows } = await db.query(
-      `UPDATE accounts
-          SET bics_endpoint_id = $1, bics_iccid = $2, bics_provisioned = true
-        WHERE id = $3
-      RETURNING *`,
-      [esim.endpointId, esim.iccid, account.id],
-    );
+    const updated = await persistEsim(account.id, esim);
     logger.info(
       { accountId: account.id, iccid: esim.iccid, endpointId: esim.endpointId },
       'BICS eSIM provisioned',
     );
-    return { account: rows[0] || account, esim };
+    return { account: updated || account, esim };
   } catch (err) {
     // Do NOT roll back: the Telnyx DID is already purchased and the account row
     // exists. Flag for retry instead.
@@ -690,20 +706,79 @@ async function retryBicsProvisioning(id) {
 
   // Surface failures (BICS_ERROR) to the admin rather than swallowing them.
   const esim = await provisionEsim(account);
-  const { rows: updated } = await db.query(
-    `UPDATE accounts
-        SET bics_endpoint_id = $1, bics_iccid = $2, bics_provisioned = true
-      WHERE id = $3
-    RETURNING *`,
-    [esim.endpointId, esim.iccid, id],
-  );
+  const updated = await persistEsim(id, esim);
   logger.info(
     { accountId: id, iccid: esim.iccid, endpointId: esim.endpointId },
     'BICS eSIM provisioning retried',
   );
-  const result = serializeAccount(updated[0]);
+  const result = serializeAccount(updated);
   result.esim = esim;
   return result;
+}
+
+/**
+ * Build (or rebuild) the eSIM install QR for an account, for the admin UI.
+ *   - regenerate=true: provision a fresh BICS endpoint (new eSIM) and use it.
+ *   - stored activation code present: render from it, no BICS call.
+ *   - a BICS endpoint exists but no stored code: read the code live from BICS.
+ *   - otherwise: provision a new BICS endpoint.
+ * The QR is a data URL rendered from the LPA activation string.
+ * @param {string} id
+ * @param {{ regenerate?: boolean }} [opts]
+ * @returns {Promise<{ qr_code_url, iccid, endpoint_id, activation_code, sm_dp_address }>}
+ */
+async function getEsimQr(id, { regenerate = false } = {}) {
+  assertUuid(id);
+  const { rows } = await db.query('SELECT * FROM accounts WHERE id = $1', [id]);
+  if (rows.length === 0) throw errors.notFound('Account not found.');
+  const account = rows[0];
+
+  let iccid;
+  let endpointId;
+  let activationCode;
+  let smDpAddress = null;
+
+  if (regenerate || !account.bics_endpoint_id) {
+    // Regenerate, or first-time provisioning: create a fresh BICS endpoint.
+    const esim = await provisionEsim(account);
+    await persistEsim(id, esim);
+    ({
+      iccid, endpointId, activationCode, smDpAddress,
+    } = esim);
+  } else if (account.esim_activation_code) {
+    // Endpoint exists and we already have the code — no BICS round-trip.
+    activationCode = account.esim_activation_code;
+    iccid = account.bics_iccid || account.esim_iccid || null;
+    endpointId = account.bics_endpoint_id;
+  } else {
+    // Endpoint exists but the code was never stored: read it live from BICS.
+    const sim = await bics.fetchSimByIccid(account.bics_iccid);
+    const activation = (sim && sim.activationCode) || {};
+    activationCode = activation.textQrCode || null;
+    smDpAddress = activation.smDpPlusAdress || null;
+    iccid = account.bics_iccid;
+    endpointId = account.bics_endpoint_id;
+    if (activationCode) {
+      await db.query(
+        'UPDATE accounts SET esim_activation_code = $1 WHERE id = $2',
+        [activationCode, id],
+      );
+    }
+  }
+
+  if (!activationCode) {
+    throw errors.validation('No eSIM activation code available for this account.', 'esim');
+  }
+
+  const qrCodeUrl = await qrcode.toDataURL(activationCode, { errorCorrectionLevel: 'M' });
+  logger.info({ accountId: id, endpointId, regenerate }, 'eSIM QR generated for admin');
+  return {
+    qr_code_url: qrCodeUrl,
+    iccid: iccid || null,
+    endpoint_id: endpointId || null,
+    activation_code: activationCode,
+    sm_dp_address: smDpAddress,
+  };
 }
 
 module.exports = {
@@ -718,6 +793,7 @@ module.exports = {
   updateAccount,
   transitionStatus,
   retryBicsProvisioning,
+  getEsimQr,
   setSipPasswordHash,
   refreshSipPasswordHash,
   serializeAccount,

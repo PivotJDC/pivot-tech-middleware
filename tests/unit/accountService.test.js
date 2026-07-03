@@ -203,9 +203,11 @@ describe('createAccount', () => {
     });
     expect(result).not.toHaveProperty('esim_error');
     expect(result.bics_provisioned).toBe(true);
-    // UPDATE persists endpoint id, iccid, and the provisioned flag.
+    // UPDATE persists endpoint id, iccid, activation code, and the flag.
     const updateCall = db.query.mock.calls.find(([sql]) => /UPDATE accounts/.test(sql));
-    expect(updateCall[1]).toEqual(['ep-bics-1', 'icc-1', baseRow.id]);
+    expect(updateCall[1]).toEqual([
+      'ep-bics-1', 'icc-1', 'LPA:1$thales3.prod.ondemandconnectivity.com$MATCH-1', baseRow.id,
+    ]);
   });
 
   it('BICS failure: account still created with esim=null and bics_provisioned=false', async () => {
@@ -492,7 +494,9 @@ describe('retryBicsProvisioning', () => {
     expect(result.esim.endpointId).toBe('ep-bics-1');
     expect(result.esim.activationCode).toMatch(/^LPA:1\$/);
     const updateCall = db.query.mock.calls.find(([sql]) => /UPDATE accounts/.test(sql));
-    expect(updateCall[1]).toEqual(['ep-bics-1', 'icc-1', baseRow.id]);
+    expect(updateCall[1]).toEqual([
+      'ep-bics-1', 'icc-1', 'LPA:1$thales3.prod.ondemandconnectivity.com$MATCH-1', baseRow.id,
+    ]);
   });
 
   it('rejects when the account is already provisioned', async () => {
@@ -627,6 +631,87 @@ describe('getAccountById', () => {
     await expect(accountService.getAccountById('not-a-uuid'))
       .rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'id' });
     expect(db.query).not.toHaveBeenCalled();
+  });
+});
+
+describe('getEsimQr', () => {
+  const LPA = 'LPA:1$thales3.prod.ondemandconnectivity.com$MATCH-1';
+
+  it('renders the QR from a stored activation code without hitting BICS', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{
+        ...baseRow,
+        bics_endpoint_id: 'ep-bics-1',
+        bics_iccid: 'icc-1',
+        esim_activation_code: LPA,
+      }],
+    });
+    const result = await accountService.getEsimQr(baseRow.id);
+    expect(result.qr_code_url).toMatch(/^data:image\/png;base64,/);
+    expect(result.iccid).toBe('icc-1');
+    expect(result.endpoint_id).toBe('ep-bics-1');
+    expect(result.activation_code).toBe(LPA);
+    // No BICS calls, no writes.
+    expect(bics.fetchSimByIccid).not.toHaveBeenCalled();
+    expect(bics.getNextAvailableEsim).not.toHaveBeenCalled();
+    expect(db.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the code live from BICS when an endpoint exists but no code is stored', async () => {
+    db.query
+      .mockResolvedValueOnce({
+        rows: [{
+          ...baseRow, bics_endpoint_id: 'ep-bics-1', bics_iccid: 'icc-1', esim_activation_code: null,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] }); // UPDATE esim_activation_code
+    bics.fetchSimByIccid.mockResolvedValueOnce({
+      endPointId: 'ep-bics-1',
+      activationCode: { textQrCode: LPA, smDpPlusAdress: 'thales3.prod.ondemandconnectivity.com' },
+    });
+    const result = await accountService.getEsimQr(baseRow.id);
+    expect(bics.fetchSimByIccid).toHaveBeenCalledWith('icc-1');
+    expect(result.activation_code).toBe(LPA);
+    expect(result.sm_dp_address).toBe('thales3.prod.ondemandconnectivity.com');
+    // Persisted the code for next time.
+    const upd = db.query.mock.calls.find(([sql]) => /SET esim_activation_code/.test(sql));
+    expect(upd[1]).toEqual([LPA, baseRow.id]);
+  });
+
+  it('provisions a fresh BICS endpoint when none exists', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ ...baseRow, bics_endpoint_id: null }] }) // load
+      .mockResolvedValueOnce({ rows: [{ ...baseRow, bics_endpoint_id: 'ep-bics-1' }] }); // persistEsim
+    wireBicsSuccess('icc-1', 'ep-bics-1');
+    const result = await accountService.getEsimQr(baseRow.id);
+    expect(bics.getNextAvailableEsim).toHaveBeenCalled();
+    expect(result.iccid).toBe('icc-1');
+    expect(result.endpoint_id).toBe('ep-bics-1');
+    expect(result.qr_code_url).toMatch(/^data:image\/png;base64,/);
+    // persistEsim writes bics + legacy esim_iccid + activation code.
+    const upd = db.query.mock.calls.find(([sql]) => /esim_activation_code = \$3/.test(sql));
+    expect(upd[1]).toEqual(['ep-bics-1', 'icc-1', LPA, baseRow.id]);
+  });
+
+  it('regenerate=true provisions a new endpoint even when one already exists', async () => {
+    db.query
+      .mockResolvedValueOnce({
+        rows: [{
+          ...baseRow, bics_endpoint_id: 'ep-old', bics_iccid: 'icc-old', esim_activation_code: 'LPA:old',
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ ...baseRow, bics_endpoint_id: 'ep-new' }] }); // persistEsim
+    wireBicsSuccess('icc-new', 'ep-new');
+    const result = await accountService.getEsimQr(baseRow.id, { regenerate: true });
+    expect(bics.getNextAvailableEsim).toHaveBeenCalled();
+    expect(result.iccid).toBe('icc-new');
+    expect(result.endpoint_id).toBe('ep-new');
+  });
+
+  it('throws NOT_FOUND when the account does not exist', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await expect(accountService.getEsimQr(baseRow.id))
+      .rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 });
 

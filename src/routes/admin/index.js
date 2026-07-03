@@ -216,6 +216,23 @@ router.post(
   }),
 );
 
+// eSIM install QR (data URL). With { regenerate: true } it provisions a fresh
+// BICS endpoint; otherwise it renders the QR from the stored/live activation
+// code. super_admin + admin.
+router.post(
+  '/accounts/:id/esim-qr',
+  requireRole('super_admin', 'admin'),
+  asyncHandler(async (req, res) => {
+    const regenerate = Boolean(req.body && req.body.regenerate);
+    const result = await accountService.getEsimQr(req.params.id, { regenerate });
+    logger.info(
+      { adminId: req.admin.id, accountId: req.params.id, regenerate },
+      'admin generated eSIM QR',
+    );
+    res.json(result);
+  }),
+);
+
 router.patch(
   '/accounts/:id/status',
   asyncHandler(async (req, res) => {

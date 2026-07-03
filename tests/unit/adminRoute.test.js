@@ -176,6 +176,25 @@ describe('admin API', () => {
     expect(accountService.refreshSipPasswordHash).toHaveBeenCalledWith('a1');
   });
 
+  it('POST /admin/accounts/:id/esim-qr returns a QR (default show)', async () => {
+    accountService.getEsimQr.mockResolvedValueOnce({
+      qr_code_url: 'data:image/png;base64,AAA', iccid: 'icc-1', endpoint_id: 'ep-1',
+    });
+    const res = await request(app).post('/admin/accounts/a1/esim-qr').send({});
+    expect(res.status).toBe(200);
+    expect(res.body.qr_code_url).toMatch(/^data:image\/png/);
+    expect(accountService.getEsimQr).toHaveBeenCalledWith('a1', { regenerate: false });
+  });
+
+  it('POST /admin/accounts/:id/esim-qr passes regenerate through', async () => {
+    accountService.getEsimQr.mockResolvedValueOnce({
+      qr_code_url: 'data:image/png;base64,BBB', iccid: 'icc-2', endpoint_id: 'ep-2',
+    });
+    const res = await request(app).post('/admin/accounts/a1/esim-qr').send({ regenerate: true });
+    expect(res.status).toBe(200);
+    expect(accountService.getEsimQr).toHaveBeenCalledWith('a1', { regenerate: true });
+  });
+
   it('GET /admin/dids lists inventory', async () => {
     adminService.listDids.mockResolvedValueOnce({ dids: [], pagination: {} });
     const res = await request(app).get('/admin/dids?market=lewiston-id&area_code=208');
