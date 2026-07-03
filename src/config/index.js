@@ -217,6 +217,9 @@ function buildConfig() {
         didAssignmentQueueUrl: process.env.SQS_DID_ASSIGNMENT_QUEUE_URL || '',
         notificationQueueUrl: process.env.SQS_NOTIFICATION_QUEUE_URL || '',
       }),
+      // S3 bucket for permanent voicemail recording storage (Telnyx URLs expire
+      // after ~10 minutes). Empty disables S3 archival (Telnyx URL is kept).
+      recordingsBucket: process.env.S3_RECORDINGS_BUCKET || 'mobilitynet-recordings',
     }),
 
     apns: Object.freeze({

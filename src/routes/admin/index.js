@@ -26,6 +26,7 @@ const adminUserService = require('../../services/adminUserService');
 const cdrService = require('../../services/cdrService');
 const usageService = require('../../services/usageService');
 const voicemailService = require('../../services/voicemailService');
+const s3 = require('../../integrations/s3');
 const tenantsRouter = require('./tenants');
 const { adminAuth, requireRole } = require('../../middleware/adminAuth');
 const { rateLimit } = require('../../middleware/rateLimiter');
@@ -209,6 +210,26 @@ router.get(
       tenantScope(req),
     );
     res.json({ voicemails });
+  }),
+);
+
+// Signed recording URL — 302 redirect, or ?format=json → { url } for the SPA
+// audio player (which can't send an auth header).
+router.get(
+  '/voicemails/:id/recording',
+  requireRole('super_admin', 'admin'),
+  asyncHandler(async (req, res) => {
+    const voicemail = await voicemailService.getById(req.params.id, {
+      tenantId: tenantScope(req),
+    });
+    if (!voicemail) throw errors.notFound('Voicemail not found.');
+    const url = await s3.signedUrlForVoicemail(voicemail, 3600);
+    if (!url) throw errors.notFound('No recording available.');
+    if (req.query.format === 'json') {
+      res.json({ url });
+      return;
+    }
+    res.redirect(302, url);
   }),
 );
 

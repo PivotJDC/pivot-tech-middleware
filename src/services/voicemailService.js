@@ -87,6 +87,26 @@ function scopedWhere(voicemailId, scope = {}) {
   return { where, params };
 }
 
+/** Fetch a single voicemail (optionally scoped by account/tenant). */
+async function getById(voicemailId, scope = {}) {
+  const { where, params } = scopedWhere(voicemailId, scope);
+  const { rows } = await db.query(`SELECT * FROM voicemails WHERE ${where}`, params);
+  return rows[0] || null;
+}
+
+/** Store the archived-recording pointers (S3 key + canonical URL) on a voicemail. */
+async function setRecording(voicemailId, { s3Key, recordingUrl } = {}) {
+  const { rows } = await db.query(
+    `UPDATE voicemails
+        SET recording_s3_key = $1,
+            recording_url = COALESCE($2, recording_url)
+      WHERE id = $3
+    RETURNING *`,
+    [s3Key || null, recordingUrl || null, voicemailId],
+  );
+  return rows[0] || null;
+}
+
 /**
  * Mark a voicemail read. `scope` optionally restricts by account/tenant so a
  * caller can only touch their own. Returns the row, or null if not found/owned.
@@ -165,6 +185,8 @@ async function clearGreeting(accountId) {
 
 module.exports = {
   createVoicemail,
+  getById,
+  setRecording,
   getVoicemails,
   markAsRead,
   deleteVoicemail,

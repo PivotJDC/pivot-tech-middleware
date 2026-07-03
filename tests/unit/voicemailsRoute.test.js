@@ -1,4 +1,5 @@
 jest.mock('../../src/services/voicemailService');
+jest.mock('../../src/integrations/s3');
 
 // authenticate double: authed iff an Authorization header is present.
 const mockAuthenticate = jest.fn();
@@ -9,6 +10,7 @@ jest.mock('../../src/middleware/auth', () => ({
 const express = require('express');
 const request = require('supertest');
 const voicemailService = require('../../src/services/voicemailService');
+const s3 = require('../../src/integrations/s3');
 const voicemailsRouter = require('../../src/routes/v1/voicemails');
 const { errorHandler, errors } = require('../../src/middleware/errorHandler');
 
@@ -49,6 +51,44 @@ describe('GET /v1/account/voicemails', () => {
     const res = await request(app).get('/v1/account/voicemails');
     expect(res.status).toBe(401);
     expect(voicemailService.getVoicemails).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /v1/account/voicemails/:id/recording', () => {
+  it('returns a signed URL as JSON (?format=json) for the audio player', async () => {
+    voicemailService.getById.mockResolvedValueOnce({ id: 'vm-1', recording_s3_key: 'k' });
+    s3.signedUrlForVoicemail.mockResolvedValueOnce('https://signed.example/x');
+    const res = await request(app)
+      .get('/v1/account/voicemails/vm-1/recording?format=json')
+      .set('authorization', 'Bearer t');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ url: 'https://signed.example/x' });
+    expect(voicemailService.getById).toHaveBeenCalledWith('vm-1', { accountId: 'acc-1' });
+  });
+
+  it('302-redirects to the signed URL by default', async () => {
+    voicemailService.getById.mockResolvedValueOnce({ id: 'vm-1', recording_s3_key: 'k' });
+    s3.signedUrlForVoicemail.mockResolvedValueOnce('https://signed.example/x');
+    const res = await request(app)
+      .get('/v1/account/voicemails/vm-1/recording')
+      .set('authorization', 'Bearer t')
+      .redirects(0);
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe('https://signed.example/x');
+  });
+
+  it('404s when the voicemail is not mine', async () => {
+    voicemailService.getById.mockResolvedValueOnce(null);
+    const res = await request(app)
+      .get('/v1/account/voicemails/vm-x/recording?format=json')
+      .set('authorization', 'Bearer t');
+    expect(res.status).toBe(404);
+  });
+
+  it('401s without a token', async () => {
+    const res = await request(app).get('/v1/account/voicemails/vm-1/recording?format=json');
+    expect(res.status).toBe(401);
+    expect(voicemailService.getById).not.toHaveBeenCalled();
   });
 });
 

@@ -22,6 +22,7 @@ jest.mock('../../src/services/provisioningService');
 jest.mock('../../src/services/usageService');
 jest.mock('../../src/services/tenantService');
 jest.mock('../../src/services/voicemailService');
+jest.mock('../../src/integrations/s3');
 jest.mock('../../src/utils/logger', () => ({
   logger: { info: () => {}, warn: () => {}, error: () => {} },
   REDACT_PATHS: [],
@@ -337,5 +338,12 @@ describe('voicemail admin routes (super_admin + admin)', () => {
     const res = await request(app).delete('/admin/voicemails/vm-1');
     expect(res.status).toBe(403);
     expect(voicemailService.deleteVoicemail).not.toHaveBeenCalled();
+  });
+
+  it('forbids a viewer from the recording endpoint', async () => {
+    mockAdmin = { id: 'v', role: 'viewer' };
+    const res = await request(app).get('/admin/voicemails/vm-1/recording?format=json');
+    expect(res.status).toBe(403);
+    expect(voicemailService.getById).not.toHaveBeenCalled();
   });
 });

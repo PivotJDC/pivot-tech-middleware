@@ -90,6 +90,33 @@ describe('getVoicemailCount', () => {
   });
 });
 
+describe('getById', () => {
+  it('fetches a voicemail scoped by account', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'vm-1' }] });
+    const row = await vm.getById('vm-1', { accountId: 'acc-1' });
+    expect(row).toEqual({ id: 'vm-1' });
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/SELECT \* FROM voicemails WHERE id = \$1 AND account_id = \$2/);
+    expect(params).toEqual(['vm-1', 'acc-1']);
+  });
+
+  it('returns null when not found', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    expect(await vm.getById('vm-x')).toBeNull();
+  });
+});
+
+describe('setRecording', () => {
+  it('stores the S3 key and recording URL', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'vm-1' }] });
+    await vm.setRecording('vm-1', { s3Key: 'voicemails/a/vm-1.wav', recordingUrl: 'https://s3/x' });
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/SET\s+recording_s3_key = \$1/);
+    expect(sql).toMatch(/recording_url = COALESCE\(\$2, recording_url\)/);
+    expect(params).toEqual(['voicemails/a/vm-1.wav', 'https://s3/x', 'vm-1']);
+  });
+});
+
 describe('setGreeting / clearGreeting', () => {
   it('setGreeting updates the account greeting URL', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ id: 'acc-1' }] });

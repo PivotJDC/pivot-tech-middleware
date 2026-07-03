@@ -7,6 +7,7 @@ jest.mock('../../src/services/accountService');
 jest.mock('../../src/services/voicemailService');
 jest.mock('../../src/services/pushService');
 jest.mock('../../src/integrations/email');
+jest.mock('../../src/integrations/s3');
 // Automock the Telnyx integration so the Ed25519 webhook verifier reads no
 // public key (getWebhookPublicKey -> undefined) and skips — no network call.
 jest.mock('../../src/integrations/telnyx');
@@ -25,6 +26,7 @@ const accountService = require('../../src/services/accountService');
 const voicemailService = require('../../src/services/voicemailService');
 const pushService = require('../../src/services/pushService');
 const emailClient = require('../../src/integrations/email');
+const s3 = require('../../src/integrations/s3');
 const voiceRouter = require('../../src/routes/v1/voice');
 const { errorHandler } = require('../../src/middleware/errorHandler');
 
@@ -305,8 +307,52 @@ describe('POST /v1/voice/voicemail-complete', () => {
   beforeEach(() => {
     accountService.getAccountById.mockReset();
     voicemailService.createVoicemail.mockReset();
+    voicemailService.setRecording.mockReset();
     pushService.sendMessagePush.mockReset();
     emailClient.sendEmail.mockReset();
+    s3.bucket.mockReset();
+    s3.archiveRecording.mockReset();
+    s3.objectUrl.mockReset();
+    // Default: S3 archival disabled (no bucket) so base tests don't touch S3.
+    s3.bucket.mockReturnValue('');
+  });
+
+  it('archives the recording to S3 and stores the key when a bucket is set', async () => {
+    s3.bucket.mockReturnValue('mobilitynet-recordings');
+    s3.archiveRecording.mockResolvedValueOnce({ key: 'voicemails/a1/vm-1.wav' });
+    s3.objectUrl.mockReturnValue('https://s3/voicemails/a1/vm-1.wav');
+    accountService.getAccountById.mockResolvedValueOnce({ id: 'a1', tenant_id: 'ten-1' });
+    voicemailService.createVoicemail.mockResolvedValueOnce({ id: 'vm-1' });
+    voicemailService.setRecording.mockResolvedValueOnce({ id: 'vm-1' });
+
+    const res = await request(app)
+      .post('/v1/voice/voicemail-complete?accountId=a1&from=%2B1')
+      .type('form')
+      .send({ RecordingUrl: 'https://telnyx/rec', RecordingDuration: '8' });
+
+    expect(res.status).toBe(200);
+    expect(s3.archiveRecording).toHaveBeenCalledWith({
+      key: 'voicemails/a1/vm-1.wav', sourceUrl: 'https://telnyx/rec',
+    });
+    expect(voicemailService.setRecording).toHaveBeenCalledWith('vm-1', {
+      s3Key: 'voicemails/a1/vm-1.wav',
+      recordingUrl: 'https://s3/voicemails/a1/vm-1.wav',
+    });
+  });
+
+  it('keeps the Telnyx URL (no setRecording) when S3 archival fails', async () => {
+    s3.bucket.mockReturnValue('mobilitynet-recordings');
+    s3.archiveRecording.mockRejectedValueOnce(new Error('s3 down'));
+    accountService.getAccountById.mockResolvedValueOnce({ id: 'a1', tenant_id: 'ten-1' });
+    voicemailService.createVoicemail.mockResolvedValueOnce({ id: 'vm-1' });
+
+    const res = await request(app)
+      .post('/v1/voice/voicemail-complete?accountId=a1&from=%2B1')
+      .type('form')
+      .send({ RecordingUrl: 'https://telnyx/rec', RecordingDuration: '8' });
+
+    expect(res.status).toBe(200);
+    expect(voicemailService.setRecording).not.toHaveBeenCalled();
   });
 
   it('stores the voicemail, pushes, emails, and returns an empty Response', async () => {

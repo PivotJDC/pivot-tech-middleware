@@ -13,6 +13,7 @@ jest.mock('../../src/services/adminUserService');
 jest.mock('../../src/services/cdrService');
 jest.mock('../../src/services/usageService');
 jest.mock('../../src/services/voicemailService');
+jest.mock('../../src/integrations/s3');
 
 const express = require('express');
 const request = require('supertest');
@@ -22,6 +23,7 @@ const provisioningService = require('../../src/services/provisioningService');
 const cdrService = require('../../src/services/cdrService');
 const usageService = require('../../src/services/usageService');
 const voicemailService = require('../../src/services/voicemailService');
+const s3 = require('../../src/integrations/s3');
 const adminRouter = require('../../src/routes/admin');
 const { errorHandler } = require('../../src/middleware/errorHandler');
 
@@ -227,6 +229,20 @@ describe('admin API', () => {
     const res = await request(app).delete('/admin/voicemails/vm-1');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ deleted: true, id: 'vm-1' });
+  });
+
+  it('GET /admin/voicemails/:id/recording returns a signed URL (?format=json)', async () => {
+    voicemailService.getById.mockResolvedValueOnce({ id: 'vm-1', recording_s3_key: 'k' });
+    s3.signedUrlForVoicemail.mockResolvedValueOnce('https://signed.example/x');
+    const res = await request(app).get('/admin/voicemails/vm-1/recording?format=json');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ url: 'https://signed.example/x' });
+  });
+
+  it('GET /admin/voicemails/:id/recording 404s when missing', async () => {
+    voicemailService.getById.mockResolvedValueOnce(null);
+    const res = await request(app).get('/admin/voicemails/vm-x/recording?format=json');
+    expect(res.status).toBe(404);
   });
 
   it('GET /admin/dids lists inventory', async () => {

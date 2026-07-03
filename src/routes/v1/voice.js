@@ -19,6 +19,7 @@ const voicemailService = require('../../services/voicemailService');
 const pushService = require('../../services/pushService');
 const emailClient = require('../../integrations/email');
 const emailTemplates = require('../../services/emailTemplates');
+const s3 = require('../../integrations/s3');
 const { asyncHandler } = require('../../middleware/errorHandler');
 const { verifyTelnyxWebhook } = require('../../middleware/telnyxWebhookVerify');
 const { logger } = require('../../utils/logger');
@@ -429,6 +430,24 @@ router.post(
           recordingSid,
           durationSeconds,
         });
+
+        // Best-effort: copy the recording to S3 for permanent storage (Telnyx
+        // URLs expire ~10 min). On failure we keep the Telnyx URL as fallback.
+        if (s3.bucket() && recordingUrl) {
+          try {
+            const key = `voicemails/${account.id}/${voicemail.id}.wav`;
+            await s3.archiveRecording({ key, sourceUrl: recordingUrl });
+            await voicemailService.setRecording(voicemail.id, {
+              s3Key: key,
+              recordingUrl: s3.objectUrl(key),
+            });
+          } catch (err) {
+            logger.error(
+              { accountId: account.id, voicemailId: voicemail.id, err: err.message },
+              'voicemail S3 archival failed; keeping Telnyx URL',
+            );
+          }
+        }
 
         // Best-effort: wake the app (reuses the message push, which never throws).
         await pushService.sendMessagePush(account.id, {
