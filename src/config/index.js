@@ -240,6 +240,13 @@ function buildConfig() {
       baseUrl: process.env.PROVISIONING_BASE_URL || 'https://api.pivot-tech.io',
       tokenTtlHours: parseIntOr(process.env.PROVISIONING_TOKEN_TTL_HOURS, 72),
     }),
+
+    voicemail: Object.freeze({
+      // Dedicated voicemail-menu system DID (E.164). When an inbound call is
+      // placed to this number, route to the voicemail IVR instead of a
+      // subscriber. Optional — empty disables the DID route.
+      systemDid: process.env.VOICEMAIL_SYSTEM_DID || '',
+    }),
   });
 }
 

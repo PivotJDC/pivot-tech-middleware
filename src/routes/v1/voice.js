@@ -110,6 +110,7 @@ function voicemailPromptXml(account, accountId, from) {
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<Response>',
     greeting,
+    '  <Say voice="alice">Or press star to reach the voicemail menu.</Say>',
     `  <Record maxLength="120" action="${completeAction}" playBeep="true" finishOnKey="#"`
       + ` transcribe="true" transcribeCallback="${transcribeCb}"/>`,
     '  <Say voice="alice">Thank you. Goodbye.</Say>',
@@ -126,6 +127,94 @@ async function safeGetAccount(accountId) {
   } catch {
     return null;
   }
+}
+
+// --- Voicemail IVR TeXML builders ----------------------------------------
+
+/** <Say> + <Hangup>. */
+function hangupXml(text) {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<Response>',
+    `  <Say voice="alice">${escapeXml(text)}</Say>`,
+    '  <Hangup/>',
+    '</Response>',
+    '',
+  ].join('\n');
+}
+
+/** Optional <Say> then <Redirect> back to the main voicemail menu. */
+function redirectMenuXml(accountId, sayText) {
+  const menu = `${baseUrl()}/v1/voice/voicemail-menu?accountId=${encodeURIComponent(accountId || '')}`;
+  const lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>'];
+  if (sayText) lines.push(`  <Say voice="alice">${escapeXml(sayText)}</Say>`);
+  lines.push(`  <Redirect>${menu}</Redirect>`, '</Response>', '');
+  return lines.join('\n');
+}
+
+/** Main voicemail menu (Gather). */
+function menuXml(accountId) {
+  const action = `${baseUrl()}/v1/voice/voicemail-menu-action?accountId=${encodeURIComponent(accountId || '')}`;
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<Response>',
+    `  <Gather numDigits="1" action="${action}">`,
+    '    <Say voice="alice">Voicemail menu. Press 1 to listen to your messages. '
+      + 'Press 2 to record a new greeting. Press 3 to delete your greeting and use the '
+      + 'default. Press 9 to exit.</Say>',
+    '  </Gather>',
+    '</Response>',
+    '',
+  ].join('\n');
+}
+
+/** Prompt to record a new greeting. */
+function recordGreetingXml(accountId) {
+  const action = `${baseUrl()}/v1/voice/voicemail-greeting-save?accountId=${encodeURIComponent(accountId || '')}`;
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<Response>',
+    '  <Say voice="alice">Record your greeting after the beep. Press pound when finished.</Say>',
+    `  <Record maxLength="30" playBeep="true" finishOnKey="#" action="${action}"/>`,
+    '</Response>',
+    '',
+  ].join('\n');
+}
+
+/** A spoken date for message playback (empty when not derivable). */
+function spokenDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toDateString();
+}
+
+/** Play one voicemail + the per-message Gather. `prefixSay` is optional. */
+function messageXml(accountId, vm, prefixSay) {
+  const action = `${baseUrl()}/v1/voice/voicemail-message-action`
+    + `?accountId=${encodeURIComponent(accountId || '')}`
+    + `&amp;vmId=${encodeURIComponent(vm.id)}`;
+  const dateText = spokenDate(vm.created_at);
+  const dateClause = dateText ? `, ${escapeXml(dateText)}` : '';
+  const seconds = Number(vm.duration_seconds) || 0;
+  const header = `Message from ${escapeXml(vm.caller_number || 'unknown')}${dateClause}, ${seconds} seconds.`;
+  const lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>'];
+  if (prefixSay) lines.push(`  <Say voice="alice">${escapeXml(prefixSay)}</Say>`);
+  lines.push(`  <Say voice="alice">${header}</Say>`);
+  if (vm.recording_url) lines.push(`  <Play>${escapeXml(vm.recording_url)}</Play>`);
+  lines.push(
+    `  <Gather numDigits="1" action="${action}">`,
+    '    <Say voice="alice">Press 3 to delete this message. Press 4 for next message. '
+      + 'Press 9 to return to main menu.</Say>',
+    '  </Gather>',
+    '</Response>',
+    '',
+  );
+  return lines.join('\n');
+}
+
+/** The pressed digit from a Gather callback (TeXML `Digits`). */
+function gatheredDigit(params) {
+  return params.Digits || params.digits || params.Digit || '';
 }
 
 /** TeXML that rejects the call (unknown number or inactive account). */
@@ -151,6 +240,24 @@ router.all(
     const from = normalizePhone(params.From || params.from);
     const callId = params.CallSid || params.CallControlId || params.call_control_id || null;
 
+    res.type('application/xml').status(200);
+
+    // Voicemail system DID: route to the IVR (keyed by the caller's own number),
+    // not a subscriber dial. FUTURE: a *86 star code from Cloud Softphone could
+    // reach the same menu, but that needs Telnyx outbound call-control config —
+    // this middleware only sees inbound TeXML, so we branch on the called DID.
+    if (config.voicemail.systemDid && to === config.voicemail.systemDid) {
+      const caller = from ? await accountService.lookupByPhoneE164(from) : null;
+      logger.info(
+        {
+          to, from, callId, voicemailMenu: true,
+        },
+        'inbound call to voicemail system DID',
+      );
+      res.send(caller ? menuXml(caller.id) : hangupXml('We could not find your account. Goodbye.'));
+      return;
+    }
+
     const match = await voiceService.lookupByCalledNumber(to);
     const active = !!match && match.status === 'active';
 
@@ -161,7 +268,6 @@ router.all(
       'inbound call',
     );
 
-    res.type('application/xml').status(200);
     // lookupByCalledNumber returns account_id (not id) — pass it so the Dial
     // action URL can route an unanswered call to voicemail for this account.
     res.send(active ? dialXml(match.sip_username, from, match.account_id) : rejectXml());
@@ -378,6 +484,147 @@ router.post(
     }
 
     res.status(200).json({ received: true });
+  }),
+);
+
+// --- Voicemail management IVR ---------------------------------------------
+// A traditional dial-in voicemail experience. Reached via the voicemail system
+// DID (inbound handler) or an in-call redirect. The subscriber is identified by
+// caller ID on first entry; accountId then rides on every action URL.
+
+/** Main menu. Resolve the account (by accountId on redirects, else caller ID). */
+router.post(
+  '/voicemail-menu',
+  asyncHandler(async (req, res) => {
+    const params = { ...req.query, ...req.body };
+    const from = normalizePhone(params.From || params.from);
+    res.type('application/xml').status(200);
+
+    let account = null;
+    if (params.accountId) {
+      account = await safeGetAccount(params.accountId);
+    } else if (from) {
+      account = await accountService.lookupByPhoneE164(from);
+    }
+
+    if (!account) {
+      res.send(hangupXml('We could not find your account.'));
+      return;
+    }
+    res.send(menuXml(account.id));
+  }),
+);
+
+/** Main-menu keypress handler. */
+router.post(
+  '/voicemail-menu-action',
+  asyncHandler(async (req, res) => {
+    const params = { ...req.query, ...req.body };
+    const { accountId } = params;
+    const digit = gatheredDigit(params);
+    res.type('application/xml').status(200);
+
+    // 1 — listen to messages (play the newest; per-message actions follow).
+    if (digit === '1') {
+      const voicemails = accountId ? await voicemailService.getVoicemails(accountId, {}) : [];
+      if (voicemails.length === 0) {
+        res.send(redirectMenuXml(accountId, 'You have no messages.'));
+        return;
+      }
+      res.send(messageXml(accountId, voicemails[0]));
+      return;
+    }
+
+    // 2 — record a new greeting.
+    if (digit === '2') {
+      res.send(recordGreetingXml(accountId));
+      return;
+    }
+
+    // 3 — delete the custom greeting (revert to default).
+    if (digit === '3') {
+      try {
+        if (accountId) await voicemailService.clearGreeting(accountId);
+      } catch (err) {
+        logger.error({ accountId, err: err.message }, 'failed to clear voicemail greeting');
+      }
+      res.send(redirectMenuXml(accountId, 'Your greeting has been reset to the default.'));
+      return;
+    }
+
+    // 9 — exit.
+    if (digit === '9') {
+      res.send(hangupXml('Goodbye.'));
+      return;
+    }
+
+    // Anything else — replay the menu.
+    res.send(menuXml(accountId));
+  }),
+);
+
+/** Save a recorded greeting, then return to the menu. */
+router.post(
+  '/voicemail-greeting-save',
+  asyncHandler(async (req, res) => {
+    const params = { ...req.query, ...req.body };
+    const { accountId } = params;
+    const recordingUrl = params.RecordingUrl || params.recording_url || null;
+    res.type('application/xml').status(200);
+
+    try {
+      if (accountId && recordingUrl) {
+        await voicemailService.setGreeting(accountId, recordingUrl);
+      }
+    } catch (err) {
+      logger.error({ accountId, err: err.message }, 'failed to save voicemail greeting');
+    }
+    res.send(redirectMenuXml(accountId, 'Your greeting has been saved.'));
+  }),
+);
+
+/** Per-message keypress handler (delete / next / main menu). */
+router.post(
+  '/voicemail-message-action',
+  asyncHandler(async (req, res) => {
+    const params = { ...req.query, ...req.body };
+    const { accountId, vmId } = params;
+    const digit = gatheredDigit(params);
+    res.type('application/xml').status(200);
+
+    // 3 — delete this message, then continue with whatever took its slot.
+    if (digit === '3') {
+      const before = accountId ? await voicemailService.getVoicemails(accountId, {}) : [];
+      const idx = before.findIndex((v) => String(v.id) === String(vmId));
+      try {
+        if (vmId) await voicemailService.deleteVoicemail(vmId, { accountId });
+      } catch (err) {
+        logger.error({ accountId, vmId, err: err.message }, 'failed to delete voicemail');
+      }
+      const after = accountId ? await voicemailService.getVoicemails(accountId, {}) : [];
+      if (idx >= 0 && idx < after.length) {
+        res.send(messageXml(accountId, after[idx], 'Message deleted.'));
+        return;
+      }
+      res.send(redirectMenuXml(accountId, 'Message deleted.'));
+      return;
+    }
+
+    // 4 — next message.
+    if (digit === '4') {
+      const list = accountId ? await voicemailService.getVoicemails(accountId, {}) : [];
+      const idx = list.findIndex((v) => String(v.id) === String(vmId));
+      const nextIdx = idx >= 0 ? idx + 1 : 0;
+      if (nextIdx < list.length) {
+        res.send(messageXml(accountId, list[nextIdx]));
+        return;
+      }
+      res.send(redirectMenuXml(accountId, 'No more messages.'));
+      return;
+    }
+
+    // 9 (or anything else) — back to the main menu.
+    res.send(redirectMenuXml(accountId));
   }),
 );
 

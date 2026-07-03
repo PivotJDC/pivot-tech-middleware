@@ -143,6 +143,26 @@ async function attachTranscription({ accountId, recordingSid, transcription } = 
   return rows[0] || null;
 }
 
+/** Set an account's custom voicemail greeting URL (recorded via the IVR). */
+async function setGreeting(accountId, greetingUrl) {
+  const { rows } = await db.query(
+    'UPDATE accounts SET voicemail_greeting_url = $1 WHERE id = $2 RETURNING id',
+    [greetingUrl || null, accountId],
+  );
+  logger.info({ accountId }, 'voicemail greeting set');
+  return rows[0] || null;
+}
+
+/** Clear an account's custom greeting (fall back to the default <Say>). */
+async function clearGreeting(accountId) {
+  const { rows } = await db.query(
+    'UPDATE accounts SET voicemail_greeting_url = NULL WHERE id = $1 RETURNING id',
+    [accountId],
+  );
+  logger.info({ accountId }, 'voicemail greeting cleared');
+  return rows[0] || null;
+}
+
 module.exports = {
   createVoicemail,
   getVoicemails,
@@ -150,4 +170,6 @@ module.exports = {
   deleteVoicemail,
   getVoicemailCount,
   attachTranscription,
+  setGreeting,
+  clearGreeting,
 };

@@ -90,6 +90,25 @@ describe('getVoicemailCount', () => {
   });
 });
 
+describe('setGreeting / clearGreeting', () => {
+  it('setGreeting updates the account greeting URL', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'acc-1' }] });
+    const row = await vm.setGreeting('acc-1', 'https://rec/greet.mp3');
+    expect(row).toEqual({ id: 'acc-1' });
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/UPDATE accounts SET voicemail_greeting_url = \$1 WHERE id = \$2/);
+    expect(params).toEqual(['https://rec/greet.mp3', 'acc-1']);
+  });
+
+  it('clearGreeting nulls the greeting URL', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'acc-1' }] });
+    await vm.clearGreeting('acc-1');
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/SET voicemail_greeting_url = NULL WHERE id = \$1/);
+    expect(params).toEqual(['acc-1']);
+  });
+});
+
 describe('attachTranscription', () => {
   it('matches by recording_sid first', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ id: 'vm-1', transcription: 'hi' }] });

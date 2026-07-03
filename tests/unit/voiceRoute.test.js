@@ -1,3 +1,6 @@
+// Set before requiring config (via voice.js) so the DID route is exercisable.
+process.env.VOICEMAIL_SYSTEM_DID = '+15550000086';
+
 jest.mock('../../src/services/voiceService');
 jest.mock('../../src/services/cdrService');
 jest.mock('../../src/services/accountService');
@@ -266,6 +269,7 @@ describe('POST /v1/voice/voicemail-handler', () => {
       .send({ DialCallStatus: 'no-answer' });
     expect(res.status).toBe(200);
     expect(res.text).toContain('<Say voice="alice">You have reached Jane Doe.');
+    expect(res.text).toContain('Or press star to reach the voicemail menu.');
     expect(res.text).toContain('<Record maxLength="120"');
     expect(res.text).toContain('/v1/voice/voicemail-complete?accountId=a1&amp;from=');
     expect(res.text).toContain('transcribeCallback=');
@@ -370,5 +374,225 @@ describe('POST /v1/voice/voicemail-transcription', () => {
       .send({});
     expect(res.status).toBe(200);
     expect(voicemailService.attachTranscription).not.toHaveBeenCalled();
+  });
+});
+
+describe('inbound → voicemail system DID', () => {
+  beforeEach(() => {
+    voiceService.lookupByCalledNumber.mockReset();
+    accountService.lookupByPhoneE164.mockReset();
+  });
+
+  it('routes a call to the system DID into the IVR menu (keyed by caller ID)', async () => {
+    accountService.lookupByPhoneE164.mockResolvedValueOnce({ id: 'acc-1' });
+    const res = await request(app)
+      .post('/v1/voice/inbound')
+      .type('form')
+      .send({ To: '+15550000086', From: '+12085550142', CallSid: 'CAvm' });
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<Gather numDigits="1"');
+    expect(res.text).toContain('Voicemail menu.');
+    expect(res.text).toContain('/v1/voice/voicemail-menu-action?accountId=acc-1');
+    expect(accountService.lookupByPhoneE164).toHaveBeenCalledWith('+12085550142');
+    // Did NOT try to dial a subscriber.
+    expect(voiceService.lookupByCalledNumber).not.toHaveBeenCalled();
+    expect(res.text).not.toContain('<Dial');
+  });
+
+  it('hangs up when the system-DID caller is not a known subscriber', async () => {
+    accountService.lookupByPhoneE164.mockResolvedValueOnce(null);
+    const res = await request(app)
+      .post('/v1/voice/inbound')
+      .type('form')
+      .send({ To: '+15550000086', From: '+19999999999', CallSid: 'CAvm2' });
+    expect(res.text).toContain('We could not find your account.');
+    expect(res.text).toContain('<Hangup/>');
+  });
+});
+
+describe('POST /v1/voice/voicemail-menu', () => {
+  beforeEach(() => {
+    accountService.lookupByPhoneE164.mockReset();
+    accountService.getAccountById.mockReset();
+  });
+
+  it('greets a known caller with the main menu', async () => {
+    accountService.lookupByPhoneE164.mockResolvedValueOnce({ id: 'acc-1' });
+    const res = await request(app)
+      .post('/v1/voice/voicemail-menu')
+      .type('form')
+      .send({ From: '+12085550142' });
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/xml/);
+    expect(res.text).toContain('Press 1 to listen to your messages.');
+    expect(res.text).toContain('/v1/voice/voicemail-menu-action?accountId=acc-1');
+  });
+
+  it('hangs up for an unknown caller', async () => {
+    accountService.lookupByPhoneE164.mockResolvedValueOnce(null);
+    const res = await request(app)
+      .post('/v1/voice/voicemail-menu')
+      .type('form')
+      .send({ From: '+19999999999' });
+    expect(res.text).toContain('We could not find your account.');
+    expect(res.text).toContain('<Hangup/>');
+  });
+
+  it('resolves by accountId on an in-IVR redirect', async () => {
+    accountService.getAccountById.mockResolvedValueOnce({ id: 'acc-1' });
+    const res = await request(app)
+      .post('/v1/voice/voicemail-menu?accountId=acc-1')
+      .type('form')
+      .send({});
+    expect(res.text).toContain('Voicemail menu.');
+    expect(accountService.getAccountById).toHaveBeenCalledWith('acc-1');
+    expect(accountService.lookupByPhoneE164).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /v1/voice/voicemail-menu-action', () => {
+  beforeEach(() => {
+    voicemailService.getVoicemails.mockReset();
+    voicemailService.clearGreeting.mockReset();
+  });
+
+  it('digit 1 with no messages redirects to the menu', async () => {
+    voicemailService.getVoicemails.mockResolvedValueOnce([]);
+    const res = await request(app)
+      .post('/v1/voice/voicemail-menu-action?accountId=acc-1')
+      .type('form')
+      .send({ Digits: '1' });
+    expect(res.text).toContain('You have no messages.');
+    expect(res.text).toContain('<Redirect>');
+    expect(res.text).toContain('/v1/voice/voicemail-menu?accountId=acc-1');
+  });
+
+  it('digit 1 with messages plays the newest and offers per-message actions', async () => {
+    voicemailService.getVoicemails.mockResolvedValueOnce([{
+      id: 'vm-1',
+      caller_number: '+12022762305',
+      duration_seconds: 12,
+      recording_url: 'https://rec/1.mp3',
+      created_at: '2026-07-01T00:00:00.000Z',
+    }]);
+    const res = await request(app)
+      .post('/v1/voice/voicemail-menu-action?accountId=acc-1')
+      .type('form')
+      .send({ Digits: '1' });
+    expect(res.text).toContain('Message from +12022762305');
+    expect(res.text).toContain('12 seconds.');
+    expect(res.text).toContain('<Play>https://rec/1.mp3</Play>');
+    expect(res.text).toContain('/v1/voice/voicemail-message-action?accountId=acc-1&amp;vmId=vm-1');
+  });
+
+  it('digit 2 prompts to record a greeting', async () => {
+    const res = await request(app)
+      .post('/v1/voice/voicemail-menu-action?accountId=acc-1')
+      .type('form')
+      .send({ Digits: '2' });
+    expect(res.text).toContain('Record your greeting after the beep.');
+    expect(res.text).toContain('<Record maxLength="30"');
+    expect(res.text).toContain('/v1/voice/voicemail-greeting-save?accountId=acc-1');
+  });
+
+  it('digit 3 clears the greeting and returns to the menu', async () => {
+    voicemailService.clearGreeting.mockResolvedValueOnce({ id: 'acc-1' });
+    const res = await request(app)
+      .post('/v1/voice/voicemail-menu-action?accountId=acc-1')
+      .type('form')
+      .send({ Digits: '3' });
+    expect(voicemailService.clearGreeting).toHaveBeenCalledWith('acc-1');
+    expect(res.text).toContain('reset to the default');
+    expect(res.text).toContain('<Redirect>');
+  });
+
+  it('digit 9 hangs up', async () => {
+    const res = await request(app)
+      .post('/v1/voice/voicemail-menu-action?accountId=acc-1')
+      .type('form')
+      .send({ Digits: '9' });
+    expect(res.text).toContain('Goodbye.');
+    expect(res.text).toContain('<Hangup/>');
+  });
+});
+
+describe('POST /v1/voice/voicemail-greeting-save', () => {
+  beforeEach(() => voicemailService.setGreeting.mockReset());
+
+  it('saves the greeting and returns to the menu', async () => {
+    voicemailService.setGreeting.mockResolvedValueOnce({ id: 'acc-1' });
+    const res = await request(app)
+      .post('/v1/voice/voicemail-greeting-save?accountId=acc-1')
+      .type('form')
+      .send({ RecordingUrl: 'https://rec/greet.mp3' });
+    expect(voicemailService.setGreeting).toHaveBeenCalledWith('acc-1', 'https://rec/greet.mp3');
+    expect(res.text).toContain('Your greeting has been saved.');
+    expect(res.text).toContain('/v1/voice/voicemail-menu?accountId=acc-1');
+  });
+});
+
+describe('POST /v1/voice/voicemail-message-action', () => {
+  beforeEach(() => {
+    voicemailService.getVoicemails.mockReset();
+    voicemailService.deleteVoicemail.mockReset();
+  });
+
+  it('digit 3 deletes the message and plays what took its slot', async () => {
+    voicemailService.getVoicemails
+      .mockResolvedValueOnce([{ id: 'vm-1' }, { id: 'vm-2' }]) // before
+      .mockResolvedValueOnce([{ id: 'vm-2', caller_number: '+1', duration_seconds: 5 }]); // after
+    voicemailService.deleteVoicemail.mockResolvedValueOnce({ deleted: true, id: 'vm-1' });
+    const res = await request(app)
+      .post('/v1/voice/voicemail-message-action?accountId=acc-1&vmId=vm-1')
+      .type('form')
+      .send({ Digits: '3' });
+    expect(voicemailService.deleteVoicemail).toHaveBeenCalledWith('vm-1', { accountId: 'acc-1' });
+    expect(res.text).toContain('Message deleted.');
+    expect(res.text).toContain('&amp;vmId=vm-2');
+  });
+
+  it('digit 3 on the last message returns to the menu', async () => {
+    voicemailService.getVoicemails
+      .mockResolvedValueOnce([{ id: 'vm-1' }]) // before
+      .mockResolvedValueOnce([]); // after
+    voicemailService.deleteVoicemail.mockResolvedValueOnce({ deleted: true, id: 'vm-1' });
+    const res = await request(app)
+      .post('/v1/voice/voicemail-message-action?accountId=acc-1&vmId=vm-1')
+      .type('form')
+      .send({ Digits: '3' });
+    expect(res.text).toContain('Message deleted.');
+    expect(res.text).toContain('<Redirect>');
+  });
+
+  it('digit 4 plays the next message', async () => {
+    voicemailService.getVoicemails.mockResolvedValueOnce([
+      { id: 'vm-1' },
+      { id: 'vm-2', caller_number: '+12022762305', duration_seconds: 9 },
+    ]);
+    const res = await request(app)
+      .post('/v1/voice/voicemail-message-action?accountId=acc-1&vmId=vm-1')
+      .type('form')
+      .send({ Digits: '4' });
+    expect(res.text).toContain('Message from +12022762305');
+    expect(res.text).toContain('&amp;vmId=vm-2');
+  });
+
+  it('digit 4 past the last message returns to the menu', async () => {
+    voicemailService.getVoicemails.mockResolvedValueOnce([{ id: 'vm-1' }]);
+    const res = await request(app)
+      .post('/v1/voice/voicemail-message-action?accountId=acc-1&vmId=vm-1')
+      .type('form')
+      .send({ Digits: '4' });
+    expect(res.text).toContain('No more messages.');
+    expect(res.text).toContain('<Redirect>');
+  });
+
+  it('digit 9 returns to the main menu', async () => {
+    const res = await request(app)
+      .post('/v1/voice/voicemail-message-action?accountId=acc-1&vmId=vm-1')
+      .type('form')
+      .send({ Digits: '9' });
+    expect(res.text).toContain('/v1/voice/voicemail-menu?accountId=acc-1');
+    expect(res.text).toContain('<Redirect>');
   });
 });
