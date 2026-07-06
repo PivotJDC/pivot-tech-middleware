@@ -807,6 +807,32 @@ describe('updateAccount status machine', () => {
       .rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
   });
 
+  it('updates first_name, last_name, and email (trimmed/normalized)', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [baseRow] }) // current
+      .mockResolvedValueOnce({ rows: [{ ...baseRow, first_name: 'Jane', last_name: 'Doe' }] });
+    const result = await accountService.updateAccount(baseRow.id, {
+      first_name: '  Jane  ', last_name: 'Doe', email: 'JANE@Example.com ',
+    });
+    const [sql, values] = db.query.mock.calls[1];
+    expect(sql).toMatch(/email = \$/);
+    expect(sql).toMatch(/first_name = \$/);
+    expect(sql).toMatch(/last_name = \$/);
+    // Name trimmed; email lowercased/trimmed.
+    expect(values).toContain('Jane');
+    expect(values).toContain('Doe');
+    expect(values).toContain('jane@example.com');
+    expect(result.first_name).toBe('Jane');
+  });
+
+  it('rejects a duplicate email with a 409 conflict', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [baseRow] }) // current
+      .mockRejectedValueOnce({ code: '23505' }); // unique violation
+    await expect(accountService.updateAccount(baseRow.id, { email: 'taken@example.com' }))
+      .rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'email', status: 409 });
+  });
+
   it('updates sip_username and sip_endpoint_id', async () => {
     db.query
       .mockResolvedValueOnce({ rows: [baseRow] }) // current

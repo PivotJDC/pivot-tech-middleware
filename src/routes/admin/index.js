@@ -296,6 +296,31 @@ router.post(
   }),
 );
 
+// Update account profile fields (name, email). super_admin + admin.
+router.post(
+  '/accounts/:id/update-profile',
+  requireRole('super_admin', 'admin'),
+  asyncHandler(async (req, res) => {
+    const { first_name: firstName, last_name: lastName, email } = req.body || {};
+    if (firstName === undefined && lastName === undefined && email === undefined) {
+      throw errors.validation(
+        'At least one of first_name, last_name, or email is required.',
+        'first_name',
+      );
+    }
+    const account = await accountService.updateAccount(req.params.id, {
+      first_name: firstName,
+      last_name: lastName,
+      email,
+    });
+    logger.info(
+      { adminId: req.admin.id, accountId: req.params.id },
+      'admin updated account profile',
+    );
+    res.json(account);
+  }),
+);
+
 router.patch(
   '/accounts/:id/status',
   asyncHandler(async (req, res) => {

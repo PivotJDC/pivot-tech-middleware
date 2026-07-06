@@ -642,6 +642,16 @@ async function updateAccount(id, patch = {}) {
     updates.email = normalizeEmail(patch.email);
   }
 
+  // Profile fields (admin "update-profile"). Trimmed + length-capped, matching
+  // account creation; used downstream for CNAM, Account XML <displayName>, and
+  // the voicemail greeting fallback.
+  if (patch.first_name !== undefined) {
+    updates.first_name = validateName(patch.first_name, 'first_name');
+  }
+  if (patch.last_name !== undefined) {
+    updates.last_name = validateName(patch.last_name, 'last_name');
+  }
+
   // SIP routing fields (admin "update_sip"). Plain string columns — the
   // plaintext SIP password is never set here (it's bcrypt-hashed elsewhere).
   if (patch.sip_username !== undefined) {

@@ -158,6 +158,38 @@ describe('admin API', () => {
     expect(accountService.updateAccount).not.toHaveBeenCalled();
   });
 
+  it('POST /admin/accounts/:id/update-profile updates name + email', async () => {
+    accountService.updateAccount.mockResolvedValueOnce({
+      id: 'a1', first_name: 'Jane', last_name: 'Doe', email: 'jane@example.com',
+    });
+    const res = await request(app)
+      .post('/admin/accounts/a1/update-profile')
+      .send({ first_name: 'Jane', last_name: 'Doe', email: 'jane@example.com' });
+    expect(res.status).toBe(200);
+    expect(accountService.updateAccount).toHaveBeenCalledWith('a1', {
+      first_name: 'Jane', last_name: 'Doe', email: 'jane@example.com',
+    });
+    expect(res.body.first_name).toBe('Jane');
+  });
+
+  it('POST /admin/accounts/:id/update-profile allows a partial update', async () => {
+    accountService.updateAccount.mockResolvedValueOnce({ id: 'a1', first_name: 'Jane' });
+    const res = await request(app)
+      .post('/admin/accounts/a1/update-profile')
+      .send({ first_name: 'Jane' });
+    expect(res.status).toBe(200);
+    expect(accountService.updateAccount).toHaveBeenCalledWith('a1', {
+      first_name: 'Jane', last_name: undefined, email: undefined,
+    });
+  });
+
+  it('POST /admin/accounts/:id/update-profile requires at least one field', async () => {
+    const res = await request(app).post('/admin/accounts/a1/update-profile').send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error.field).toBe('first_name');
+    expect(accountService.updateAccount).not.toHaveBeenCalled();
+  });
+
   it('PATCH /admin/accounts/:id rejects an unsupported action', async () => {
     const res = await request(app).patch('/admin/accounts/a1').send({ action: 'nope' });
     expect(res.status).toBe(400);
