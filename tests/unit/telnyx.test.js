@@ -68,20 +68,48 @@ describe('request retry policy', () => {
 });
 
 describe('typed API calls', () => {
-  it('getCallRecordings GETs the call recordings and returns the array', async () => {
+  it('getCallRecordings first tries the call_session_id recordings filter', async () => {
     global.fetch.mockResolvedValueOnce(ok({
       data: [{ id: 'REC1', download_urls: { wav: 'https://telnyx/rec.wav' } }],
     }));
-    const recs = await telnyx.getCallRecordings('CA:abc');
+    const recs = await telnyx.getCallRecordings('v3:abc');
     expect(recs).toEqual([{ id: 'REC1', download_urls: { wav: 'https://telnyx/rec.wav' } }]);
+    // First (and only) attempt: /recordings?filter[call_session_id]=v3:abc.
+    expect(global.fetch).toHaveBeenCalledTimes(1);
     const [url, init] = global.fetch.mock.calls[0];
-    expect(url).toBe('https://api.telnyx.com/v2/calls/CA%3Aabc/recordings');
+    expect(decodeURIComponent(url))
+      .toBe('https://api.telnyx.com/v2/recordings?filter[call_session_id]=v3:abc');
     expect(init.method).toBe('GET');
   });
 
-  it('getCallRecordings wraps a single-object envelope into an array', async () => {
-    global.fetch.mockResolvedValueOnce(ok({ data: { id: 'REC1' } }));
-    expect(await telnyx.getCallRecordings('CA1')).toEqual([{ id: 'REC1' }]);
+  it('getCallRecordings falls back to call_leg_id, then the v3-stripped direct path', async () => {
+    global.fetch
+      .mockResolvedValueOnce(ok({ data: [] })) // call_session_id → empty
+      .mockResolvedValueOnce(ok({ data: [] })) // call_leg_id → empty
+      .mockResolvedValueOnce(ok({ data: [{ id: 'REC9' }] })); // direct path → hit
+    const recs = await telnyx.getCallRecordings('v3:xyz');
+    expect(recs).toEqual([{ id: 'REC9' }]);
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+    expect(decodeURIComponent(global.fetch.mock.calls[1][0]))
+      .toBe('https://api.telnyx.com/v2/recordings?filter[call_leg_id]=v3:xyz');
+    // "v3:" is stripped from the direct path (the colon 404s when encoded).
+    expect(global.fetch.mock.calls[2][0])
+      .toBe('https://api.telnyx.com/v2/calls/xyz/recordings');
+  });
+
+  it('getCallRecordings tries the next approach when one attempt errors', async () => {
+    global.fetch
+      .mockResolvedValueOnce(fail(404)) // call_session_id → 404, not retried, falls through
+      .mockResolvedValueOnce(ok({ data: [{ id: 'REC2' }] })); // call_leg_id → hit
+    const recs = await telnyx.getCallRecordings('v3:abc');
+    expect(recs).toEqual([{ id: 'REC2' }]);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('getCallRecordings returns [] when every approach yields nothing', async () => {
+    global.fetch.mockResolvedValue(ok({ data: [] }));
+    expect(await telnyx.getCallRecordings('v3:none')).toEqual([]);
+    expect(global.fetch).toHaveBeenCalledTimes(3);
   });
 
   it('purchaseNumber posts a number order and uses the E.164 as the id (not the order-line id)', async () => {

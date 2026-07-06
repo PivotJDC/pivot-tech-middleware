@@ -540,15 +540,59 @@ async function sendMessage({
 /**
  * Fetch recordings for a call. Used by the voicemail hangup safety net: when a
  * caller hangs up mid-recording the <Record> action callback never fires, so we
- * pull any recording Telnyx captured directly off the call. Returns the raw
- * recordings array (empty when none exist).
+ * pull any recording Telnyx captured for the call and process it.
+ *
+ * The TeXML CallSid arrives as `v3:xxx`. The colon URL-encodes to `%3A`, which
+ * the direct `/calls/{id}/recordings` path rejects with a 404, and the `v3:`
+ * prefix isn't what the Call Control API keys on either. So we try several
+ * lookups in order and use the first that yields recordings, logging which one
+ * worked so we can pin the correct approach for production:
+ *   1. GET /recordings?filter[call_session_id]={callSid}
+ *   2. GET /recordings?filter[call_leg_id]={callSid}
+ *   3. GET /calls/{callSid without "v3:"}/recordings  (direct path)
+ *
+ * Returns the raw recordings array (empty when none exist). Each attempt is
+ * isolated — a 404/error on one falls through to the next.
  * @param {string} callSid - the call identifier (Telnyx CallSid / call id).
  * @returns {Promise<object[]>}
  */
 async function getCallRecordings(callSid) {
-  const data = unwrap(await request('GET', `/calls/${encodeURIComponent(callSid)}/recordings`));
-  if (Array.isArray(data)) return data;
-  return data ? [data] : [];
+  const asArray = (data) => {
+    if (Array.isArray(data)) return data;
+    return data ? [data] : [];
+  };
+
+  const bare = String(callSid).replace(/^v3:/, '');
+  const attempts = [
+    { label: 'filter[call_session_id]', path: `/recordings?filter[call_session_id]=${encodeURIComponent(callSid)}` },
+    { label: 'filter[call_leg_id]', path: `/recordings?filter[call_leg_id]=${encodeURIComponent(callSid)}` },
+    { label: 'calls/{id}/recordings (v3: stripped)', path: `/calls/${encodeURIComponent(bare)}/recordings` },
+  ];
+
+  for (let i = 0; i < attempts.length; i += 1) {
+    const attempt = attempts[i];
+    let recordings;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      recordings = asArray(unwrap(await request('GET', attempt.path)));
+    } catch (err) {
+      logger.warn(
+        { callId: callSid, approach: attempt.label, err: err.message },
+        'getCallRecordings attempt failed; trying next',
+      );
+      recordings = [];
+    }
+    if (recordings.length) {
+      logger.info(
+        { callId: callSid, approach: attempt.label, count: recordings.length },
+        'getCallRecordings succeeded',
+      );
+      return recordings;
+    }
+  }
+
+  logger.info({ callId: callSid }, 'getCallRecordings found no recordings for call');
+  return [];
 }
 
 // Module-level cache for the webhook public key fetched from Telnyx. `null`
