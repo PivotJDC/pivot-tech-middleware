@@ -1,5 +1,6 @@
 jest.mock('../../src/db');
 jest.mock('../../src/integrations/telnyx');
+jest.mock('../../src/integrations/s3');
 jest.mock('../../src/services/accountService');
 jest.mock('../../src/services/pushService');
 jest.mock('../../src/services/cdrService');
@@ -12,6 +13,7 @@ jest.mock('../../src/utils/logger', () => ({
 
 const db = require('../../src/db');
 const telnyx = require('../../src/integrations/telnyx');
+const s3 = require('../../src/integrations/s3');
 const accountService = require('../../src/services/accountService');
 const cdrService = require('../../src/services/cdrService');
 const pushService = require('../../src/services/pushService');
@@ -26,6 +28,16 @@ beforeEach(() => {
   accountService.lookupByPhoneE164.mockReset();
   cdrService.recordMessage.mockReset();
   pushService.sendMessagePush.mockReset();
+  // Default: no S3 bucket → inbound media archival is skipped.
+  s3.bucket.mockReset();
+  s3.bucket.mockReturnValue('');
+  s3.uploadObject.mockReset();
+  s3.objectUrl.mockReset();
+  s3.objectUrl.mockImplementation((key) => `https://bucket.s3.amazonaws.com/${key}`);
+  global.fetch = jest.fn();
+});
+afterAll(() => {
+  delete global.fetch;
 });
 
 describe('sendMessage', () => {
@@ -127,6 +139,71 @@ describe('handleInboundMessage', () => {
     });
     expect(result).toBeNull();
     expect(db.query).toHaveBeenCalledTimes(1); // no INSERT
+  });
+
+  it('archives inbound media to S3 and rewrites media_urls (bucket set)', async () => {
+    s3.bucket.mockReturnValue('mobilitynet-recordings');
+    s3.uploadObject.mockResolvedValue({ key: 'k' });
+    global.fetch.mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'image/jpeg' },
+      arrayBuffer: async () => new Uint8Array([9, 9]).buffer,
+    });
+    db.query
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] }) // account by `to`
+      .mockResolvedValueOnce({ rows: [{ id: 'in-9', media_urls: ['https://telnyx/a.jpg'] }] }) // INSERT
+      .mockResolvedValueOnce({ rows: [] }); // UPDATE media_urls
+
+    const s3Url = `https://bucket.s3.amazonaws.com/mms-inbound/${ACCOUNT_ID}/in-9_0.jpg`;
+    const msg = await messaging.handleInboundMessage({
+      id: 't-9',
+      from: { phone_number: '+12085550142' },
+      to: [{ phone_number: '+12085550100' }],
+      text: '',
+      media: [{ url: 'https://telnyx/a.jpg', content_type: 'image/jpeg' }],
+    });
+
+    const update = db.query.mock.calls[2];
+    expect(update[0]).toMatch(/UPDATE messages SET media_urls = \$1 WHERE id = \$2/);
+    expect(update[1]).toEqual([[s3Url], 'in-9']);
+    expect(msg.media_urls).toEqual([s3Url]);
+  });
+});
+
+describe('archiveInboundMedia', () => {
+  beforeEach(() => {
+    s3.bucket.mockReturnValue('mobilitynet-recordings');
+    s3.uploadObject.mockResolvedValue({ key: 'k' });
+  });
+
+  it('uploads each item under mms-inbound/{acct}/{msg}_{i}.{ext} and returns S3 URLs', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      headers: { get: () => null },
+      arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+    });
+    const urls = await messaging.archiveInboundMedia('acc-1', 'msg-9', [
+      { url: 'https://telnyx/a.jpg', content_type: 'image/jpeg' },
+      { url: 'https://telnyx/b.png', content_type: 'image/png' },
+    ]);
+    expect(s3.uploadObject).toHaveBeenCalledTimes(2);
+    expect(s3.uploadObject.mock.calls[0][0]).toMatchObject({
+      key: 'mms-inbound/acc-1/msg-9_0.jpg', contentType: 'image/jpeg',
+    });
+    expect(s3.uploadObject.mock.calls[1][0].key).toBe('mms-inbound/acc-1/msg-9_1.png');
+    expect(urls).toEqual([
+      'https://bucket.s3.amazonaws.com/mms-inbound/acc-1/msg-9_0.jpg',
+      'https://bucket.s3.amazonaws.com/mms-inbound/acc-1/msg-9_1.png',
+    ]);
+  });
+
+  it('keeps the original Telnyx URL when an item fails to download', async () => {
+    global.fetch.mockResolvedValueOnce({ ok: false, status: 404 });
+    const urls = await messaging.archiveInboundMedia('acc-1', 'msg-1', [
+      { url: 'https://telnyx/x.jpg', content_type: 'image/jpeg' },
+    ]);
+    expect(urls).toEqual(['https://telnyx/x.jpg']);
+    expect(s3.uploadObject).not.toHaveBeenCalled();
   });
 });
 

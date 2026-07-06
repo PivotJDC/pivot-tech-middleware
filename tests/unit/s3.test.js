@@ -99,6 +99,31 @@ describe('objectUrl', () => {
   });
 });
 
+describe('presignUrlIfOwn', () => {
+  it('presigns a canonical URL that points at our bucket', async () => {
+    mockGetSignedUrl.mockResolvedValueOnce('https://signed.example/mms');
+    const own = s3.objectUrl('mms-inbound/acc-1/msg_0.jpg');
+    const out = await s3.presignUrlIfOwn(own);
+    expect(out).toBe('https://signed.example/mms');
+    const [, cmd, opts] = mockGetSignedUrl.mock.calls[0];
+    expect(cmd.Get.Key).toBe('mms-inbound/acc-1/msg_0.jpg');
+    expect(opts).toEqual({ expiresIn: 3600 });
+  });
+
+  it('passes an external URL through unchanged (no signing)', async () => {
+    const out = await s3.presignUrlIfOwn('https://api.telnyx.com/v2/media/abc.jpg');
+    expect(out).toBe('https://api.telnyx.com/v2/media/abc.jpg');
+    expect(mockGetSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('does not re-sign an already-presigned URL (has a query string)', async () => {
+    const already = `${s3.objectUrl('mms/a/x.jpg')}?X-Amz-Signature=abc`;
+    const out = await s3.presignUrlIfOwn(already);
+    expect(out).toBe(already);
+    expect(mockGetSignedUrl).not.toHaveBeenCalled();
+  });
+});
+
 describe('getObjectText', () => {
   it('GetObjects the key and returns the body as a string', async () => {
     mockSend.mockResolvedValueOnce({ Body: { transformToString: async () => '{"a":1}' } });

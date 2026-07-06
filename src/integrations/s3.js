@@ -102,6 +102,41 @@ function objectUrl(key) {
 }
 
 /**
+ * Extract the object key from one of our own canonical objectUrl() strings, or
+ * null when the URL isn't ours (external) or is already presigned (has a query
+ * string — re-signing would corrupt the key).
+ * @param {string} url
+ * @returns {string|null}
+ */
+function keyFromObjectUrl(url) {
+  if (!bucket() || typeof url !== 'string') return null;
+  const prefix = `https://${bucket()}.s3.${config.aws.region}.amazonaws.com/`;
+  if (!url.startsWith(prefix)) return null;
+  const key = url.slice(prefix.length);
+  if (!key || key.includes('?')) return null;
+  return key;
+}
+
+/**
+ * Presign a URL for GET if it points at one of our own S3 objects; otherwise
+ * return it unchanged (external URLs pass through). Used to serve archived MMS
+ * media to Acrobits with a fresh, short-lived link. Best-effort — on a signing
+ * error the original URL is returned.
+ * @param {string} url
+ * @param {number} [expiresIn] seconds (default 3600)
+ * @returns {Promise<string>}
+ */
+async function presignUrlIfOwn(url, expiresIn = 3600) {
+  const key = keyFromObjectUrl(url);
+  if (!key) return url;
+  try {
+    return await getSignedRecordingUrl(key, expiresIn);
+  } catch {
+    return url;
+  }
+}
+
+/**
  * Resolve a playable URL for a voicemail row: a fresh signed S3 URL when it was
  * archived, else the stored recording_url (Telnyx fallback). null when neither.
  * @param {{ recording_s3_key?: string, recording_url?: string }} vm
@@ -119,6 +154,7 @@ module.exports = {
   getObjectText,
   getSignedRecordingUrl,
   signedUrlForVoicemail,
+  presignUrlIfOwn,
   objectUrl,
   bucket,
 };

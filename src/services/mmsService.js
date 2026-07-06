@@ -12,31 +12,8 @@
  */
 const nodeCrypto = require('crypto');
 const s3 = require('../integrations/s3');
+const { extFor, compressImageIfNeeded } = require('../utils/media');
 const { logger } = require('../utils/logger');
-
-// content-type → file extension for the S3 object key.
-const EXT_BY_TYPE = {
-  'image/jpeg': 'jpg',
-  'image/jpg': 'jpg',
-  'image/png': 'png',
-  'image/gif': 'gif',
-  'image/webp': 'webp',
-  'image/heic': 'heic',
-  'video/mp4': 'mp4',
-  'video/3gpp': '3gp',
-  'video/quicktime': 'mov',
-  'audio/mpeg': 'mp3',
-  'audio/amr': 'amr',
-  'application/pdf': 'pdf',
-};
-
-/** Pick a file extension from the content-type, else the URL, else "bin". */
-function extFor(contentType, url) {
-  const type = String(contentType || '').toLowerCase().split(';')[0].trim();
-  if (EXT_BY_TYPE[type]) return EXT_BY_TYPE[type];
-  const match = /\.([a-z0-9]{2,4})(?:\?|#|$)/i.exec(String(url || ''));
-  return match ? match[1].toLowerCase() : 'bin';
-}
 
 /**
  * Decrypt Acrobits media: AES-128-CTR with a zero nonce (16 zero bytes). CTR
@@ -77,10 +54,12 @@ async function resolveOne(accountId, att) {
     const encrypted = Buffer.from(await res.arrayBuffer());
     const decrypted = decryptMedia(encrypted, att.encryptionKey);
 
-    const key = `mms/${accountId}/${nodeCrypto.randomUUID()}.${extFor(att.contentType, url)}`;
-    await s3.uploadObject({ key, body: decrypted, contentType: att.contentType });
+    // Compress oversized images before upload (image/jpeg out).
+    const { buffer, contentType } = await compressImageIfNeeded(decrypted, att.contentType);
+    const key = `mms/${accountId}/${nodeCrypto.randomUUID()}.${extFor(contentType, url)}`;
+    await s3.uploadObject({ key, body: buffer, contentType });
     const signed = await s3.getSignedRecordingUrl(key, 3600);
-    logger.info({ accountId, key, bytes: decrypted.length }, 'proxied encrypted MMS media to S3');
+    logger.info({ accountId, key, bytes: buffer.length }, 'proxied encrypted MMS media to S3');
     return signed;
   } catch (err) {
     logger.warn({ accountId, err: err.message }, 'MMS media proxy failed; skipping attachment');

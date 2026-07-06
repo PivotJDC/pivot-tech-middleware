@@ -2,6 +2,7 @@ jest.mock('../../src/services/accountService');
 jest.mock('../../src/services/messagingService');
 jest.mock('../../src/services/mmsService');
 jest.mock('../../src/services/pushService');
+jest.mock('../../src/integrations/s3');
 jest.mock('../../src/utils/crypto');
 
 const express = require('express');
@@ -10,6 +11,7 @@ const accountService = require('../../src/services/accountService');
 const messagingService = require('../../src/services/messagingService');
 const mmsService = require('../../src/services/mmsService');
 const pushService = require('../../src/services/pushService');
+const s3 = require('../../src/integrations/s3');
 const crypto = require('../../src/utils/crypto');
 const acrobitsRouter = require('../../src/routes/v1/acrobitsMessaging');
 const { errorHandler } = require('../../src/middleware/errorHandler');
@@ -41,6 +43,8 @@ beforeEach(() => {
   mmsService.resolveMediaUrls.mockImplementation(
     (accountId, atts) => Promise.resolve((atts || []).map((a) => a.url)),
   );
+  // Default: presign is an identity pass-through (mark own URLs as "signed").
+  s3.presignUrlIfOwn.mockImplementation((url) => Promise.resolve(url));
 });
 
 describe('GET /v1/acrobits/provision', () => {
@@ -393,6 +397,51 @@ describe('GET /v1/acrobits/fetch', () => {
     expect(res.text).not.toContain('<sms_to>');
     expect(res.text).not.toContain('<body>');
     expect(messagingService.fetchForAcrobits).toHaveBeenCalledWith('acc-1', 'r0', 's0');
+  });
+
+  it('includes MMS media in the item XML and presigns our own S3 URLs', async () => {
+    s3.presignUrlIfOwn.mockImplementation((url) => Promise.resolve(
+      url.includes('bucket.s3') ? `${url}?signed=1` : url,
+    ));
+    messagingService.fetchForAcrobits.mockResolvedValueOnce({
+      received: [{
+        id: 'r1',
+        from_number: '+12085550142',
+        body: 'pic',
+        created_at: '2026-06-25T12:00:00.000Z',
+        media_urls: [
+          'https://bucket.s3.us-east-1.amazonaws.com/mms-inbound/acc-1/r1_0.jpg',
+          'https://external/telnyx.jpg',
+        ],
+      }],
+      sent: [],
+    });
+    const res = await request(app)
+      .get('/v1/acrobits/fetch')
+      .query({ username: 'pivottech-abc', password: 'pw' });
+
+    expect(res.status).toBe(200);
+    // Own S3 URL was presigned; external URL passed through.
+    expect(res.text).toContain(
+      '<media_urls>https://bucket.s3.us-east-1.amazonaws.com/mms-inbound/acc-1/r1_0.jpg?signed=1,https://external/telnyx.jpg</media_urls>',
+    );
+    expect(res.text).toContain(
+      '<media_url>https://bucket.s3.us-east-1.amazonaws.com/mms-inbound/acc-1/r1_0.jpg?signed=1</media_url>',
+    );
+    expect(res.text).toContain('<media_url>https://external/telnyx.jpg</media_url>');
+  });
+
+  it('omits media elements for plain SMS (no media_urls)', async () => {
+    messagingService.fetchForAcrobits.mockResolvedValueOnce({
+      received: [{
+        id: 'r2', from_number: '+12085550142', body: 'hi', created_at: '2026-06-25T12:00:00.000Z',
+      }],
+      sent: [],
+    });
+    const res = await request(app)
+      .get('/v1/acrobits/fetch')
+      .query({ username: 'pivottech-abc', password: 'pw' });
+    expect(res.text).not.toContain('<media_url');
   });
 
   it('requires authentication', async () => {

@@ -10,10 +10,12 @@
  */
 const db = require('../db');
 const telnyx = require('../integrations/telnyx');
+const s3 = require('../integrations/s3');
 const accountService = require('./accountService');
 const pushService = require('./pushService');
 const cdrService = require('./cdrService');
 const { errors } = require('../middleware/errorHandler');
+const { extFor, compressImageIfNeeded } = require('../utils/media');
 const { logger } = require('../utils/logger');
 
 // Telnyx messaging event_type -> the CDR status we log for it.
@@ -82,6 +84,42 @@ async function sendMessage(accountId, input = {}) {
 }
 
 /**
+ * Archive inbound Telnyx media to our S3 bucket (Telnyx media URLs expire).
+ * Downloads each item, compresses oversized images, and uploads under
+ * mms-inbound/{accountId}/{messageId}_{index}.{ext}. Returns an array aligned to
+ * `mediaList`: the S3 canonical URL on success, or the original Telnyx URL as a
+ * fallback when a single item fails. Best-effort — callers ignore failures.
+ * @param {string} accountId
+ * @param {string} messageId
+ * @param {Array<{ url: string, content_type?: string }>} mediaList
+ * @returns {Promise<string[]>}
+ */
+async function archiveInboundMedia(accountId, messageId, mediaList = []) {
+  const list = Array.isArray(mediaList) ? mediaList : [];
+  return Promise.all(list.map(async (m, index) => {
+    const url = m && m.url;
+    if (!url) return null;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`download failed (${res.status})`);
+      let buffer = Buffer.from(await res.arrayBuffer());
+      let contentType = m.content_type || res.headers.get('content-type') || 'application/octet-stream';
+      ({ buffer, contentType } = await compressImageIfNeeded(buffer, contentType));
+      const key = `mms-inbound/${accountId}/${messageId}_${index}.${extFor(contentType, url)}`;
+      await s3.uploadObject({ key, body: buffer, contentType });
+      logger.info({ accountId, messageId, key }, 'inbound MMS media archived to S3');
+      return s3.objectUrl(key);
+    } catch (err) {
+      logger.warn(
+        { accountId, messageId, err: err.message },
+        'inbound MMS media archival failed; keeping Telnyx URL',
+      );
+      return url; // fallback to the original Telnyx URL
+    }
+  })).then((urls) => urls.filter(Boolean));
+}
+
+/**
  * Persist an inbound message from a Telnyx `message.received` webhook payload.
  * @param {object} payload - the Telnyx message payload (data.payload).
  * @returns {Promise<object|null>} the inbound row, or null if no account owns
@@ -117,10 +155,29 @@ async function handleInboundMessage(payload = {}) {
     [accountId, from, to, body, mediaUrls, telnyxMessageId],
   );
   logger.info({ accountId, telnyxMessageId }, 'inbound message stored');
+  const inbound = rows[0];
+
+  // Best-effort: archive Telnyx media to our S3 (Telnyx URLs expire), compressing
+  // oversized images. Rewrite media_urls to the durable S3 URLs. Never let this
+  // break inbound storage — a failure keeps the original Telnyx URLs.
+  if (mediaUrls.length > 0 && s3.bucket()) {
+    try {
+      const archived = await archiveInboundMedia(accountId, inbound.id, payload.media);
+      if (archived.length > 0) {
+        await db.query('UPDATE messages SET media_urls = $1 WHERE id = $2', [archived, inbound.id]);
+        inbound.media_urls = archived;
+      }
+    } catch (err) {
+      logger.warn(
+        { accountId, messageId: inbound.id, err: err.message },
+        'inbound MMS archival failed',
+      );
+    }
+  }
+
   // Wake the Acrobits app so it fetches the new message (best-effort; never
   // throws, so a push failure can't break inbound storage). streamId is the
   // sender's number so the push threads into the same conversation as /fetch.
-  const inbound = rows[0];
   await pushService.sendMessagePush(accountId, {
     from: inbound.from_number,
     body: inbound.body,
@@ -317,6 +374,7 @@ async function recordInboundMessage({
 module.exports = {
   sendMessage,
   handleInboundMessage,
+  archiveInboundMedia,
   recordInboundMessage,
   getMessages,
   getConversation,

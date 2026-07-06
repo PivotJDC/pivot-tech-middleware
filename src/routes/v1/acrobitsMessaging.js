@@ -20,6 +20,7 @@ const messagingService = require('../../services/messagingService');
 const mmsService = require('../../services/mmsService');
 const pushService = require('../../services/pushService');
 const acrobits = require('../../integrations/acrobits');
+const s3 = require('../../integrations/s3');
 const crypto = require('../../utils/crypto');
 const { asyncHandler } = require('../../middleware/errorHandler');
 
@@ -54,7 +55,8 @@ function errorXml(message) {
  * inbound + outbound of the same conversation share a thread.
  */
 function smsXml(m, sender, recipient, streamId) {
-  return [
+  const media = Array.isArray(m.media_urls) ? m.media_urls.filter(Boolean) : [];
+  const lines = [
     '    <item>',
     `      <sms_id>${escapeXml(m.id)}</sms_id>`,
     `      <sending_date>${escapeXml(fmtDate(m.created_at))}</sending_date>`,
@@ -63,8 +65,16 @@ function smsXml(m, sender, recipient, streamId) {
     `      <sms_text>${escapeXml(m.body)}</sms_text>`,
     '      <content_type>text/plain</content_type>',
     `      <stream_id>${escapeXml(streamId)}</stream_id>`,
-    '    </item>',
-  ].join('\n');
+  ];
+  // MMS: attach media URLs. Acrobits' exact fetch-side MMS element isn't firmly
+  // documented, so emit a comma-joined <media_urls> plus one <media_url> per
+  // item as a belt-and-suspenders for whichever the client honors.
+  if (media.length > 0) {
+    lines.push(`      <media_urls>${escapeXml(media.join(','))}</media_urls>`);
+    media.forEach((u) => lines.push(`      <media_url>${escapeXml(u)}</media_url>`));
+  }
+  lines.push('    </item>');
+  return lines.join('\n');
 }
 
 function fetchXml(received, sent, subscriberNumber) {
@@ -89,6 +99,17 @@ function fetchXml(received, sent, subscriberNumber) {
     '</response>',
     '',
   ].filter((line) => line !== '').join('\n');
+}
+
+/**
+ * Replace a message's media_urls with fresh presigned URLs for any that point at
+ * our own S3 bucket (mutates the row in place). Best-effort — external URLs and
+ * signing failures are left as-is.
+ */
+async function presignMessageMedia(m) {
+  if (!m || !Array.isArray(m.media_urls) || m.media_urls.length === 0) return;
+  // eslint-disable-next-line no-param-reassign
+  m.media_urls = await Promise.all(m.media_urls.map((u) => s3.presignUrlIfOwn(u, 3600)));
 }
 
 /** Merge query + body so handlers work for both GET and POST templates. */
@@ -221,6 +242,9 @@ router.get(
       p.last_id,
       p.last_sent_id,
     );
+    // MMS media archived to our (private) S3 bucket needs a fresh presigned URL
+    // for the app to download; external URLs pass through unchanged.
+    await Promise.all([...received, ...sent].map(presignMessageMedia));
     sendXml(res, 200, fetchXml(received, sent, account.phone_e164));
   }),
 );
