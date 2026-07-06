@@ -383,6 +383,10 @@ describe('POST /v1/voice/voicemail-handler', () => {
     // Fires the action on 5s of silence / hangup, not only on # (most callers).
     expect(res.text).toContain('timeout="5"');
     expect(res.text).toContain('/v1/voice/voicemail-complete?accountId=a1&amp;from=');
+    // recordingStatusCallback fires independently when the recording is ready
+    // (may fire on hangup when the action doesn't); same handler, deduped.
+    expect(res.text).toContain('recordingStatusCallback="');
+    expect(res.text.match(/\/v1\/voice\/voicemail-complete\?accountId=a1/g)).toHaveLength(2);
     // Transcription attributes are intentionally omitted for now.
     expect(res.text).not.toContain('transcribe=');
     expect(res.text).not.toContain('transcribeCallback=');
@@ -590,6 +594,23 @@ describe('POST /v1/voice/voicemail-complete', () => {
       .type('form')
       .send({ RecordingUrl: 'https://telnyx/rec', RecordingDuration: '8', CallSid: 'CAvm1' });
     expect(cache.del).toHaveBeenCalledWith('vm-pending:CAvm1');
+  });
+
+  it('dedupes a duplicate callback for the same recording (action + recordingStatusCallback)', async () => {
+    accountService.getAccountById.mockResolvedValueOnce({ id: 'a1', tenant_id: 'ten-1' });
+    cache.get.mockReset();
+    // A prior callback already marked this recording as seen.
+    cache.get.mockResolvedValueOnce('1');
+    voicemailService.createVoicemail.mockClear();
+    const res = await request(app)
+      .post('/v1/voice/voicemail-complete?accountId=a1&from=%2B1')
+      .type('form')
+      .send({ RecordingUrl: 'https://telnyx/rec', RecordingDuration: '8', RecordingSid: 'RSdup' });
+    expect(res.status).toBe(200);
+    expect(cache.get).toHaveBeenCalledWith('vm-seen:RSdup');
+    // No second store/transcription for the same recording.
+    expect(voicemailService.createVoicemail).not.toHaveBeenCalled();
+    expect(voicemailTranscriptionService.process).not.toHaveBeenCalled();
   });
 });
 

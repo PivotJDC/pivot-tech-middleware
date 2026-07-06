@@ -133,8 +133,11 @@ function voicemailPromptXml(account, accountId, from, greetingUrl) {
     // separate Telnyx API call rather than the Record transcribe attributes.
     // timeout="5": stop + fire the action after 5s of silence, so a caller who
     // just stops talking or hangs up (rather than pressing #) still saves the
-    // voicemail.
-    `  <Record maxLength="120" action="${completeAction}" playBeep="true" finishOnKey="#" timeout="5"/>`,
+    // voicemail. recordingStatusCallback fires independently when the recording
+    // becomes available (it can fire on hangup even when the action URL doesn't)
+    // — it hits the same voicemail-complete handler, which is idempotent.
+    `  <Record maxLength="120" action="${completeAction}" playBeep="true" finishOnKey="#" timeout="5"`
+      + ` recordingStatusCallback="${completeAction}"/>`,
     '  <Say voice="alice">Thank you. Goodbye.</Say>',
     '</Response>',
     '',
@@ -190,6 +193,30 @@ function recordingDurationFor(rec) {
 async function storeVoicemailRecording({
   account, from, recordingUrl, recordingSid, durationSeconds,
 }) {
+  // Idempotency: the same recording can now reach us via up to three paths for
+  // one call — the <Record> action, its recordingStatusCallback, and the
+  // /status hangup net. Dedupe by recording id so we store/transcribe/notify
+  // exactly once. Best-effort: if the cache is unavailable we proceed (a rare
+  // duplicate beats a dropped voicemail).
+  if (recordingSid) {
+    const seenKey = `vm-seen:${recordingSid}`;
+    try {
+      if (await cache.get(seenKey)) {
+        logger.info(
+          { accountId: account.id, recordingSid },
+          'voicemail already processed for this recording; skipping duplicate',
+        );
+        return null;
+      }
+      await cache.setWithTtl(seenKey, '1', 900);
+    } catch (err) {
+      logger.warn(
+        { recordingSid, err: err.message },
+        'voicemail dedup check failed; processing anyway',
+      );
+    }
+  }
+
   const voicemail = await voicemailService.createVoicemail({
     accountId: account.id,
     tenantId: account.tenant_id,
