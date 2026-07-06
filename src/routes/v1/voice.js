@@ -20,6 +20,8 @@ const voicemailTranscriptionService = require('../../services/voicemailTranscrip
 const emailClient = require('../../integrations/email');
 const emailTemplates = require('../../services/emailTemplates');
 const s3 = require('../../integrations/s3');
+const telnyx = require('../../integrations/telnyx');
+const cache = require('../../cache');
 const { asyncHandler } = require('../../middleware/errorHandler');
 const { verifyTelnyxWebhook } = require('../../middleware/telnyxWebhookVerify');
 const { logger } = require('../../utils/logger');
@@ -146,6 +148,154 @@ async function safeGetAccount(accountId) {
     return await accountService.getAccountById(accountId);
   } catch {
     return null;
+  }
+}
+
+const VM_PENDING_TTL_SECONDS = 300; // 5-minute best-effort hangup net
+
+function vmPendingKey(callSid) {
+  return `vm-pending:${callSid}`;
+}
+
+/** Best-effort delete of the vm-pending marker; never throws. */
+async function clearVmPending(callSid) {
+  if (!callSid) return;
+  try {
+    await cache.del(vmPendingKey(callSid));
+  } catch (err) {
+    logger.error({ callId: callSid, err: err.message }, 'failed to clear vm-pending marker');
+  }
+}
+
+/** Pick a downloadable WAV/MP3 URL off a Telnyx recording resource. */
+function recordingUrlFor(rec) {
+  if (!rec) return null;
+  const urls = rec.download_urls || rec.recording_urls || {};
+  return urls.wav || urls.mp3 || rec.recording_url || rec.RecordingUrl || null;
+}
+
+/** Best-effort recording duration in whole seconds from a Telnyx resource. */
+function recordingDurationFor(rec) {
+  if (!rec) return 0;
+  if (rec.duration_millis) return Math.round(Number(rec.duration_millis) / 1000) || 0;
+  if (rec.duration_seconds) return Number(rec.duration_seconds) || 0;
+  return 0;
+}
+
+/**
+ * Persist a voicemail recording and kick off post-processing (S3 archive, email,
+ * transcription + delivery). Shared by the normal voicemail-complete callback
+ * and the /status hangup safety net so both paths behave identically.
+ */
+async function storeVoicemailRecording({
+  account, from, recordingUrl, recordingSid, durationSeconds,
+}) {
+  const voicemail = await voicemailService.createVoicemail({
+    accountId: account.id,
+    tenantId: account.tenant_id,
+    callerNumber: from,
+    recordingUrl,
+    recordingSid,
+    durationSeconds,
+  });
+
+  // Best-effort: copy the recording to S3 for permanent storage (Telnyx URLs
+  // expire ~10 min). On failure we keep the Telnyx URL as fallback.
+  let s3Key = null;
+  if (s3.bucket() && recordingUrl) {
+    try {
+      const key = `voicemails/${account.id}/${voicemail.id}.wav`;
+      await s3.archiveRecording({ key, sourceUrl: recordingUrl });
+      await voicemailService.setRecording(voicemail.id, {
+        s3Key: key,
+        recordingUrl: s3.objectUrl(key),
+      });
+      s3Key = key;
+    } catch (err) {
+      logger.error(
+        { accountId: account.id, voicemailId: voicemail.id, err: err.message },
+        'voicemail S3 archival failed; keeping Telnyx URL',
+      );
+    }
+  }
+
+  // Best-effort: email the subscriber a link to the recording.
+  if (account.email) {
+    try {
+      const tpl = emailTemplates.voicemailNotification({
+        callerNumber: from,
+        durationSeconds,
+        recordingUrl,
+      });
+      await emailClient.sendEmail({
+        to: account.email,
+        subject: tpl.subject,
+        textBody: tpl.text,
+        htmlBody: tpl.html,
+      });
+    } catch (err) {
+      logger.error({ accountId: account.id, err: err.message }, 'voicemail email failed');
+    }
+  }
+
+  // Fire-and-forget: transcribe (async, 10-30s), deliver the transcript to
+  // Messages, and push. Handles the notification whether or not transcription is
+  // enabled; never throws. Not awaited so the webhook returns immediately.
+  voicemailTranscriptionService.process({
+    voicemail, account, from, s3Key, durationSeconds,
+  }).catch((err) => {
+    logger.error(
+      { voicemailId: voicemail.id, err: err.message },
+      'voicemail post-processing failed',
+    );
+  });
+
+  return voicemail;
+}
+
+/**
+ * Hangup safety net. The <Record> action callback (voicemail-complete) does not
+ * fire when a caller hangs up mid-recording, so on call.hangup we check for a
+ * pending voicemail marker and, if present, pull any recording Telnyx captured
+ * and process it just like voicemail-complete. Best-effort; never throws.
+ */
+async function recoverVoicemailOnHangup(callSid) {
+  if (!callSid) return;
+  let pending;
+  try {
+    const raw = await cache.get(vmPendingKey(callSid));
+    // No marker → the call never went to voicemail, or voicemail-complete
+    // already fired (and cleared it). Nothing to recover.
+    if (!raw) return;
+    pending = JSON.parse(raw);
+  } catch (err) {
+    logger.error({ callId: callSid, err: err.message }, 'vm-pending lookup failed');
+    return;
+  }
+
+  try {
+    const recordings = await telnyx.getCallRecordings(callSid);
+    const recording = (recordings || []).find((r) => recordingUrlFor(r));
+    if (recording) {
+      const account = await safeGetAccount(pending.accountId);
+      if (account) {
+        await storeVoicemailRecording({
+          account,
+          from: pending.from || 'unknown',
+          recordingUrl: recordingUrlFor(recording),
+          recordingSid: recording.id || recording.recording_id || null,
+          durationSeconds: recordingDurationFor(recording),
+        });
+        logger.info(
+          { callId: callSid, accountId: account.id },
+          'recovered voicemail from hangup (no action callback)',
+        );
+      }
+    }
+  } catch (err) {
+    logger.error({ callId: callSid, err: err.message }, 'voicemail hangup recovery failed');
+  } finally {
+    await clearVmPending(callSid);
   }
 }
 
@@ -410,6 +560,18 @@ router.post(
       logger.error({ err: err.message, callId: event.callSid }, 'failed to record call CDR');
     }
 
+    // On hangup, run the voicemail safety net: if the caller hung up while
+    // recording, the <Record> action callback never fired, so recover any
+    // recording Telnyx captured. Gated on the vm-pending marker, so it's a
+    // no-op for ordinary calls. Best-effort; never blocks the ack.
+    if (event.status === 'completed') {
+      try {
+        await recoverVoicemailOnHangup(event.callSid);
+      } catch (err) {
+        logger.error({ err: err.message, callId: event.callSid }, 'voicemail hangup net failed');
+      }
+    }
+
     res.status(200).json({ received: true });
   }),
 );
@@ -446,6 +608,23 @@ router.post(
     }
 
     logger.info({ accountId, from, dialStatus }, 'inbound call unanswered; taking voicemail');
+
+    // Best-effort hangup net: mark this call as "taking a voicemail" so that if
+    // the caller hangs up mid-recording (the <Record> action callback never
+    // fires), the /status hangup handler can still recover the recording.
+    const callSid = params.CallSid || params.CallControlId || params.call_control_id || null;
+    if (callSid) {
+      try {
+        await cache.setWithTtl(
+          vmPendingKey(callSid),
+          JSON.stringify({ accountId, from, timestamp: Date.now() }),
+          VM_PENDING_TTL_SECONDS,
+        );
+      } catch (err) {
+        logger.error({ callId: callSid, err: err.message }, 'failed to set vm-pending marker');
+      }
+    }
+
     const greetingUrl = await resolveGreetingUrl(account);
     res.send(voicemailPromptXml(account, accountId, from, greetingUrl));
   }),
@@ -463,6 +642,7 @@ router.post(
     const from = normalizePhone(params.from) || 'unknown';
     const recordingUrl = params.RecordingUrl || params.recording_url || null;
     const recordingSid = params.RecordingSid || params.recording_sid || null;
+    const callSid = params.CallSid || params.CallControlId || params.call_control_id || null;
     const durationSeconds = Number.parseInt(
       params.RecordingDuration || params.recording_duration || '0',
       10,
@@ -471,70 +651,17 @@ router.post(
     try {
       const account = await safeGetAccount(accountId);
       if (account && recordingUrl) {
-        const voicemail = await voicemailService.createVoicemail({
-          accountId: account.id,
-          tenantId: account.tenant_id,
-          callerNumber: from,
-          recordingUrl,
-          recordingSid,
-          durationSeconds,
-        });
-
-        // Best-effort: copy the recording to S3 for permanent storage (Telnyx
-        // URLs expire ~10 min). On failure we keep the Telnyx URL as fallback.
-        let s3Key = null;
-        if (s3.bucket() && recordingUrl) {
-          try {
-            const key = `voicemails/${account.id}/${voicemail.id}.wav`;
-            await s3.archiveRecording({ key, sourceUrl: recordingUrl });
-            await voicemailService.setRecording(voicemail.id, {
-              s3Key: key,
-              recordingUrl: s3.objectUrl(key),
-            });
-            s3Key = key;
-          } catch (err) {
-            logger.error(
-              { accountId: account.id, voicemailId: voicemail.id, err: err.message },
-              'voicemail S3 archival failed; keeping Telnyx URL',
-            );
-          }
-        }
-
-        // Best-effort: email the subscriber a link to the recording.
-        if (account.email) {
-          try {
-            const tpl = emailTemplates.voicemailNotification({
-              callerNumber: from,
-              durationSeconds,
-              recordingUrl,
-            });
-            await emailClient.sendEmail({
-              to: account.email,
-              subject: tpl.subject,
-              textBody: tpl.text,
-              htmlBody: tpl.html,
-            });
-          } catch (err) {
-            logger.error({ accountId: account.id, err: err.message }, 'voicemail email failed');
-          }
-        }
-
-        // Fire-and-forget: transcribe (async, 10-30s), deliver the transcript to
-        // Messages, and push. Handles the notification whether or not
-        // transcription is enabled; never throws. Not awaited so the webhook
-        // returns immediately.
-        voicemailTranscriptionService.process({
-          voicemail, account, from, s3Key, durationSeconds,
-        }).catch((err) => {
-          logger.error(
-            { voicemailId: voicemail.id, err: err.message },
-            'voicemail post-processing failed',
-          );
+        await storeVoicemailRecording({
+          account, from, recordingUrl, recordingSid, durationSeconds,
         });
       }
     } catch (err) {
       logger.error({ accountId, err: err.message }, 'failed to store voicemail');
     }
+
+    // The normal recording path completed — retire the hangup safety-net marker
+    // so /status doesn't try to recover the same recording a second time.
+    await clearVmPending(callSid);
 
     res.type('application/xml').status(200).send(emptyResponseXml());
   }),

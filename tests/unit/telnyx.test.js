@@ -68,6 +68,22 @@ describe('request retry policy', () => {
 });
 
 describe('typed API calls', () => {
+  it('getCallRecordings GETs the call recordings and returns the array', async () => {
+    global.fetch.mockResolvedValueOnce(ok({
+      data: [{ id: 'REC1', download_urls: { wav: 'https://telnyx/rec.wav' } }],
+    }));
+    const recs = await telnyx.getCallRecordings('CA:abc');
+    expect(recs).toEqual([{ id: 'REC1', download_urls: { wav: 'https://telnyx/rec.wav' } }]);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.telnyx.com/v2/calls/CA%3Aabc/recordings');
+    expect(init.method).toBe('GET');
+  });
+
+  it('getCallRecordings wraps a single-object envelope into an array', async () => {
+    global.fetch.mockResolvedValueOnce(ok({ data: { id: 'REC1' } }));
+    expect(await telnyx.getCallRecordings('CA1')).toEqual([{ id: 'REC1' }]);
+  });
+
   it('purchaseNumber posts a number order and uses the E.164 as the id (not the order-line id)', async () => {
     global.fetch.mockResolvedValueOnce(ok({
       data: { id: 'order-1', phone_numbers: [{ id: 'pn-line-1', phone_number: '+12085550100' }] },

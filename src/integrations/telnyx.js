@@ -537,6 +537,20 @@ async function sendMessage({
   }));
 }
 
+/**
+ * Fetch recordings for a call. Used by the voicemail hangup safety net: when a
+ * caller hangs up mid-recording the <Record> action callback never fires, so we
+ * pull any recording Telnyx captured directly off the call. Returns the raw
+ * recordings array (empty when none exist).
+ * @param {string} callSid - the call identifier (Telnyx CallSid / call id).
+ * @returns {Promise<object[]>}
+ */
+async function getCallRecordings(callSid) {
+  const data = unwrap(await request('GET', `/calls/${encodeURIComponent(callSid)}/recordings`));
+  if (Array.isArray(data)) return data;
+  return data ? [data] : [];
+}
+
 // Module-level cache for the webhook public key fetched from Telnyx. `null`
 // means "not yet fetched"; '' means "fetch attempted and unavailable" (so we
 // don't hammer the API on every webhook). A configured key always wins.
@@ -590,6 +604,7 @@ module.exports = {
   submitPort,
   sendSms,
   sendMessage,
+  getCallRecordings,
   // exposed for tests
   request,
 };

@@ -12,6 +12,7 @@ jest.mock('../../src/integrations/s3');
 // Automock the Telnyx integration so the Ed25519 webhook verifier reads no
 // public key (getWebhookPublicKey -> undefined) and skips — no network call.
 jest.mock('../../src/integrations/telnyx');
+jest.mock('../../src/cache');
 jest.mock('../../src/utils/logger', () => ({
   logger: {
     info: () => {}, warn: () => {}, error: () => {},
@@ -28,6 +29,8 @@ const voicemailService = require('../../src/services/voicemailService');
 const voicemailTranscriptionService = require('../../src/services/voicemailTranscriptionService');
 const emailClient = require('../../src/integrations/email');
 const s3 = require('../../src/integrations/s3');
+const telnyx = require('../../src/integrations/telnyx');
+const cache = require('../../src/cache');
 const voiceRouter = require('../../src/routes/v1/voice');
 const { errorHandler } = require('../../src/middleware/errorHandler');
 
@@ -262,6 +265,92 @@ describe('POST /v1/voice/status', () => {
   });
 });
 
+describe('POST /v1/voice/status — voicemail hangup safety net', () => {
+  beforeEach(() => {
+    cdrService.recordCall.mockReset();
+    cdrService.recordCall.mockResolvedValue({ id: 'cr' });
+    cache.get.mockReset();
+    cache.del.mockReset();
+    telnyx.getCallRecordings.mockReset();
+    accountService.getAccountById.mockReset();
+    voicemailService.createVoicemail.mockReset();
+    voicemailTranscriptionService.process.mockReset();
+    voicemailTranscriptionService.process.mockResolvedValue(undefined);
+    s3.bucket.mockReset();
+    s3.bucket.mockReturnValue('');
+  });
+
+  it('recovers a mid-recording hangup: stores the recording and clears the marker', async () => {
+    cache.get.mockResolvedValueOnce(
+      JSON.stringify({ accountId: 'a1', from: '+12022762305', timestamp: 1 }),
+    );
+    telnyx.getCallRecordings.mockResolvedValueOnce([
+      { id: 'RECvm', download_urls: { wav: 'https://telnyx/rec.wav' }, duration_millis: 12000 },
+    ]);
+    accountService.getAccountById.mockResolvedValueOnce({ id: 'a1', tenant_id: 'ten-1' });
+    voicemailService.createVoicemail.mockResolvedValueOnce({ id: 'vm-1' });
+
+    const res = await request(app)
+      .post('/v1/voice/status')
+      .type('form')
+      .send({ CallSid: 'CAvm1', CallStatus: 'completed' });
+
+    expect(res.status).toBe(200);
+    expect(cache.get).toHaveBeenCalledWith('vm-pending:CAvm1');
+    expect(telnyx.getCallRecordings).toHaveBeenCalledWith('CAvm1');
+    expect(voicemailService.createVoicemail).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: 'a1',
+      callerNumber: '+12022762305',
+      recordingUrl: 'https://telnyx/rec.wav',
+      recordingSid: 'RECvm',
+      durationSeconds: 12,
+    }));
+    // Same post-processing as voicemail-complete (transcribe → deliver → push).
+    expect(voicemailTranscriptionService.process).toHaveBeenCalled();
+    expect(cache.del).toHaveBeenCalledWith('vm-pending:CAvm1');
+  });
+
+  it('is a no-op for an ordinary completed call (no pending marker)', async () => {
+    cache.get.mockResolvedValueOnce(null);
+    const res = await request(app)
+      .post('/v1/voice/status')
+      .type('form')
+      .send({ CallSid: 'CAnormal', CallStatus: 'completed' });
+    expect(res.status).toBe(200);
+    expect(telnyx.getCallRecordings).not.toHaveBeenCalled();
+    expect(voicemailService.createVoicemail).not.toHaveBeenCalled();
+  });
+
+  it('clears the marker even when Telnyx captured no recording', async () => {
+    cache.get.mockResolvedValueOnce(JSON.stringify({ accountId: 'a1', from: '+1' }));
+    telnyx.getCallRecordings.mockResolvedValueOnce([]);
+    await request(app)
+      .post('/v1/voice/status')
+      .type('form')
+      .send({ CallSid: 'CAempty', CallStatus: 'completed' });
+    expect(voicemailService.createVoicemail).not.toHaveBeenCalled();
+    expect(cache.del).toHaveBeenCalledWith('vm-pending:CAempty');
+  });
+
+  it('never blocks the ack when the recovery lookup throws', async () => {
+    cache.get.mockRejectedValueOnce(new Error('redis down'));
+    const res = await request(app)
+      .post('/v1/voice/status')
+      .type('form')
+      .send({ CallSid: 'CAerr', CallStatus: 'completed' });
+    expect(res.status).toBe(200);
+    expect(telnyx.getCallRecordings).not.toHaveBeenCalled();
+  });
+
+  it('does not run the safety net for non-hangup statuses', async () => {
+    await request(app)
+      .post('/v1/voice/status')
+      .type('form')
+      .send({ CallSid: 'CAring', CallStatus: 'ringing' });
+    expect(cache.get).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /v1/voice/voicemail-handler', () => {
   beforeEach(() => {
     accountService.getAccountById.mockReset();
@@ -344,12 +433,32 @@ describe('POST /v1/voice/voicemail-handler', () => {
 
   it('hangs up (empty Response) when voicemail is disabled', async () => {
     accountService.getAccountById.mockResolvedValueOnce({ id: 'a1', voicemail_enabled: false });
+    cache.setWithTtl.mockClear();
     const res = await request(app)
       .post('/v1/voice/voicemail-handler?accountId=a1&from=%2B1')
       .type('form')
-      .send({ DialCallStatus: 'no-answer' });
+      .send({ DialCallStatus: 'no-answer', CallSid: 'CAoff' });
     expect(res.text).toContain('<Response/>');
     expect(res.text).not.toContain('<Record');
+    // Disabled → no voicemail taken → no hangup marker.
+    expect(cache.setWithTtl).not.toHaveBeenCalled();
+  });
+
+  it('marks the call pending (vm-pending, 5-min TTL) so a hangup can be recovered', async () => {
+    accountService.getAccountById.mockResolvedValueOnce({ id: 'a1', voicemail_enabled: true });
+    cache.setWithTtl.mockClear();
+    await request(app)
+      .post('/v1/voice/voicemail-handler?accountId=a1&from=%2B12085550142')
+      .type('form')
+      .send({ DialCallStatus: 'no-answer', CallSid: 'CAvm1' });
+    expect(cache.setWithTtl).toHaveBeenCalledWith(
+      'vm-pending:CAvm1',
+      expect.stringContaining('"accountId":"a1"'),
+      300,
+    );
+    const stored = JSON.parse(cache.setWithTtl.mock.calls[0][1]);
+    expect(stored).toMatchObject({ accountId: 'a1', from: '+12085550142' });
+    expect(typeof stored.timestamp).toBe('number');
   });
 });
 
@@ -470,6 +579,17 @@ describe('POST /v1/voice/voicemail-complete', () => {
       .send({ RecordingUrl: 'https://rec/2.mp3', RecordingDuration: '3' });
     expect(res.status).toBe(200);
     expect(res.text).toContain('<Response/>');
+  });
+
+  it('clears the vm-pending marker after the normal recording path stores it', async () => {
+    accountService.getAccountById.mockResolvedValueOnce({ id: 'a1', tenant_id: 'ten-1' });
+    voicemailService.createVoicemail.mockResolvedValueOnce({ id: 'vm-1' });
+    cache.del.mockClear();
+    await request(app)
+      .post('/v1/voice/voicemail-complete?accountId=a1&from=%2B1')
+      .type('form')
+      .send({ RecordingUrl: 'https://telnyx/rec', RecordingDuration: '8', CallSid: 'CAvm1' });
+    expect(cache.del).toHaveBeenCalledWith('vm-pending:CAvm1');
   });
 });
 
