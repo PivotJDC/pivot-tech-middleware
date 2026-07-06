@@ -85,6 +85,30 @@ describe('recordCall', () => {
   });
 });
 
+describe('recordVoicemail', () => {
+  it('inserts a message_type=voicemail inbound CDR with explicit account/tenant', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'mr-vm', message_type: 'voicemail' }] });
+    const row = await cdr.recordVoicemail({
+      messageId: 'vm-1',
+      accountId: ACCOUNT_ID,
+      tenantId: 'ten-1',
+      from: OTHER,
+      to: OUR_DID,
+      createdAt: '2026-07-06T00:00:00.000Z',
+    });
+    expect(row).toMatchObject({ id: 'mr-vm', message_type: 'voicemail' });
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/INSERT INTO message_records/);
+    expect(sql).toMatch(/'inbound'.*'received'.*'voicemail'/s);
+    expect(params).toEqual([ACCOUNT_ID, 'ten-1', 'vm-1', OTHER, OUR_DID, '2026-07-06T00:00:00.000Z']);
+  });
+
+  it('returns null without a messageId or accountId', async () => {
+    expect(await cdr.recordVoicemail({ messageId: 'vm-1' })).toBeNull();
+    expect(db.query).not.toHaveBeenCalled();
+  });
+});
+
 describe('recordMessage', () => {
   it('inserts a new inbound message owned by the to-number account', async () => {
     db.query

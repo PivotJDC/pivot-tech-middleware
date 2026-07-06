@@ -5,6 +5,7 @@ jest.mock('../../src/services/voiceService');
 jest.mock('../../src/services/cdrService');
 jest.mock('../../src/services/accountService');
 jest.mock('../../src/services/voicemailService');
+jest.mock('../../src/services/voicemailTranscriptionService');
 jest.mock('../../src/services/pushService');
 jest.mock('../../src/integrations/email');
 jest.mock('../../src/integrations/s3');
@@ -24,7 +25,7 @@ const voiceService = require('../../src/services/voiceService');
 const cdrService = require('../../src/services/cdrService');
 const accountService = require('../../src/services/accountService');
 const voicemailService = require('../../src/services/voicemailService');
-const pushService = require('../../src/services/pushService');
+const voicemailTranscriptionService = require('../../src/services/voicemailTranscriptionService');
 const emailClient = require('../../src/integrations/email');
 const s3 = require('../../src/integrations/s3');
 const voiceRouter = require('../../src/routes/v1/voice');
@@ -355,7 +356,8 @@ describe('POST /v1/voice/voicemail-complete', () => {
     accountService.getAccountById.mockReset();
     voicemailService.createVoicemail.mockReset();
     voicemailService.setRecording.mockReset();
-    pushService.sendMessagePush.mockReset();
+    voicemailTranscriptionService.process.mockReset();
+    voicemailTranscriptionService.process.mockResolvedValue(undefined);
     emailClient.sendEmail.mockReset();
     s3.bucket.mockReset();
     s3.archiveRecording.mockReset();
@@ -402,12 +404,11 @@ describe('POST /v1/voice/voicemail-complete', () => {
     expect(voicemailService.setRecording).not.toHaveBeenCalled();
   });
 
-  it('stores the voicemail, pushes, emails, and returns an empty Response', async () => {
-    accountService.getAccountById.mockResolvedValueOnce({
-      id: 'a1', tenant_id: 'ten-1', email: 'jane@example.com',
-    });
-    voicemailService.createVoicemail.mockResolvedValueOnce({ id: 'vm-1' });
-    pushService.sendMessagePush.mockResolvedValueOnce({ sent: 1 });
+  it('stores the voicemail, emails, and hands off to transcription/delivery/push', async () => {
+    const account = { id: 'a1', tenant_id: 'ten-1', email: 'jane@example.com' };
+    accountService.getAccountById.mockResolvedValueOnce(account);
+    const voicemail = { id: 'vm-1' };
+    voicemailService.createVoicemail.mockResolvedValueOnce(voicemail);
     emailClient.sendEmail.mockResolvedValueOnce({ sent: true });
 
     const res = await request(app)
@@ -425,13 +426,37 @@ describe('POST /v1/voice/voicemail-complete', () => {
       recordingSid: 'RS1',
       durationSeconds: 15,
     });
-    expect(pushService.sendMessagePush).toHaveBeenCalledWith('a1', expect.objectContaining({
-      from: '+12022762305', messageId: 'vm-1',
-    }));
+    // Notification + transcription + Messages delivery are handled (fire-and-forget)
+    // by the transcription service; the recording wasn't archived (no bucket) → s3Key null.
+    expect(voicemailTranscriptionService.process).toHaveBeenCalledWith({
+      voicemail,
+      account,
+      from: '+12022762305',
+      s3Key: null,
+      durationSeconds: 15,
+    });
     expect(emailClient.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
       to: 'jane@example.com',
       subject: 'New voicemail from +12022762305',
     }));
+  });
+
+  it('passes the archived S3 key to the transcription service', async () => {
+    s3.bucket.mockReturnValue('mobilitynet-recordings');
+    s3.archiveRecording.mockResolvedValueOnce({ key: 'voicemails/a1/vm-1.wav' });
+    s3.objectUrl.mockReturnValue('https://s3/x');
+    accountService.getAccountById.mockResolvedValueOnce({ id: 'a1', tenant_id: 'ten-1' });
+    voicemailService.createVoicemail.mockResolvedValueOnce({ id: 'vm-1' });
+    voicemailService.setRecording.mockResolvedValueOnce({ id: 'vm-1' });
+
+    await request(app)
+      .post('/v1/voice/voicemail-complete?accountId=a1&from=%2B1')
+      .type('form')
+      .send({ RecordingUrl: 'https://telnyx/rec', RecordingDuration: '9' });
+
+    expect(voicemailTranscriptionService.process).toHaveBeenCalledWith(
+      expect.objectContaining({ s3Key: 'voicemails/a1/vm-1.wav', durationSeconds: 9 }),
+    );
   });
 
   it('still returns 200 empty Response when storage throws', async () => {

@@ -98,3 +98,14 @@ describe('objectUrl', () => {
       .toBe('https://mobilitynet-recordings.s3.us-east-1.amazonaws.com/voicemails/a/v.wav');
   });
 });
+
+describe('getObjectText', () => {
+  it('GetObjects the key and returns the body as a string', async () => {
+    mockSend.mockResolvedValueOnce({ Body: { transformToString: async () => '{"a":1}' } });
+    const text = await s3.getObjectText('transcripts/vm-1.json');
+    expect(text).toBe('{"a":1}');
+    expect(mockSend.mock.calls[0][0].Get).toEqual({
+      Bucket: 'mobilitynet-recordings', Key: 'transcripts/vm-1.json',
+    });
+  });
+});

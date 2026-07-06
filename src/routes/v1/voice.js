@@ -16,7 +16,7 @@ const voiceService = require('../../services/voiceService');
 const cdrService = require('../../services/cdrService');
 const accountService = require('../../services/accountService');
 const voicemailService = require('../../services/voicemailService');
-const pushService = require('../../services/pushService');
+const voicemailTranscriptionService = require('../../services/voicemailTranscriptionService');
 const emailClient = require('../../integrations/email');
 const emailTemplates = require('../../services/emailTemplates');
 const s3 = require('../../integrations/s3');
@@ -479,6 +479,7 @@ router.post(
 
         // Best-effort: copy the recording to S3 for permanent storage (Telnyx
         // URLs expire ~10 min). On failure we keep the Telnyx URL as fallback.
+        let s3Key = null;
         if (s3.bucket() && recordingUrl) {
           try {
             const key = `voicemails/${account.id}/${voicemail.id}.wav`;
@@ -487,6 +488,7 @@ router.post(
               s3Key: key,
               recordingUrl: s3.objectUrl(key),
             });
+            s3Key = key;
           } catch (err) {
             logger.error(
               { accountId: account.id, voicemailId: voicemail.id, err: err.message },
@@ -494,14 +496,6 @@ router.post(
             );
           }
         }
-
-        // Best-effort: wake the app (reuses the message push, which never throws).
-        await pushService.sendMessagePush(account.id, {
-          from,
-          body: `New voicemail (${durationSeconds}s)`,
-          messageId: voicemail.id,
-          streamId: from,
-        });
 
         // Best-effort: email the subscriber a link to the recording.
         if (account.email) {
@@ -521,6 +515,19 @@ router.post(
             logger.error({ accountId: account.id, err: err.message }, 'voicemail email failed');
           }
         }
+
+        // Fire-and-forget: transcribe (async, 10-30s), deliver the transcript to
+        // Messages, and push. Handles the notification whether or not
+        // transcription is enabled; never throws. Not awaited so the webhook
+        // returns immediately.
+        voicemailTranscriptionService.process({
+          voicemail, account, from, s3Key, durationSeconds,
+        }).catch((err) => {
+          logger.error(
+            { voicemailId: voicemail.id, err: err.message },
+            'voicemail post-processing failed',
+          );
+        });
       }
     } catch (err) {
       logger.error({ accountId, err: err.message }, 'failed to store voicemail');

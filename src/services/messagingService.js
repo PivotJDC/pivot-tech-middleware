@@ -292,9 +292,32 @@ async function handleMessagingWebhook(body = {}) {
   }
 }
 
+/**
+ * Insert a synthetic inbound message into the `messages` table (the store the
+ * Acrobits fetch/thread view reads). Used to deliver a voicemail transcription
+ * into the subscriber's Messages tab, threaded with the caller (stream_id =
+ * from_number). `createdAt` lets it carry the voicemail's timestamp.
+ * @param {{ accountId, from, to, body, createdAt? }} input
+ * @returns {Promise<object>} the inserted row.
+ */
+async function recordInboundMessage({
+  accountId, from, to, body, createdAt,
+}) {
+  const { rows } = await db.query(
+    `INSERT INTO messages
+       (account_id, direction, from_number, to_number, body, status, created_at)
+     VALUES ($1, 'inbound', $2, $3, $4, 'received', COALESCE($5, NOW()))
+     RETURNING *`,
+    [accountId, from, to, body, createdAt || null],
+  );
+  logger.info({ accountId, from }, 'inbound message recorded (voicemail delivery)');
+  return rows[0];
+}
+
 module.exports = {
   sendMessage,
   handleInboundMessage,
+  recordInboundMessage,
   getMessages,
   getConversation,
   fetchForAcrobits,

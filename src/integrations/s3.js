@@ -74,6 +74,13 @@ async function uploadObject({ key, body, contentType }) {
   return { key };
 }
 
+/** Read an object's body as a UTF-8 string (e.g. a Transcribe output JSON). */
+async function getObjectText(key) {
+  if (!bucket()) throw new Error('no S3 bucket configured');
+  const out = await getClient().send(new GetObjectCommand({ Bucket: bucket(), Key: key }));
+  return out.Body.transformToString();
+}
+
 /**
  * Generate a short-lived signed GET URL for an object key.
  * @param {string} key
@@ -109,6 +116,7 @@ async function signedUrlForVoicemail(vm, expiresIn = 3600) {
 module.exports = {
   archiveRecording,
   uploadObject,
+  getObjectText,
   getSignedRecordingUrl,
   signedUrlForVoicemail,
   objectUrl,

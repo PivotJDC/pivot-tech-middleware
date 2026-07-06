@@ -331,3 +331,24 @@ describe('handleMessagingWebhook', () => {
     expect(res.handled).toBe('message.delivered');
   });
 });
+
+describe('recordInboundMessage', () => {
+  it('inserts an inbound row into messages (voicemail delivery)', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'msg-vm' }] });
+    const row = await messaging.recordInboundMessage({
+      accountId: 'acc-1',
+      from: '+12022762305',
+      to: '+12085550100',
+      body: '🎙️ Voicemail (12s): hi',
+      createdAt: '2026-07-06T00:00:00.000Z',
+    });
+    expect(row).toEqual({ id: 'msg-vm' });
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/INSERT INTO messages/);
+    expect(sql).toMatch(/direction, from_number, to_number, body, status, created_at/);
+    expect(sql).toMatch(/COALESCE\(\$5, NOW\(\)\)/);
+    expect(params).toEqual([
+      'acc-1', '+12022762305', '+12085550100', '🎙️ Voicemail (12s): hi', '2026-07-06T00:00:00.000Z',
+    ]);
+  });
+});

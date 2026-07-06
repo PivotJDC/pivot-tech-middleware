@@ -250,6 +250,15 @@ function buildConfig() {
       // subscriber. Optional — empty disables the DID route.
       systemDid: process.env.VOICEMAIL_SYSTEM_DID || '',
     }),
+
+    // AWS Transcribe for voicemail transcription. Disabled by default (dev/test
+    // never call AWS); enable in prod once the App Runner role has
+    // transcribe:StartTranscriptionJob + transcribe:GetTranscriptionJob.
+    transcribe: Object.freeze({
+      enabled: process.env.TRANSCRIBE_ENABLED === 'true',
+      pollIntervalMs: parseIntOr(process.env.TRANSCRIBE_POLL_INTERVAL_MS, 5000),
+      maxPollAttempts: parseIntOr(process.env.TRANSCRIBE_MAX_POLL_ATTEMPTS, 12),
+    }),
   });
 }
 

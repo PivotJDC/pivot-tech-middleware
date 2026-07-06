@@ -168,6 +168,29 @@ async function recordMessage({
 }
 
 /**
+ * Record a voicemail as a message CDR (message_type='voicemail', inbound).
+ * account_id/tenant_id are supplied by the caller (resolved from the voicemail),
+ * and created_at carries the voicemail's timestamp.
+ * @param {{ messageId, accountId, tenantId, from, to, createdAt? }} input
+ * @returns {Promise<object|null>}
+ */
+async function recordVoicemail({
+  messageId, accountId, tenantId, from, to, createdAt,
+} = {}) {
+  if (!messageId || !accountId) return null;
+  const { rows } = await db.query(
+    `INSERT INTO message_records
+       (account_id, tenant_id, message_id, direction, from_number, to_number, status,
+        message_type, created_at)
+     VALUES ($1, $2, $3, 'inbound', $4, $5, 'received', 'voicemail', COALESCE($6, NOW()))
+     RETURNING *`,
+    [accountId, tenantId, messageId, from, to, createdAt || null],
+  );
+  logger.info({ accountId, messageId }, 'voicemail message CDR stored');
+  return rows[0] || null;
+}
+
+/**
  * Paginated call history for an account, newest first. When tenantId is given,
  * additionally scopes to that tenant (defense in depth for tenant isolation).
  */
@@ -239,6 +262,7 @@ async function getAccountCdrs(accountId, opts = {}) {
 module.exports = {
   recordCall,
   recordMessage,
+  recordVoicemail,
   getCallHistory,
   getMessageHistory,
   getAccountCdrs,
