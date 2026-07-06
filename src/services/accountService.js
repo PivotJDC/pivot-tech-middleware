@@ -106,6 +106,19 @@ function validateName(value, field) {
 }
 
 /**
+ * Trimmed, length-capped optional string for flat profile columns
+ * (address_line1, city, zip, phone_alt, …). Returns null when empty/absent so
+ * clearing a field writes NULL rather than an empty string.
+ */
+function trimmedField(value, field, maxLength) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') {
+    throw errors.validation(`${field} must be a string.`, field);
+  }
+  return value.trim().slice(0, maxLength) || null;
+}
+
+/**
  * Optional address → normalized { line1, line2, city, state, zip } (each a
  * string or null), or null when absent. Throws if a non-object is supplied.
  */
@@ -650,6 +663,28 @@ async function updateAccount(id, patch = {}) {
   }
   if (patch.last_name !== undefined) {
     updates.last_name = validateName(patch.last_name, 'last_name');
+  }
+
+  // Flat address / alt-contact columns (admin "profile" edit). Trimmed and
+  // capped to the migration 031 column widths; state is uppercased.
+  if (patch.address_line1 !== undefined) {
+    updates.address_line1 = trimmedField(patch.address_line1, 'address_line1', 255);
+  }
+  if (patch.address_line2 !== undefined) {
+    updates.address_line2 = trimmedField(patch.address_line2, 'address_line2', 255);
+  }
+  if (patch.city !== undefined) {
+    updates.city = trimmedField(patch.city, 'city', 100);
+  }
+  if (patch.state !== undefined) {
+    const st = trimmedField(patch.state, 'state', 2);
+    updates.state = st ? st.toUpperCase() : null;
+  }
+  if (patch.zip !== undefined) {
+    updates.zip = trimmedField(patch.zip, 'zip', 10);
+  }
+  if (patch.phone_alt !== undefined) {
+    updates.phone_alt = trimmedField(patch.phone_alt, 'phone_alt', 20);
   }
 
   // SIP routing fields (admin "update_sip"). Plain string columns — the

@@ -825,6 +825,28 @@ describe('updateAccount status machine', () => {
     expect(result.first_name).toBe('Jane');
   });
 
+  it('updates flat address fields (trimmed, state uppercased, empty → null)', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [baseRow] }) // current
+      .mockResolvedValueOnce({ rows: [{ ...baseRow, city: 'Lewiston', state: 'ID' }] });
+    await accountService.updateAccount(baseRow.id, {
+      address_line1: '  1 Main St ',
+      city: 'Lewiston',
+      state: 'id',
+      zip: '83501',
+      phone_alt: '+12085550111',
+      address_line2: '   ', // whitespace-only → null
+    });
+    const [sql, values] = db.query.mock.calls[1];
+    expect(sql).toMatch(/address_line1 = \$/);
+    expect(sql).toMatch(/state = \$/);
+    expect(values).toContain('1 Main St'); // trimmed
+    expect(values).toContain('ID'); // uppercased
+    expect(values).toContain('83501');
+    expect(values).toContain('+12085550111');
+    expect(values).toContain(null); // address_line2 whitespace → null
+  });
+
   it('rejects a duplicate email with a 409 conflict', async () => {
     db.query
       .mockResolvedValueOnce({ rows: [baseRow] }) // current

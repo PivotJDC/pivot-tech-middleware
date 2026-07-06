@@ -321,6 +321,36 @@ router.post(
   }),
 );
 
+// Update the full subscriber profile — name, email, address, alt contact.
+// super_admin + admin. Body accepts any subset; at least one field required.
+const PROFILE_FIELDS = [
+  'first_name', 'last_name', 'email',
+  'address_line1', 'address_line2', 'city', 'state', 'zip', 'phone_alt',
+];
+router.patch(
+  '/accounts/:id/profile',
+  requireRole('super_admin', 'admin'),
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const patch = {};
+    PROFILE_FIELDS.forEach((field) => {
+      if (body[field] !== undefined) patch[field] = body[field];
+    });
+    if (Object.keys(patch).length === 0) {
+      throw errors.validation(
+        `At least one profile field is required (${PROFILE_FIELDS.join(', ')}).`,
+        'first_name',
+      );
+    }
+    const account = await accountService.updateAccount(req.params.id, patch);
+    logger.info(
+      { adminId: req.admin.id, accountId: req.params.id, fields: Object.keys(patch) },
+      'admin updated subscriber profile',
+    );
+    res.json(account);
+  }),
+);
+
 router.patch(
   '/accounts/:id/status',
   asyncHandler(async (req, res) => {

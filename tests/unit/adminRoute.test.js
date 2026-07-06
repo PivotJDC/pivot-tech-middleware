@@ -190,6 +190,54 @@ describe('admin API', () => {
     expect(accountService.updateAccount).not.toHaveBeenCalled();
   });
 
+  it('PATCH /admin/accounts/:id/profile updates name, email, and address', async () => {
+    accountService.updateAccount.mockResolvedValueOnce({
+      id: 'a1', first_name: 'Jane', city: 'Lewiston', state: 'ID',
+    });
+    const res = await request(app)
+      .patch('/admin/accounts/a1/profile')
+      .send({
+        first_name: 'Jane',
+        last_name: 'Doe',
+        email: 'jane@example.com',
+        address_line1: '1 Main St',
+        address_line2: 'Apt 2',
+        city: 'Lewiston',
+        state: 'ID',
+        zip: '83501',
+        phone_alt: '+12085550111',
+      });
+    expect(res.status).toBe(200);
+    expect(accountService.updateAccount).toHaveBeenCalledWith('a1', {
+      first_name: 'Jane',
+      last_name: 'Doe',
+      email: 'jane@example.com',
+      address_line1: '1 Main St',
+      address_line2: 'Apt 2',
+      city: 'Lewiston',
+      state: 'ID',
+      zip: '83501',
+      phone_alt: '+12085550111',
+    });
+    expect(res.body.city).toBe('Lewiston');
+  });
+
+  it('PATCH /admin/accounts/:id/profile passes only the fields provided', async () => {
+    accountService.updateAccount.mockResolvedValueOnce({ id: 'a1', phone_alt: '+12085550111' });
+    const res = await request(app)
+      .patch('/admin/accounts/a1/profile')
+      .send({ phone_alt: '+12085550111' });
+    expect(res.status).toBe(200);
+    expect(accountService.updateAccount).toHaveBeenCalledWith('a1', { phone_alt: '+12085550111' });
+  });
+
+  it('PATCH /admin/accounts/:id/profile requires at least one field', async () => {
+    const res = await request(app).patch('/admin/accounts/a1/profile').send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error.field).toBe('first_name');
+    expect(accountService.updateAccount).not.toHaveBeenCalled();
+  });
+
   it('PATCH /admin/accounts/:id rejects an unsupported action', async () => {
     const res = await request(app).patch('/admin/accounts/a1').send({ action: 'nope' });
     expect(res.status).toBe(400);
