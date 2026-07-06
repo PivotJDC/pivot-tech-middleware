@@ -291,6 +291,8 @@ describe('POST /v1/voice/voicemail-handler', () => {
     expect(res.text).toContain('<Say voice="alice">You have reached Jane Doe.');
     expect(res.text).toContain('Or press star to reach the voicemail menu.');
     expect(res.text).toContain('<Record maxLength="120"');
+    // Fires the action on 5s of silence / hangup, not only on # (most callers).
+    expect(res.text).toContain('timeout="5"');
     expect(res.text).toContain('/v1/voice/voicemail-complete?accountId=a1&amp;from=');
     // Transcription attributes are intentionally omitted for now.
     expect(res.text).not.toContain('transcribe=');

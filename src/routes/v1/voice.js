@@ -129,7 +129,10 @@ function voicemailPromptXml(account, accountId, from, greetingUrl) {
     '  <Say voice="alice">Or press star to reach the voicemail menu.</Say>',
     // Transcription intentionally omitted for now — we can add it later via a
     // separate Telnyx API call rather than the Record transcribe attributes.
-    `  <Record maxLength="120" action="${completeAction}" playBeep="true" finishOnKey="#"/>`,
+    // timeout="5": stop + fire the action after 5s of silence, so a caller who
+    // just stops talking or hangs up (rather than pressing #) still saves the
+    // voicemail.
+    `  <Record maxLength="120" action="${completeAction}" playBeep="true" finishOnKey="#" timeout="5"/>`,
     '  <Say voice="alice">Thank you. Goodbye.</Say>',
     '</Response>',
     '',
