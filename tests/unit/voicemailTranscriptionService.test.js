@@ -49,15 +49,16 @@ describe('process', () => {
     expect(voicemailService.attachTranscription).toHaveBeenCalledWith({
       accountId: 'a1', recordingSid: 'RS1', transcription: 'Hey Jim, calling about the project.',
     });
-    // messages table → Acrobits Messages tab, threaded with the caller.
+    // messages table → all voicemails land in one "Voicemail" thread
+    // (from_number is the fixed identifier); caller + duration ride in the body.
     expect(messagingService.recordInboundMessage).toHaveBeenCalledWith({
       accountId: 'a1',
-      from: '+12022762305',
+      from: 'Voicemail',
       to: '+12085550100',
-      body: '🎙️ Voicemail (12s): Hey Jim, calling about the project.',
+      body: '🎙️ From: (202) 276-2305\nDuration: 0:12\nHey Jim, calling about the project.',
       createdAt: '2026-07-06T00:00:00.000Z',
     });
-    // message_records CDR with message_type=voicemail.
+    // message_records CDR keeps the REAL caller number (audit) + message_type=voicemail.
     expect(cdrService.recordVoicemail).toHaveBeenCalledWith({
       messageId: 'vm-1',
       accountId: 'a1',

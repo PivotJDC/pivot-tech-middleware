@@ -49,11 +49,17 @@ async function pollForTranscript(jobName) {
 async function deliverToMessages({
   voicemail, account, from, durationSeconds, text,
 }) {
-  const body = `🎙️ Voicemail (${durationSeconds}s): ${text}`;
-  // messages table → the Acrobits Messages tab, threaded with the caller.
+  // All voicemails land in ONE dedicated "Voicemail" thread (the fetch handler
+  // threads by from_number → stream_id), so a fixed from_number is used. The
+  // caller's real number + duration go in the body so the subscriber can read
+  // and call back.
+  const caller = formatNational(from) || from;
+  const mins = Math.floor(durationSeconds / 60);
+  const secs = String(durationSeconds % 60).padStart(2, '0');
+  const body = `🎙️ From: ${caller}\nDuration: ${mins}:${secs}\n${text}`;
   await messagingService.recordInboundMessage({
     accountId: account.id,
-    from,
+    from: 'Voicemail',
     to: account.phone_e164,
     body,
     createdAt: voicemail.created_at,
