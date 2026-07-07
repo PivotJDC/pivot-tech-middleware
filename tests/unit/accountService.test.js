@@ -97,7 +97,8 @@ describe('createAccount', () => {
       market: 'lewiston-id',
     });
 
-    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null, { firstName: null, lastName: null, serviceAddress: null });
+    // No phone_e164 supplied → requestedNumber is null (auto-select allowed).
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null, { firstName: null, lastName: null, serviceAddress: null }, null);
     expect(crypto.hashPassword).toHaveBeenCalledWith('plaintext-pw');
     expect(result.id).toBe(baseRow.id);
     expect(result).not.toHaveProperty('sip_password_hash');
@@ -281,8 +282,10 @@ describe('createAccount', () => {
 
     await accountService.createAccount({ email: 'a@b.co', phone_e164: '+13035550100' });
 
-    // No market provided -> "direct"; area code derived from the chosen number.
-    expect(didOrchestration.assignDid).toHaveBeenCalledWith('direct', '303', { firstName: null, lastName: null, serviceAddress: null });
+    // No market provided -> "direct"; area code derived from the chosen number,
+    // and the exact chosen number is passed through as requestedNumber (bought
+    // exactly, never substituted).
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('direct', '303', { firstName: null, lastName: null, serviceAddress: null }, '+13035550100');
   });
 
   it('routes a FOX promo code to gaiia + broadband fields on the account', async () => {
@@ -385,14 +388,14 @@ describe('createAccount', () => {
     // $20 tenant_id — defaults to the MobilityNet tenant when none is supplied.
     expect(insertedParams[19]).toBe('00000000-0000-4000-a000-000000000001');
 
-    // E911 enrollment context flows through to assignDid.
+    // E911 enrollment context flows through to assignDid (no chosen number).
     expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null, {
       firstName: 'Jane',
       lastName: 'Doe',
       serviceAddress: {
         line1: '1 Main', line2: 'Apt 2', city: 'Lewiston', state: 'ID', zip: '83501',
       },
-    });
+    }, null);
   });
 
   it('rejects a non-object service_address', async () => {
@@ -555,8 +558,8 @@ describe('multi-line (family plan)', () => {
 
     // Parent resolved against primary accounts only; uniqueness pre-check skipped.
     expect(db.query.mock.calls[0][0]).toMatch(/parent_account_id IS NULL/);
-    // Child line still gets its own DID and eSIM.
-    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null, { firstName: null, lastName: null, serviceAddress: null });
+    // Child line still gets its own DID and eSIM (auto-selected; no chosen number).
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null, { firstName: null, lastName: null, serviceAddress: null }, null);
     expect(bics.getNextAvailableEsim).toHaveBeenCalled();
     // parent_account_id ($8) and line_label ($9) persisted.
     expect(insertedParams[7]).toBe('parent-1');

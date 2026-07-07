@@ -324,6 +324,12 @@ async function createAccount(input = {}) {
   const requestedAreaCode = sourceNumber && e164.isE164(sourceNumber)
     ? e164.areaCodeOf(sourceNumber)
     : null;
+  // A customer-selected new number must be purchased EXACTLY (never substituted).
+  // Port-ins carry their number through the port flow, not a purchase here, so
+  // only phone_e164 (new-number signup) drives an exact purchase.
+  const requestedNumber = input.phone_e164 && e164.isE164(input.phone_e164)
+    ? input.phone_e164
+    : null;
 
   let parentAccountId = null;
   if (input.parent_email) {
@@ -354,7 +360,7 @@ async function createAccount(input = {}) {
   // Pass enrollment so DID orchestration can also provision E911 (best-effort).
   const credentials = await didOrchestration.assignDid(market, requestedAreaCode, {
     firstName, lastName, serviceAddress,
-  });
+  }, requestedNumber);
   const sipPasswordHash = await crypto.hashPassword(credentials.sipPassword);
 
   try {

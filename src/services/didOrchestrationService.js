@@ -87,21 +87,61 @@ async function findAvailableNumber(market, requestedAreaCode = null) {
 /**
  * Assign a DID + SIP endpoint for a new account in the given market. When an
  * enrollment serviceAddress is supplied, also provisions E911 (best-effort).
+ *
+ * When `requestedNumber` is supplied (the customer chose a specific number),
+ * that EXACT number is purchased — we never silently substitute a different one
+ * from the area code. If it's no longer available, a DID_UNAVAILABLE error is
+ * raised so the customer can pick another. Only when no number is specified do
+ * we auto-select the first available number in the market.
  * @param {string} market
  * @param {string|null} [requestedAreaCode]
  * @param {{ firstName?, lastName?, serviceAddress?: object }} [enrollment]
+ * @param {string|null} [requestedNumber] - exact customer-selected E.164.
  * @returns {Promise<{
  *   phoneE164: string, areaCode: string, signalwireSid: string,
  *   sipUsername: string, sipEndpointId: string, sipPassword: string,
  *   e911AddressId: string|null, e911Enabled: boolean
  * }>}
  */
-async function assignDid(market, requestedAreaCode = null, enrollment = {}) {
-  const { e164, areaCode } = await findAvailableNumber(market, requestedAreaCode);
-
+async function assignDid(
+  market,
+  requestedAreaCode = null,
+  enrollment = {},
+  requestedNumber = null,
+) {
   // Purchase + route inbound voice to the TeXML app + attach the messaging
   // profile (so inbound calls hit /v1/voice/inbound and SMS/MMS work).
-  const purchase = await telnyx.provisionPhoneNumber(e164);
+  let e164;
+  let areaCode;
+  let purchase;
+  if (requestedNumber) {
+    // Customer picked a specific number — buy THAT exact number, no fallback.
+    e164 = requestedNumber;
+    areaCode = requestedAreaCode;
+    try {
+      purchase = await telnyx.provisionPhoneNumber(e164);
+    } catch (err) {
+      // A Telnyx 4xx (404 / not available / already taken) means the number
+      // was claimed between selection and checkout. Surface a clear, actionable
+      // error instead of substituting a different number.
+      if (err && err.upstreamStatus >= 400 && err.upstreamStatus < 500) {
+        logger.warn(
+          { requestedNumber, upstreamStatus: err.upstreamStatus },
+          'customer-selected number no longer available at Telnyx',
+        );
+        throw new AppError(
+          'DID_UNAVAILABLE',
+          'The number you selected is no longer available. Please go back and choose a different number.',
+          { field: 'phone_e164' },
+        );
+      }
+      throw err;
+    }
+  } else {
+    // No specific number — auto-select the first available in the market.
+    ({ e164, areaCode } = await findAvailableNumber(market, requestedAreaCode));
+    purchase = await telnyx.provisionPhoneNumber(e164);
+  }
   const signalwireSid = idOf(purchase);
 
   // Telnyx auto-generates the SIP credentials; we only supply a recognizable

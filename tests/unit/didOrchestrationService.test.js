@@ -208,6 +208,48 @@ describe('assignDid', () => {
     expect(cred.areaCode).toBe('331');
     expect(cred.phoneE164).toBe('+13315550100');
   });
+
+  describe('with a customer-selected number (requestedNumber)', () => {
+    it('purchases THAT exact number and never searches the area code', async () => {
+      telnyx.provisionPhoneNumber.mockResolvedValueOnce({ id: 'sid-req' });
+      telnyx.createSipEndpoint.mockResolvedValueOnce({
+        id: 'ep-req', sip_username: 'u-req', sip_password: 'p-req',
+      });
+
+      const cred = await did.assignDid('lewiston-id', '208', {}, '+12085550142');
+
+      // The exact number is purchased; no availability search / substitution.
+      expect(telnyx.provisionPhoneNumber).toHaveBeenCalledWith('+12085550142');
+      expect(telnyx.searchAvailableNumbers).not.toHaveBeenCalled();
+      expect(cred.phoneE164).toBe('+12085550142');
+      expect(cred.areaCode).toBe('208');
+    });
+
+    it('throws DID_UNAVAILABLE (no fallback) when Telnyx rejects the exact number 4xx', async () => {
+      const err = new Error('Telnyx rejected POST /number_orders (404).');
+      err.upstreamStatus = 404;
+      telnyx.provisionPhoneNumber.mockRejectedValueOnce(err);
+
+      await expect(did.assignDid('lewiston-id', '208', {}, '+12085550142'))
+        .rejects.toMatchObject({
+          code: 'DID_UNAVAILABLE',
+          field: 'phone_e164',
+          message: 'The number you selected is no longer available. Please go back and choose a different number.',
+        });
+      // Never fell back to auto-selecting a different number.
+      expect(telnyx.searchAvailableNumbers).not.toHaveBeenCalled();
+    });
+
+    it('propagates a non-4xx Telnyx error unchanged (not masked as DID_UNAVAILABLE)', async () => {
+      const err = new Error('Telnyx request failed after retries.');
+      err.code = 'TELNYX_ERROR';
+      err.upstreamStatus = 500;
+      telnyx.provisionPhoneNumber.mockRejectedValueOnce(err);
+
+      await expect(did.assignDid('lewiston-id', '208', {}, '+12085550142'))
+        .rejects.toMatchObject({ code: 'TELNYX_ERROR' });
+    });
+  });
 });
 
 describe('getSipPassword', () => {
