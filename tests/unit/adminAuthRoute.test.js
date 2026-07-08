@@ -277,18 +277,20 @@ describe('GET /admin/users (super_admin only)', () => {
 
 describe('POST /admin/accounts/:id/refresh-sip-credentials (super_admin only)', () => {
   it('refreshes for a super_admin', async () => {
-    accountService.refreshSipPasswordHash.mockResolvedValueOnce({ updated: true });
+    accountService.refreshSipCredentials.mockResolvedValueOnce({
+      sip_username: 'pivottech-new', sip_password: 'plaintext-new', updated: true,
+    });
     const res = await request(app).post('/admin/accounts/a1/refresh-sip-credentials').send({});
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ updated: true });
-    expect(accountService.refreshSipPasswordHash).toHaveBeenCalledWith('a1');
+    expect(res.body.updated).toBe(true);
+    expect(accountService.refreshSipCredentials).toHaveBeenCalledWith('a1');
   });
 
   it('forbids a non-super_admin', async () => {
     mockAdmin = { id: 'x', role: 'admin' };
     const res = await request(app).post('/admin/accounts/a1/refresh-sip-credentials').send({});
     expect(res.status).toBe(403);
-    expect(accountService.refreshSipPasswordHash).not.toHaveBeenCalled();
+    expect(accountService.refreshSipCredentials).not.toHaveBeenCalled();
   });
 });
 

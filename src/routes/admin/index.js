@@ -267,14 +267,16 @@ router.get(
   }),
 );
 
-// Backfill/repair sip_password_hash from Telnyx (fixes pre-hash accounts that
-// fail Acrobits SIP-credential auth). super_admin only.
+// Rotate SIP credentials: delete the old Telnyx credential, create a fresh one,
+// persist it, and return { sip_username, sip_password, updated } so the admin
+// can generate a provisioning QR. The plaintext password is returned only here
+// and never stored/logged. super_admin only.
 router.post(
   '/accounts/:id/refresh-sip-credentials',
   requireRole('super_admin'),
   asyncHandler(async (req, res) => {
-    const result = await accountService.refreshSipPasswordHash(req.params.id);
-    logger.info({ adminId: req.admin.id, accountId: req.params.id }, 'admin refreshed SIP credentials');
+    const result = await accountService.refreshSipCredentials(req.params.id);
+    logger.info({ adminId: req.admin.id, accountId: req.params.id }, 'admin rotated SIP credentials');
     res.json(result);
   }),
 );

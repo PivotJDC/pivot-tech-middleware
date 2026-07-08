@@ -568,6 +568,52 @@ async function refreshSipPasswordHash(id) {
 }
 
 /**
+ * Rotate an account's SIP credentials: delete the old Telnyx credential and
+ * create a fresh one (new gencred username + new password), persisting the new
+ * username, endpoint id, and bcrypt hash. Returns the plaintext password — the
+ * ONLY place it is exposed — so an admin can build a provisioning QR. The
+ * plaintext is never stored or logged (security rule #1).
+ * @param {string} id - account id.
+ * @returns {Promise<{ sip_username: string, sip_password: string, updated: true }>}
+ */
+async function refreshSipCredentials(id) {
+  const account = await getAccountById(id); // throws NOT_FOUND if missing
+  if (!account.phone_e164) {
+    throw errors.validation('Account has no number to bind SIP credentials to.', 'phone_e164');
+  }
+
+  // 1. Delete the old Telnyx SIP credential (best-effort — it may already be gone).
+  if (account.sip_endpoint_id) {
+    try {
+      await telnyx.deleteSipEndpoint(account.sip_endpoint_id);
+    } catch (err) {
+      logger.warn({ accountId: id, err: err.message }, 'old SIP credential delete failed; continuing');
+    }
+  }
+
+  // 2. Create a NEW credential — Telnyx auto-generates the username + password.
+  const credentialName = `pivottech-${nodeCrypto.randomUUID()}`;
+  const endpoint = await telnyx.createSipEndpoint({
+    username: credentialName,
+    callerId: account.phone_e164,
+  });
+  const sipEndpointId = endpoint.id || endpoint.sid;
+  const sipUsername = endpoint.sip_username;
+  const sipPassword = endpoint.sip_password;
+
+  // 3. Persist the new username + endpoint id + password hash.
+  const hash = await crypto.hashPassword(sipPassword);
+  await db.query(
+    'UPDATE accounts SET sip_username = $1, sip_endpoint_id = $2, sip_password_hash = $3 WHERE id = $4',
+    [sipUsername, sipEndpointId, hash, id],
+  );
+  logger.info({ accountId: id }, 'rotated SIP credentials on Telnyx');
+
+  // 4. Return the plaintext once (never stored/logged) for QR generation.
+  return { sip_username: sipUsername, sip_password: sipPassword, updated: true };
+}
+
+/**
  * Look up the PRIMARY account by email (used for MVP token issuance). Child
  * lines share the primary's email, so this scopes to parent_account_id IS NULL.
  * Returns the full account or throws NOT_FOUND.
@@ -1067,6 +1113,7 @@ module.exports = {
   getEsimQr,
   setSipPasswordHash,
   refreshSipPasswordHash,
+  refreshSipCredentials,
   serializeAccount,
   // exported for tests / reuse
   STATUS_TRANSITIONS,

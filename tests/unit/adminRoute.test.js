@@ -299,12 +299,16 @@ describe('admin API', () => {
     expect(provisioningService.reissueToken).toHaveBeenCalledWith('a1');
   });
 
-  it('POST /admin/accounts/:id/refresh-sip-credentials backfills the hash', async () => {
-    accountService.refreshSipPasswordHash.mockResolvedValueOnce({ updated: true });
+  it('POST /admin/accounts/:id/refresh-sip-credentials rotates + returns new creds', async () => {
+    accountService.refreshSipCredentials.mockResolvedValueOnce({
+      sip_username: 'pivottech-new', sip_password: 'plaintext-new', updated: true,
+    });
     const res = await request(app).post('/admin/accounts/a1/refresh-sip-credentials').send({});
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ updated: true });
-    expect(accountService.refreshSipPasswordHash).toHaveBeenCalledWith('a1');
+    expect(res.body).toEqual({
+      sip_username: 'pivottech-new', sip_password: 'plaintext-new', updated: true,
+    });
+    expect(accountService.refreshSipCredentials).toHaveBeenCalledWith('a1');
   });
 
   it('POST /admin/accounts/:id/esim-qr returns a QR (default show)', async () => {

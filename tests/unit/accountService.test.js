@@ -885,6 +885,71 @@ describe('refreshSipPasswordHash', () => {
   });
 });
 
+describe('refreshSipCredentials (rotation)', () => {
+  beforeEach(() => {
+    telnyx.deleteSipEndpoint.mockReset().mockResolvedValue(undefined);
+    telnyx.createSipEndpoint.mockReset();
+    crypto.hashPassword.mockReset();
+  });
+
+  it('deletes the old credential, creates a new one, persists it, and returns plaintext', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [baseRow] }) // getAccountById
+      .mockResolvedValueOnce({}); // UPDATE
+    telnyx.createSipEndpoint.mockResolvedValueOnce({
+      id: 'ep-2', sip_username: 'pivottech-new', sip_password: 'plaintext-new',
+    });
+    crypto.hashPassword.mockResolvedValueOnce('bcrypt$new');
+
+    const result = await accountService.refreshSipCredentials(baseRow.id);
+
+    // Old credential deleted; new one created bound to the account's number.
+    expect(telnyx.deleteSipEndpoint).toHaveBeenCalledWith(baseRow.sip_endpoint_id);
+    expect(telnyx.createSipEndpoint).toHaveBeenCalledWith(
+      expect.objectContaining({ callerId: baseRow.phone_e164 }),
+    );
+    expect(telnyx.createSipEndpoint.mock.calls[0][0].username).toMatch(/^pivottech-/);
+    // Persists new username + endpoint id + hash (NOT the plaintext).
+    const update = db.query.mock.calls.find(
+      ([sql]) => /UPDATE accounts SET sip_username = \$1, sip_endpoint_id = \$2, sip_password_hash = \$3/.test(sql),
+    );
+    expect(update[1]).toEqual(['pivottech-new', 'ep-2', 'bcrypt$new', baseRow.id]);
+    // Returns the plaintext once for QR generation.
+    expect(result).toEqual({
+      sip_username: 'pivottech-new', sip_password: 'plaintext-new', updated: true,
+    });
+  });
+
+  it('continues creating a new credential when the old delete fails (best-effort)', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [baseRow] })
+      .mockResolvedValueOnce({});
+    telnyx.deleteSipEndpoint.mockRejectedValueOnce(new Error('already gone'));
+    telnyx.createSipEndpoint.mockResolvedValueOnce({
+      id: 'ep-2', sip_username: 'pivottech-new', sip_password: 'plaintext-new',
+    });
+    crypto.hashPassword.mockResolvedValueOnce('bcrypt$new');
+
+    const result = await accountService.refreshSipCredentials(baseRow.id);
+    expect(result.updated).toBe(true);
+    expect(telnyx.createSipEndpoint).toHaveBeenCalled();
+  });
+
+  it('404s when the account does not exist', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await expect(accountService.refreshSipCredentials(baseRow.id))
+      .rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(telnyx.createSipEndpoint).not.toHaveBeenCalled();
+  });
+
+  it('rejects an account with no phone number', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ ...baseRow, phone_e164: null }] });
+    await expect(accountService.refreshSipCredentials(baseRow.id))
+      .rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'phone_e164' });
+    expect(telnyx.createSipEndpoint).not.toHaveBeenCalled();
+  });
+});
+
 describe('updateAccount status machine', () => {
   it('activates a pending account and stamps activated_at', async () => {
     db.query
