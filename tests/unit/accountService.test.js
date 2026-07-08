@@ -63,6 +63,15 @@ const credentials = {
   e911Enabled: true,
 };
 
+// A valid physical service address — now required by createAccount (E911).
+const SVC_ADDR = {
+  line1: '123 Main St', city: 'Lewiston', state: 'ID', zip: '83501',
+};
+// How it looks after validateAddress normalization (line2 defaulted to null).
+const SVC_ADDR_NORM = {
+  line1: '123 Main St', line2: null, city: 'Lewiston', state: 'ID', zip: '83501',
+};
+
 beforeEach(() => {
   db.query.mockReset();
   db.withTransaction.mockReset();
@@ -97,10 +106,11 @@ describe('createAccount', () => {
     const result = await accountService.createAccount({
       email: '  Jane@Example.COM ',
       market: 'lewiston-id',
+      service_address: SVC_ADDR,
     });
 
     // No phone_e164 supplied → requestedNumber is null (auto-select allowed).
-    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null, { firstName: null, lastName: null, serviceAddress: null }, null);
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null, { firstName: null, lastName: null, serviceAddress: SVC_ADDR_NORM }, null);
     expect(crypto.hashPassword).toHaveBeenCalledWith('plaintext-pw');
     expect(result.id).toBe(baseRow.id);
     expect(result).not.toHaveProperty('sip_password_hash');
@@ -108,7 +118,7 @@ describe('createAccount', () => {
 
   it('rejects a duplicate email before purchasing a DID', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ id: 'existing' }] });
-    await expect(accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id' }))
+    await expect(accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id', service_address: SVC_ADDR }))
       .rejects.toMatchObject({ code: 'VALIDATION_ERROR', status: 409, field: 'email' });
     expect(didOrchestration.assignDid).not.toHaveBeenCalled();
   });
@@ -118,7 +128,7 @@ describe('createAccount', () => {
     didOrchestration.assignDid.mockRejectedValueOnce(
       Object.assign(new Error('none'), { code: 'DID_UNAVAILABLE' }),
     );
-    await expect(accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id' }))
+    await expect(accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id', service_address: SVC_ADDR }))
       .rejects.toMatchObject({ code: 'DID_UNAVAILABLE' });
     expect(db.withTransaction).not.toHaveBeenCalled();
   });
@@ -128,7 +138,7 @@ describe('createAccount', () => {
     didOrchestration.assignDid.mockResolvedValueOnce(credentials);
     crypto.hashPassword.mockResolvedValueOnce('hashed-pw');
     db.withTransaction.mockRejectedValueOnce({ code: '23505' });
-    await expect(accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id' }))
+    await expect(accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id', service_address: SVC_ADDR }))
       .rejects.toMatchObject({ code: 'VALIDATION_ERROR', status: 409 });
   });
 
@@ -160,7 +170,7 @@ describe('createAccount', () => {
       });
 
       const result = await accountService.createAccount({
-        email: 'a@b.co', market: 'lewiston-id', plan,
+        email: 'a@b.co', market: 'lewiston-id', plan, service_address: SVC_ADDR,
       });
       expect(insertedPlan).toBe(plan);
       expect(result.plan).toBe(plan);
@@ -185,7 +195,7 @@ describe('createAccount', () => {
       }],
     });
 
-    const result = await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id' });
+    const result = await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id', service_address: SVC_ADDR });
 
     expect(bics.getNextAvailableEsim).toHaveBeenCalled();
     expect(bics.createEndpoint).toHaveBeenCalledWith(
@@ -221,7 +231,7 @@ describe('createAccount', () => {
       Object.assign(new Error('SIM not attached'), { code: 'BICS_ERROR' }),
     );
 
-    const result = await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id' });
+    const result = await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id', service_address: SVC_ADDR });
 
     // Account is kept (DID already purchased) — no rollback.
     expect(result.id).toBe(baseRow.id);
@@ -238,7 +248,7 @@ describe('createAccount', () => {
       Object.assign(new Error('No available eSIMs in the BICS pool.'), { code: 'BICS_ERROR' }),
     );
 
-    const result = await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id' });
+    const result = await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id', service_address: SVC_ADDR });
 
     expect(result.id).toBe(baseRow.id);
     expect(result.esim).toBeNull();
@@ -267,7 +277,7 @@ describe('createAccount', () => {
       .mockResolvedValueOnce({ rows: [{ ...baseRow, status: 'pending' }] }) // getAccountById
       .mockResolvedValueOnce({ rows: [{ ...baseRow, status: 'active' }] }); // UPDATE RETURNING
 
-    const result = await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id' });
+    const result = await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id', service_address: SVC_ADDR });
 
     expect(result.status).toBe('active');
     expect(result.esim).toBeNull();
@@ -282,12 +292,14 @@ describe('createAccount', () => {
   it('accepts a non-launched area code: defaults market to "direct" and searches that area code', async () => {
     wireHappyPath();
 
-    await accountService.createAccount({ email: 'a@b.co', phone_e164: '+13035550100' });
+    await accountService.createAccount({
+      email: 'a@b.co', phone_e164: '+13035550100', service_address: SVC_ADDR,
+    });
 
     // No market provided -> "direct"; area code derived from the chosen number,
     // and the exact chosen number is passed through as requestedNumber (bought
     // exactly, never substituted).
-    expect(didOrchestration.assignDid).toHaveBeenCalledWith('direct', '303', { firstName: null, lastName: null, serviceAddress: null }, '+13035550100');
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('direct', '303', { firstName: null, lastName: null, serviceAddress: SVC_ADDR_NORM }, '+13035550100');
   });
 
   it('routes a FOX promo code to gaiia + broadband fields on the account', async () => {
@@ -308,7 +320,7 @@ describe('createAccount', () => {
     });
 
     await accountService.createAccount({
-      email: 'a@b.co', market: 'lewiston-id', promo_code: 'FOX-12345',
+      email: 'a@b.co', market: 'lewiston-id', promo_code: 'FOX-12345', service_address: SVC_ADDR,
     });
 
     // INSERT params: ...$10 external_billing_provider, $11 broadband_provider,
@@ -336,7 +348,7 @@ describe('createAccount', () => {
       return fn(client);
     });
 
-    await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id' });
+    await accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id', service_address: SVC_ADDR });
 
     expect(insertedParams[9]).toBe('telgoo5');
     expect(insertedParams[10]).toBeNull(); // broadband_provider
@@ -480,6 +492,76 @@ describe('createAccount', () => {
 
     expect(telgoo5Service.syncAccountToTelgoo5).not.toHaveBeenCalled();
   });
+
+  describe('service address validation (E911)', () => {
+    const PO_MSG = 'A physical street address is required. PO Boxes are not accepted.';
+
+    it('requires a service address (rejected before any DID work)', async () => {
+      await expect(accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id' }))
+        .rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'service_address', message: PO_MSG });
+      expect(db.query).not.toHaveBeenCalled();
+      expect(didOrchestration.assignDid).not.toHaveBeenCalled();
+    });
+
+    it('requires all of line1/city/state/zip (whitespace is empty)', async () => {
+      await expect(accountService.createAccount({
+        email: 'a@b.co',
+        market: 'lewiston-id',
+        service_address: {
+          line1: '123 Main St', city: 'Lewiston', state: 'ID', zip: '   ',
+        },
+      })).rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'service_address' });
+      expect(didOrchestration.assignDid).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'PO Box 123',
+      'P.O. Box 5',
+      'P O Box 9',
+      'Post Office Box 1',
+      'PMB 200',
+      'General Delivery',
+    ])('rejects a PO Box service address: "%s"', async (line1) => {
+      await expect(accountService.createAccount({
+        email: 'a@b.co',
+        market: 'lewiston-id',
+        service_address: {
+          line1, city: 'Lewiston', state: 'ID', zip: '83501',
+        },
+      })).rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'service_address', message: PO_MSG });
+      expect(didOrchestration.assignDid).not.toHaveBeenCalled();
+    });
+
+    it('rejects a PO Box hidden in line2', async () => {
+      await expect(accountService.createAccount({
+        email: 'a@b.co',
+        market: 'lewiston-id',
+        service_address: {
+          line1: '123 Main St', line2: 'PMB 44', city: 'Lewiston', state: 'ID', zip: '83501',
+        },
+      })).rejects.toMatchObject({ field: 'service_address' });
+    });
+
+    it('rejects a PO Box billing address', async () => {
+      await expect(accountService.createAccount({
+        email: 'a@b.co',
+        market: 'lewiston-id',
+        service_address: SVC_ADDR,
+        billing_address: {
+          line1: 'PO Box 7', city: 'Lewiston', state: 'ID', zip: '83501',
+        },
+      })).rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'billing_address', message: PO_MSG });
+      expect(didOrchestration.assignDid).not.toHaveBeenCalled();
+    });
+
+    it('accepts a normal physical address and proceeds to DID assignment', async () => {
+      wireHappyPath();
+      await accountService.createAccount({
+        email: 'a@b.co', market: 'lewiston-id', service_address: SVC_ADDR,
+      });
+      expect(didOrchestration.assignDid).toHaveBeenCalled();
+    });
+  });
 });
 
 describe('retryBicsProvisioning', () => {
@@ -556,12 +638,13 @@ describe('multi-line (family plan)', () => {
       market: 'lewiston-id',
       parent_email: 'jane@example.com',
       line_label: 'Kid 1',
+      service_address: SVC_ADDR,
     });
 
     // Parent resolved against primary accounts only; uniqueness pre-check skipped.
     expect(db.query.mock.calls[0][0]).toMatch(/parent_account_id IS NULL/);
     // Child line still gets its own DID and eSIM (auto-selected; no chosen number).
-    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null, { firstName: null, lastName: null, serviceAddress: null }, null);
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('lewiston-id', null, { firstName: null, lastName: null, serviceAddress: SVC_ADDR_NORM }, null);
     expect(bics.getNextAvailableEsim).toHaveBeenCalled();
     // parent_account_id ($8) and line_label ($9) persisted.
     expect(insertedParams[7]).toBe('parent-1');
@@ -573,7 +656,7 @@ describe('multi-line (family plan)', () => {
   it('rejects a child line when parent_email has no primary account', async () => {
     db.query.mockResolvedValueOnce({ rows: [] }); // parent lookup: none
     await expect(accountService.createAccount({
-      email: 'x@y.co', market: 'lewiston-id', parent_email: 'missing@y.co',
+      email: 'x@y.co', market: 'lewiston-id', parent_email: 'missing@y.co', service_address: SVC_ADDR,
     })).rejects.toMatchObject({ code: 'NOT_FOUND' });
     // No DID purchased for an invalid parent.
     expect(didOrchestration.assignDid).not.toHaveBeenCalled();
@@ -850,6 +933,23 @@ describe('updateAccount status machine', () => {
     expect(values).toContain('83501');
     expect(values).toContain('+12085550111');
     expect(values).toContain(null); // address_line2 whitespace → null
+  });
+
+  it('rejects a PO Box in a profile address_line1 update (E911)', async () => {
+    db.query.mockResolvedValueOnce({ rows: [baseRow] }); // current
+    await expect(accountService.updateAccount(baseRow.id, { address_line1: 'P.O. Box 10' }))
+      .rejects.toMatchObject({
+        code: 'VALIDATION_ERROR',
+        field: 'address_line1',
+        message: 'A physical street address is required. PO Boxes are not accepted.',
+      });
+    expect(db.query).toHaveBeenCalledTimes(1); // current fetch only, no UPDATE
+  });
+
+  it('rejects a PO Box in a profile address_line2 update', async () => {
+    db.query.mockResolvedValueOnce({ rows: [baseRow] });
+    await expect(accountService.updateAccount(baseRow.id, { address_line2: 'General Delivery' }))
+      .rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'address_line2' });
   });
 
   it('rejects a duplicate email with a 409 conflict', async () => {

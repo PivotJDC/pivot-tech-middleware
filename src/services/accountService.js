@@ -138,6 +138,38 @@ function validateAddress(value, field) {
   };
 }
 
+// PO Boxes (and similar non-physical addresses) can't be used for mobile
+// service — E911 can't dispatch emergency responders to them.
+const PO_BOX_RE = /p\.?\s*o\.?\s*box|post\s*office|pmb|general\s*delivery/i;
+const PHYSICAL_ADDRESS_MESSAGE = 'A physical street address is required. PO Boxes are not accepted.';
+
+/** True when a line looks like a PO Box / non-physical address. */
+function isPoBox(value) {
+  return Boolean(value) && PO_BOX_RE.test(value);
+}
+
+/** Throw if line1/line2 of an address look like a PO Box. */
+function assertNotPoBox(address, field) {
+  if (address && (isPoBox(address.line1) || isPoBox(address.line2))) {
+    throw errors.validation(PHYSICAL_ADDRESS_MESSAGE, field);
+  }
+}
+
+/**
+ * Service address is mandatory (E911): must be an object with non-empty
+ * line1/city/state/zip and must not be a PO Box. Returns the normalized address.
+ */
+function validateServiceAddress(value) {
+  const addr = validateAddress(value, 'service_address');
+  const complete = addr
+    && ['line1', 'city', 'state', 'zip'].every((k) => addr[k] && String(addr[k]).trim());
+  if (!complete) {
+    throw errors.validation(PHYSICAL_ADDRESS_MESSAGE, 'service_address');
+  }
+  assertNotPoBox(addr, 'service_address');
+  return addr;
+}
+
 function assertTransition(from, to) {
   if (!STATUSES.includes(to)) {
     throw errors.validation(`Unknown status: ${to}.`, 'status');
@@ -312,8 +344,11 @@ async function createAccount(input = {}) {
   // Enrollment details (Telgoo5). All optional / backward compatible.
   const firstName = validateName(input.first_name, 'first_name');
   const lastName = validateName(input.last_name, 'last_name');
-  const serviceAddress = validateAddress(input.service_address, 'service_address');
+  // Service address is required and must be physical (E911 dispatch). Billing
+  // address is optional but, when given, also can't be a PO Box.
+  const serviceAddress = validateServiceAddress(input.service_address);
   const billingAddress = validateAddress(input.billing_address, 'billing_address');
+  assertNotPoBox(billingAddress, 'billing_address');
   // Promo code routes the subscriber's billing provider (telgoo5 vs gaiia +
   // broadband linkage). external_billing_provider holds the billing provider.
   const { billingProvider, broadbandProvider, broadbandAccountId } = billingMigration
@@ -673,12 +708,19 @@ async function updateAccount(id, patch = {}) {
   }
 
   // Flat address / alt-contact columns (admin "profile" edit). Trimmed and
-  // capped to the migration 031 column widths; state is uppercased.
+  // capped to the migration 031 column widths; state is uppercased. PO Boxes
+  // are rejected (E911), matching signup.
   if (patch.address_line1 !== undefined) {
     updates.address_line1 = trimmedField(patch.address_line1, 'address_line1', 255);
+    if (isPoBox(updates.address_line1)) {
+      throw errors.validation(PHYSICAL_ADDRESS_MESSAGE, 'address_line1');
+    }
   }
   if (patch.address_line2 !== undefined) {
     updates.address_line2 = trimmedField(patch.address_line2, 'address_line2', 255);
+    if (isPoBox(updates.address_line2)) {
+      throw errors.validation(PHYSICAL_ADDRESS_MESSAGE, 'address_line2');
+    }
   }
   if (patch.city !== undefined) {
     updates.city = trimmedField(patch.city, 'city', 100);
