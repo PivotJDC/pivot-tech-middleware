@@ -25,6 +25,15 @@ function buildApp() {
   return app;
 }
 
+// Extract <sms_text> from a fetch response and XML-unescape it back to raw JSON.
+const XML_UNESCAPE = {
+  '&quot;': '"', '&apos;': "'", '&amp;': '&', '&lt;': '<', '&gt;': '>',
+};
+function smsTextJson(xml) {
+  const raw = /<sms_text>([\s\S]*?)<\/sms_text>/.exec(xml)[1];
+  return raw.replace(/&(quot|apos|amp|lt|gt);/g, (m) => XML_UNESCAPE[m]);
+}
+
 const app = buildApp();
 const ACCOUNT = {
   id: 'acc-1',
@@ -399,7 +408,7 @@ describe('GET /v1/acrobits/fetch', () => {
     expect(messagingService.fetchForAcrobits).toHaveBeenCalledWith('acc-1', 'r0', 's0');
   });
 
-  it('includes MMS media in the item XML and presigns our own S3 URLs', async () => {
+  it('renders MMS as a filetransfer JSON payload in sms_text (presigned URLs)', async () => {
     s3.presignUrlIfOwn.mockImplementation((url) => Promise.resolve(
       url.includes('bucket.s3') ? `${url}?signed=1` : url,
     ));
@@ -411,7 +420,7 @@ describe('GET /v1/acrobits/fetch', () => {
         created_at: '2026-06-25T12:00:00.000Z',
         media_urls: [
           'https://bucket.s3.us-east-1.amazonaws.com/mms-inbound/acc-1/r1_0.jpg',
-          'https://external/telnyx.jpg',
+          'https://external/telnyx.png',
         ],
       }],
       sent: [],
@@ -421,17 +430,46 @@ describe('GET /v1/acrobits/fetch', () => {
       .query({ username: 'pivottech-abc', password: 'pw' });
 
     expect(res.status).toBe(200);
-    // Own S3 URL was presigned; external URL passed through.
-    expect(res.text).toContain(
-      '<media_urls>https://bucket.s3.us-east-1.amazonaws.com/mms-inbound/acc-1/r1_0.jpg?signed=1,https://external/telnyx.jpg</media_urls>',
-    );
-    expect(res.text).toContain(
-      '<media_url>https://bucket.s3.us-east-1.amazonaws.com/mms-inbound/acc-1/r1_0.jpg?signed=1</media_url>',
-    );
-    expect(res.text).toContain('<media_url>https://external/telnyx.jpg</media_url>');
+    // File-transfer content_type + JSON payload (not text/plain), no XML media els.
+    expect(res.text).toContain('<content_type>application/x-acro-filetransfer+json</content_type>');
+    expect(res.text).not.toContain('<media_url');
+
+    // Pull the sms_text out, XML-unescape it, and assert the JSON shape.
+    const json = JSON.parse(smsTextJson(res.text));
+    expect(json).toEqual({
+      attachments: [
+        {
+          'content-url': 'https://bucket.s3.us-east-1.amazonaws.com/mms-inbound/acc-1/r1_0.jpg?signed=1',
+          'content-type': 'image/jpeg',
+        },
+        { 'content-url': 'https://external/telnyx.png', 'content-type': 'image/png' },
+      ],
+      text: 'pic', // the caption rides along as a "text" field
+    });
   });
 
-  it('omits media elements for plain SMS (no media_urls)', async () => {
+  it('omits the text field and media elements appropriately', async () => {
+    messagingService.fetchForAcrobits.mockResolvedValueOnce({
+      received: [{
+        id: 'r3',
+        from_number: '+12085550142',
+        body: '',
+        created_at: '2026-06-25T12:00:00.000Z',
+        media_urls: ['https://external/pic.gif'],
+      }],
+      sent: [],
+    });
+    const res = await request(app)
+      .get('/v1/acrobits/fetch')
+      .query({ username: 'pivottech-abc', password: 'pw' });
+    const json = JSON.parse(smsTextJson(res.text));
+    // No caption → no "text" key; gif type inferred from the URL.
+    expect(json).toEqual({
+      attachments: [{ 'content-url': 'https://external/pic.gif', 'content-type': 'image/gif' }],
+    });
+  });
+
+  it('keeps plain SMS as text/plain with the body in sms_text (no change)', async () => {
     messagingService.fetchForAcrobits.mockResolvedValueOnce({
       received: [{
         id: 'r2', from_number: '+12085550142', body: 'hi', created_at: '2026-06-25T12:00:00.000Z',
@@ -441,6 +479,9 @@ describe('GET /v1/acrobits/fetch', () => {
     const res = await request(app)
       .get('/v1/acrobits/fetch')
       .query({ username: 'pivottech-abc', password: 'pw' });
+    expect(res.text).toContain('<sms_text>hi</sms_text>');
+    expect(res.text).toContain('<content_type>text/plain</content_type>');
+    expect(res.text).not.toContain('filetransfer');
     expect(res.text).not.toContain('<media_url');
   });
 

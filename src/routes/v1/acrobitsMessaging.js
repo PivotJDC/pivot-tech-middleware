@@ -47,34 +47,69 @@ function errorXml(message) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<response>\n  <message>${escapeXml(message)}</message>\n</response>\n`;
 }
 
+// file extension -> content-type, for inferring an attachment's MIME type from
+// its (presigned) S3 URL — the messages table stores only the URLs, not types.
+const CONTENT_TYPE_BY_EXT = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  heic: 'image/heic',
+  mp4: 'video/mp4',
+  '3gp': 'video/3gpp',
+  mov: 'video/quicktime',
+  mp3: 'audio/mpeg',
+  amr: 'audio/amr',
+  pdf: 'application/pdf',
+};
+
+/** Best-effort content-type from a media URL's extension (default image/jpeg). */
+function contentTypeForUrl(url) {
+  const match = /\.([a-z0-9]{2,4})(?:\?|#|$)/i.exec(String(url || ''));
+  const ext = match ? match[1].toLowerCase() : '';
+  return CONTENT_TYPE_BY_EXT[ext] || 'image/jpeg';
+}
+
 /**
  * Render one <item> block (Acrobits Modern API). Both <sender> and <recipient>
  * are emitted so the app can thread the message correctly: it needs to know the
  * subscriber's own number (not just the peer) to place an inbound message in the
  * conversation thread instead of a group chat. `streamId` is the peer number so
  * inbound + outbound of the same conversation share a thread.
+ *
+ * MMS: Cloud Softphone renders inbound media via a file-transfer payload — the
+ * content_type is application/x-acro-filetransfer+json and <sms_text> carries a
+ * JSON { attachments: [...] } document (the presigned URLs live inside it), not
+ * plain text. Any caption rides along as a "text" field. Plain SMS is unchanged
+ * (content_type text/plain, <sms_text> = the body).
  */
 function smsXml(m, sender, recipient, streamId) {
   const media = Array.isArray(m.media_urls) ? m.media_urls.filter(Boolean) : [];
-  const lines = [
+  let smsText = m.body || '';
+  let contentType = 'text/plain';
+  if (media.length > 0) {
+    contentType = 'application/x-acro-filetransfer+json';
+    const payload = {
+      attachments: media.map((url) => ({
+        'content-url': url,
+        'content-type': contentTypeForUrl(url),
+      })),
+    };
+    if (m.body) payload.text = m.body;
+    smsText = JSON.stringify(payload);
+  }
+  return [
     '    <item>',
     `      <sms_id>${escapeXml(m.id)}</sms_id>`,
     `      <sending_date>${escapeXml(fmtDate(m.created_at))}</sending_date>`,
     `      <sender>${escapeXml(sender)}</sender>`,
     `      <recipient>${escapeXml(recipient)}</recipient>`,
-    `      <sms_text>${escapeXml(m.body)}</sms_text>`,
-    '      <content_type>text/plain</content_type>',
+    `      <sms_text>${escapeXml(smsText)}</sms_text>`,
+    `      <content_type>${contentType}</content_type>`,
     `      <stream_id>${escapeXml(streamId)}</stream_id>`,
-  ];
-  // MMS: attach media URLs. Acrobits' exact fetch-side MMS element isn't firmly
-  // documented, so emit a comma-joined <media_urls> plus one <media_url> per
-  // item as a belt-and-suspenders for whichever the client honors.
-  if (media.length > 0) {
-    lines.push(`      <media_urls>${escapeXml(media.join(','))}</media_urls>`);
-    media.forEach((u) => lines.push(`      <media_url>${escapeXml(u)}</media_url>`));
-  }
-  lines.push('    </item>');
-  return lines.join('\n');
+    '    </item>',
+  ].join('\n');
 }
 
 function fetchXml(received, sent, subscriberNumber) {
