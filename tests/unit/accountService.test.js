@@ -875,6 +875,59 @@ describe('updateAccount status machine', () => {
   });
 });
 
+describe('transitionStatus vendor cleanup', () => {
+  beforeEach(() => {
+    telnyx.deletePhoneNumber.mockReset().mockResolvedValue(undefined);
+    telnyx.deleteSipEndpoint.mockReset().mockResolvedValue(undefined);
+    bics.suspendEndpoint.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('on cancel: releases DID + SIP + BICS and drops the dids row', async () => {
+    const active = { ...baseRow, status: 'active', bics_endpoint_id: 'ep-bics-1' };
+    db.query
+      .mockResolvedValueOnce({ rows: [active] }) // getAccountById (current)
+      .mockResolvedValueOnce({ rows: [{ ...active, status: 'cancelled' }] }) // UPDATE
+      .mockResolvedValueOnce({ rows: [] }); // DELETE FROM dids
+
+    const result = await accountService.transitionStatus(baseRow.id, 'cancelled');
+
+    expect(result.status).toBe('cancelled');
+    expect(telnyx.deletePhoneNumber).toHaveBeenCalledWith('+12085550100');
+    expect(telnyx.deleteSipEndpoint).toHaveBeenCalledWith('ep-1');
+    expect(bics.suspendEndpoint).toHaveBeenCalledWith('ep-bics-1');
+    const didsDelete = db.query.mock.calls.find((c) => /DELETE FROM dids WHERE account_id/.test(c[0]));
+    expect(didsDelete[1]).toEqual([baseRow.id]);
+  });
+
+  it('on suspend: releases nothing and keeps the DID', async () => {
+    const active = { ...baseRow, status: 'active', bics_endpoint_id: 'ep-bics-1' };
+    db.query
+      .mockResolvedValueOnce({ rows: [active] }) // getAccountById
+      .mockResolvedValueOnce({ rows: [{ ...active, status: 'suspended' }] }); // UPDATE
+
+    await accountService.transitionStatus(baseRow.id, 'suspended');
+
+    expect(telnyx.deletePhoneNumber).not.toHaveBeenCalled();
+    expect(telnyx.deleteSipEndpoint).not.toHaveBeenCalled();
+    expect(bics.suspendEndpoint).not.toHaveBeenCalled();
+    expect(db.query.mock.calls.some((c) => /DELETE FROM dids/.test(c[0]))).toBe(false);
+  });
+
+  it('on cancel: still cancels + removes the DID when Telnyx release fails', async () => {
+    const active = { ...baseRow, status: 'active' };
+    db.query
+      .mockResolvedValueOnce({ rows: [active] })
+      .mockResolvedValueOnce({ rows: [{ ...active, status: 'cancelled' }] })
+      .mockResolvedValueOnce({ rows: [] });
+    telnyx.deletePhoneNumber.mockRejectedValueOnce(new Error('telnyx down'));
+
+    const result = await accountService.transitionStatus(baseRow.id, 'cancelled');
+
+    expect(result.status).toBe('cancelled');
+    expect(db.query.mock.calls.some((c) => /DELETE FROM dids/.test(c[0]))).toBe(true);
+  });
+});
+
 describe('deleteAccount', () => {
   let client;
   beforeEach(() => {

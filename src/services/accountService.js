@@ -731,11 +731,68 @@ async function updateAccount(id, patch = {}) {
 }
 
 /**
- * Force a status transition (used by the admin API later). Same state-machine
- * rules as updateAccount, exposed directly for operational status changes.
+ * Best-effort release of an account's vendor resources: the Telnyx DID (so we
+ * stop being billed), its SIP credential, and the BICS data endpoint. Every
+ * step logs-and-continues so a vendor hiccup never blocks the caller (status
+ * change or account delete).
+ * @param {string} id - account id (for logging).
+ * @param {object} account - the account row (needs phone_e164, sip_endpoint_id,
+ *   bics_endpoint_id).
+ * @param {string} context - short phrase for the log line ("cancellation" etc.).
+ */
+async function releaseVendorResources(id, account, context) {
+  if (account.phone_e164) {
+    try {
+      await telnyx.deletePhoneNumber(account.phone_e164);
+      logger.info({ accountId: id }, `released DID at Telnyx on ${context}`);
+    } catch (err) {
+      logger.warn({ accountId: id, err: err.message }, 'Telnyx DID release failed (best-effort)');
+    }
+  }
+  if (account.sip_endpoint_id) {
+    try {
+      await telnyx.deleteSipEndpoint(account.sip_endpoint_id);
+    } catch (err) {
+      logger.warn({ accountId: id, err: err.message }, 'Telnyx SIP credential delete failed (best-effort)');
+    }
+  }
+  if (account.bics_endpoint_id) {
+    try {
+      // BICS has no hard-delete; suspending the endpoint deactivates service.
+      await bics.suspendEndpoint(account.bics_endpoint_id);
+      logger.info({ accountId: id }, `deactivated BICS endpoint on ${context}`);
+    } catch (err) {
+      logger.warn({ accountId: id, err: err.message }, 'BICS endpoint deactivation failed (best-effort)');
+    }
+  }
+}
+
+/**
+ * Force a status transition (used by the admin API). Same state-machine rules as
+ * updateAccount, exposed directly for operational status changes.
+ *
+ * On CANCELLATION we also release the number back to Telnyx (so we stop paying
+ * for it) plus the SIP credential and BICS endpoint, and drop the DID row — all
+ * best-effort so a vendor failure never undoes the status change. Suspension is
+ * intentionally left untouched: the subscriber may reactivate.
  */
 async function transitionStatus(id, status) {
-  return updateAccount(id, { status });
+  const account = await updateAccount(id, { status });
+
+  if (status === 'cancelled') {
+    await releaseVendorResources(id, account, 'cancellation');
+    try {
+      // Release the DID from our inventory (it's gone from Telnyx now too).
+      await db.query('DELETE FROM dids WHERE account_id = $1', [id]);
+    } catch (err) {
+      logger.warn(
+        { accountId: id, err: err.message },
+        'DID row removal failed on cancellation (best-effort)',
+      );
+    }
+  }
+
+  return account;
 }
 
 // Every table with an account_id FK to accounts(id). All child rows must go
@@ -765,32 +822,9 @@ const ACCOUNT_CHILD_TABLES = [
 async function deleteAccount(id) {
   const account = await getAccountById(id); // throws NOT_FOUND on a bad id
 
-  // Best-effort external cleanup. Log-and-continue on any failure so a vendor
-  // hiccup can't strand an account half-deleted in our DB.
-  if (account.phone_e164) {
-    try {
-      await telnyx.deletePhoneNumber(account.phone_e164);
-      logger.info({ accountId: id }, 'released DID at Telnyx during account deletion');
-    } catch (err) {
-      logger.warn({ accountId: id, err: err.message }, 'Telnyx DID release failed (best-effort)');
-    }
-  }
-  if (account.sip_endpoint_id) {
-    try {
-      await telnyx.deleteSipEndpoint(account.sip_endpoint_id);
-    } catch (err) {
-      logger.warn({ accountId: id, err: err.message }, 'Telnyx SIP credential delete failed (best-effort)');
-    }
-  }
-  if (account.bics_endpoint_id) {
-    try {
-      // BICS has no hard-delete; suspending the endpoint deactivates service.
-      await bics.suspendEndpoint(account.bics_endpoint_id);
-      logger.info({ accountId: id }, 'deactivated BICS endpoint during account deletion');
-    } catch (err) {
-      logger.warn({ accountId: id, err: err.message }, 'BICS endpoint deactivation failed (best-effort)');
-    }
-  }
+  // Best-effort external cleanup — a vendor hiccup can't strand a half-deleted
+  // account in our DB.
+  await releaseVendorResources(id, account, 'deletion');
 
   await db.withTransaction(async (client) => {
     // Detach any child (family) lines so their parent FK doesn't block the delete.
