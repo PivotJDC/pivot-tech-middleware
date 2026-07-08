@@ -370,6 +370,16 @@ router.patch(
   }),
 );
 
+// Port-out PIN for CSR support (admin + super_admin). Read-only — the customer
+// resets it themselves from the portal.
+router.get(
+  '/accounts/:id/port-pin',
+  requireRole('super_admin', 'admin'),
+  asyncHandler(async (req, res) => {
+    res.json(await accountService.getPortPin(req.params.id));
+  }),
+);
+
 // Hard-delete an account and all related records (super_admin only). Guarded by
 // an explicit X-Confirm-Delete: true header so it can't be triggered casually.
 // Releases the DID at Telnyx + deactivates the BICS endpoint (best-effort).

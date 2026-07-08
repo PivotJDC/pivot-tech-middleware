@@ -68,12 +68,22 @@ const NOW = Symbol('NOW');
  */
 function serializeAccount(row) {
   if (!row) return row;
-  // eslint-disable-next-line camelcase, no-unused-vars
-  const { sip_password_hash: _sipHash, line_count: lineCount, ...safe } = row;
+  // Strip secrets: the SIP password hash and the port-out PIN never travel in a
+  // general account response — the PIN is served only via the dedicated
+  // port-pin endpoints (customer self + admin CSR).
+  const {
+    // eslint-disable-next-line camelcase, no-unused-vars
+    sip_password_hash: _sipHash, port_out_pin: _portPin, line_count: lineCount, ...safe
+  } = row;
   if (safe.parent_account_id == null) {
     safe.line_count = lineCount != null ? Number(lineCount) : 0;
   }
   return safe;
+}
+
+/** Generate a 6-digit numeric port-out PIN (100000–999999). */
+function generatePortPin() {
+  return String(Math.floor(100000 + Math.random() * 900000));
 }
 
 function normalizeEmail(value) {
@@ -407,8 +417,8 @@ async function createAccount(input = {}) {
             sip_password_hash, parent_account_id, line_label,
             external_billing_provider, broadband_provider, broadband_account_id, promo_code,
             first_name, last_name, service_address, billing_address,
-            e911_address_id, e911_enabled, tenant_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+            e911_address_id, e911_enabled, tenant_id, port_out_pin)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
          RETURNING *`,
         [
           email,
@@ -431,6 +441,7 @@ async function createAccount(input = {}) {
           credentials.e911AddressId || null,
           credentials.e911Enabled || false,
           tenantId,
+          generatePortPin(),
         ],
       );
       const accountId = inserted.rows[0].id;
@@ -651,6 +662,46 @@ async function getAccountLines(accountId) {
     [accountId],
   );
   return rows.map(serializeAccount);
+}
+
+/**
+ * Return the subscriber's port-out PIN. Lazily generates + persists one if the
+ * account predates the column (defensive — migration 032 backfills existing
+ * rows). Never logs the PIN value.
+ * @param {string} id - account id.
+ * @returns {Promise<{ port_out_pin: string }>}
+ */
+async function getPortPin(id) {
+  assertUuid(id);
+  const { rows } = await db.query('SELECT port_out_pin FROM accounts WHERE id = $1', [id]);
+  if (rows.length === 0) {
+    throw errors.notFound('Account not found.');
+  }
+  let pin = rows[0].port_out_pin;
+  if (!pin) {
+    pin = generatePortPin();
+    await db.query('UPDATE accounts SET port_out_pin = $1 WHERE id = $2', [pin, id]);
+  }
+  return { port_out_pin: pin };
+}
+
+/**
+ * Generate + persist a fresh port-out PIN for an account. Never logs the value.
+ * @param {string} id - account id.
+ * @returns {Promise<{ port_out_pin: string }>}
+ */
+async function resetPortPin(id) {
+  assertUuid(id);
+  const pin = generatePortPin();
+  const { rows } = await db.query(
+    'UPDATE accounts SET port_out_pin = $1 WHERE id = $2 RETURNING id',
+    [pin, id],
+  );
+  if (rows.length === 0) {
+    throw errors.notFound('Account not found.');
+  }
+  logger.info({ accountId: id }, 'port-out PIN reset');
+  return { port_out_pin: pin };
 }
 
 /** Lightweight status projection for the app onboarding poll. */
@@ -1010,6 +1061,8 @@ module.exports = {
   updateAccount,
   transitionStatus,
   deleteAccount,
+  getPortPin,
+  resetPortPin,
   retryBicsProvisioning,
   getEsimQr,
   setSipPasswordHash,

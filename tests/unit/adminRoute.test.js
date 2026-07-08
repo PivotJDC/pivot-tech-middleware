@@ -238,6 +238,14 @@ describe('admin API', () => {
     expect(accountService.updateAccount).not.toHaveBeenCalled();
   });
 
+  it('GET /admin/accounts/:id/port-pin returns the PIN for CSR support', async () => {
+    accountService.getPortPin.mockResolvedValueOnce({ port_out_pin: '654321' });
+    const res = await request(app).get('/admin/accounts/a1/port-pin');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ port_out_pin: '654321' });
+    expect(accountService.getPortPin).toHaveBeenCalledWith('a1');
+  });
+
   it('DELETE /admin/accounts/:id hard-deletes with the confirm header', async () => {
     accountService.deleteAccount.mockResolvedValueOnce({ deleted: true });
     const res = await request(app)

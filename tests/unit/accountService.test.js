@@ -331,6 +331,31 @@ describe('createAccount', () => {
     expect(insertedParams[12]).toBe('FOX-12345');
   });
 
+  it('generates a 6-digit port-out PIN on the accounts INSERT', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] }); // email pre-check
+    didOrchestration.assignDid.mockResolvedValueOnce(credentials);
+    crypto.hashPassword.mockResolvedValueOnce('hashed-pw');
+    let insertedParams;
+    db.withTransaction.mockImplementationOnce(async (fn) => {
+      const client = {
+        query: jest.fn()
+          .mockImplementationOnce((_sql, params) => {
+            insertedParams = params;
+            return { rows: [baseRow] };
+          })
+          .mockResolvedValueOnce({ rows: [] }),
+      };
+      return fn(client);
+    });
+
+    await accountService.createAccount({
+      email: 'a@b.co', market: 'lewiston-id', service_address: SVC_ADDR,
+    });
+
+    // $21 port_out_pin — a 6-digit numeric string.
+    expect(insertedParams[20]).toMatch(/^\d{6}$/);
+  });
+
   it('defaults billing provider to telgoo5 with no promo code', async () => {
     db.query.mockResolvedValueOnce({ rows: [] }); // email pre-check
     didOrchestration.assignDid.mockResolvedValueOnce(credentials);
@@ -1087,9 +1112,50 @@ describe('deleteAccount', () => {
   });
 });
 
+describe('port-out PIN', () => {
+  it('getPortPin returns the stored PIN', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ port_out_pin: '123456' }] });
+    expect(await accountService.getPortPin(baseRow.id)).toEqual({ port_out_pin: '123456' });
+  });
+
+  it('getPortPin lazily generates + persists when the PIN is missing', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ port_out_pin: null }] }) // SELECT
+      .mockResolvedValueOnce({ rows: [] }); // UPDATE
+    const { port_out_pin: pin } = await accountService.getPortPin(baseRow.id);
+    expect(pin).toMatch(/^\d{6}$/);
+    expect(db.query.mock.calls[1][0]).toMatch(/UPDATE accounts SET port_out_pin/);
+    expect(db.query.mock.calls[1][1]).toEqual([pin, baseRow.id]);
+  });
+
+  it('getPortPin throws NOT_FOUND for an unknown account', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await expect(accountService.getPortPin(baseRow.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('resetPortPin generates a new 6-digit PIN and persists it', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ id: baseRow.id }] }); // UPDATE RETURNING
+    const { port_out_pin: pin } = await accountService.resetPortPin(baseRow.id);
+    expect(pin).toMatch(/^\d{6}$/);
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/UPDATE accounts SET port_out_pin = \$1/);
+    expect(sql).toMatch(/RETURNING id/);
+    expect(params).toEqual([pin, baseRow.id]);
+  });
+
+  it('resetPortPin throws NOT_FOUND for an unknown account', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await expect(accountService.resetPortPin(baseRow.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
 describe('serializeAccount', () => {
   it('strips the password hash', () => {
     expect(accountService.serializeAccount(baseRow)).not.toHaveProperty('sip_password_hash');
+  });
+  it('strips the port-out PIN (served only via the dedicated endpoints)', () => {
+    expect(accountService.serializeAccount({ ...baseRow, port_out_pin: '123456' }))
+      .not.toHaveProperty('port_out_pin');
   });
   it('passes through null', () => {
     expect(accountService.serializeAccount(null)).toBeNull();
