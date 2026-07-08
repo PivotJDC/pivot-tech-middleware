@@ -86,10 +86,12 @@ async function recordCall({
   const duration = durationSeconds == null ? null : Number(durationSeconds);
 
   // UPSERT by call_sid: update an existing row in place (COALESCE so a partial
-  // status event doesn't wipe data we already captured), else insert.
+  // status event doesn't wipe data we already captured), else insert. A
+  // 'voicemail' outcome is sticky — once a call left a voicemail, a later
+  // generic hangup/'completed' status webhook must not overwrite that label.
   const updated = await db.query(
     `UPDATE call_records
-        SET status = $1,
+        SET status = CASE WHEN status = 'voicemail' THEN status ELSE $1 END,
             duration_seconds = COALESCE($2, duration_seconds),
             started_at = COALESCE($3, started_at),
             ended_at = COALESCE($4, ended_at)

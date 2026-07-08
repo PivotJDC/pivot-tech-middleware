@@ -191,7 +191,7 @@ function recordingDurationFor(rec) {
  * and the /status hangup safety net so both paths behave identically.
  */
 async function storeVoicemailRecording({
-  account, from, recordingUrl, recordingSid, durationSeconds,
+  account, from, callSid, recordingUrl, recordingSid, durationSeconds,
 }) {
   // Idempotency: the same recording can now reach us via up to three paths for
   // one call — the <Record> action, its recordingStatusCallback, and the
@@ -277,6 +277,27 @@ async function storeVoicemailRecording({
     );
   });
 
+  // Surface the voicemail in call history as an inbound call whose outcome is
+  // "voicemail" (recordCall UPSERTs by call_sid and keeps this label sticky).
+  // Best-effort — a CDR failure must not break voicemail storage.
+  if (callSid) {
+    try {
+      await cdrService.recordCall({
+        callSid,
+        direction: 'inbound',
+        from,
+        to: account.phone_e164,
+        status: 'voicemail',
+        durationSeconds,
+      });
+    } catch (err) {
+      logger.warn(
+        { accountId: account.id, err: err.message },
+        'marking call as voicemail failed (best-effort)',
+      );
+    }
+  }
+
   return voicemail;
 }
 
@@ -309,6 +330,7 @@ async function recoverVoicemailOnHangup(callSid) {
         await storeVoicemailRecording({
           account,
           from: pending.from || 'unknown',
+          callSid,
           recordingUrl: recordingUrlFor(recording),
           recordingSid: recording.id || recording.recording_id || null,
           durationSeconds: recordingDurationFor(recording),
@@ -679,7 +701,7 @@ router.post(
       const account = await safeGetAccount(accountId);
       if (account && recordingUrl) {
         await storeVoicemailRecording({
-          account, from, recordingUrl, recordingSid, durationSeconds,
+          account, from, callSid, recordingUrl, recordingSid, durationSeconds,
         });
       }
     } catch (err) {

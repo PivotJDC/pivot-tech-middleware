@@ -596,6 +596,25 @@ describe('POST /v1/voice/voicemail-complete', () => {
     expect(cache.del).toHaveBeenCalledWith('vm-pending:CAvm1');
   });
 
+  it('marks the inbound call as a voicemail in call history', async () => {
+    accountService.getAccountById.mockResolvedValueOnce({
+      id: 'a1', tenant_id: 'ten-1', phone_e164: '+12085550100',
+    });
+    voicemailService.createVoicemail.mockResolvedValueOnce({ id: 'vm-1' });
+    cdrService.recordCall.mockClear();
+    await request(app)
+      .post('/v1/voice/voicemail-complete?accountId=a1&from=%2B12085550142')
+      .type('form')
+      .send({ RecordingUrl: 'https://telnyx/rec', RecordingDuration: '8', CallSid: 'CAvm2' });
+    expect(cdrService.recordCall).toHaveBeenCalledWith(expect.objectContaining({
+      callSid: 'CAvm2',
+      direction: 'inbound',
+      from: '+12085550142',
+      to: '+12085550100',
+      status: 'voicemail',
+    }));
+  });
+
   it('dedupes a duplicate callback for the same recording (action + recordingStatusCallback)', async () => {
     accountService.getAccountById.mockResolvedValueOnce({ id: 'a1', tenant_id: 'ten-1' });
     cache.get.mockReset();

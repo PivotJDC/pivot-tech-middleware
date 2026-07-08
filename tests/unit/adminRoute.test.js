@@ -23,9 +23,9 @@ const provisioningService = require('../../src/services/provisioningService');
 const cdrService = require('../../src/services/cdrService');
 const usageService = require('../../src/services/usageService');
 const voicemailService = require('../../src/services/voicemailService');
-const s3 = require('../../src/integrations/s3');
 const adminRouter = require('../../src/routes/admin');
 const { errorHandler } = require('../../src/middleware/errorHandler');
+const { logger } = require('../../src/utils/logger');
 
 function buildApp() {
   const app = express();
@@ -330,16 +330,56 @@ describe('admin API', () => {
     expect(accountService.getEsimQr).toHaveBeenCalledWith('a1', { regenerate: true });
   });
 
-  it('GET /admin/accounts/:id/voicemails lists voicemails', async () => {
-    voicemailService.getVoicemails.mockResolvedValueOnce([{ id: 'vm-1' }]);
+  it('GET /admin/accounts/:id/voicemails returns metadata only, with an audit log', async () => {
+    const longText = 'A'.repeat(120);
+    voicemailService.getVoicemails.mockResolvedValueOnce([{
+      id: 'vm-1',
+      caller_number: '+12085550142',
+      caller_name: 'Jane',
+      duration_seconds: 12,
+      is_read: false,
+      created_at: '2026-07-08T00:00:00.000Z',
+      transcription: longText,
+      recording_url: 'https://s3/rec.wav',
+      recording_s3_key: 'voicemails/a1/vm-1.wav',
+      recording_sid: 'RS1',
+    }]);
+    const auditSpy = jest.spyOn(logger, 'info').mockImplementation(() => {});
+
     const res = await request(app).get('/admin/accounts/a1/voicemails?limit=10');
+
     expect(res.status).toBe(200);
-    expect(res.body.voicemails).toEqual([{ id: 'vm-1' }]);
+    const [vm] = res.body.voicemails;
+    // Metadata + a 50-char transcription preview.
+    expect(vm).toMatchObject({
+      id: 'vm-1',
+      caller_number: '+12085550142',
+      duration_seconds: 12,
+      is_read: false,
+      transcription_preview: 'A'.repeat(50),
+      transcription_truncated: true,
+    });
+    // Playback fields + full transcription are NOT exposed to admins (privacy).
+    expect(vm).not.toHaveProperty('recording_url');
+    expect(vm).not.toHaveProperty('recording_s3_key');
+    expect(vm).not.toHaveProperty('recording_sid');
+    expect(vm).not.toHaveProperty('transcription');
+    // Audit log for the metadata view.
+    expect(auditSpy).toHaveBeenCalledWith(
+      { adminId: 'admin-1', voicemailId: 'vm-1' },
+      'admin viewed voicemail metadata',
+    );
     expect(voicemailService.getVoicemails).toHaveBeenCalledWith(
       'a1',
       { limit: '10', offset: undefined },
       null, // tenantScope: super_admin sees all
     );
+    auditSpy.mockRestore();
+  });
+
+  it('no longer exposes an admin voicemail-recording endpoint', async () => {
+    const res = await request(app).get('/admin/voicemails/vm-1/recording?format=json');
+    expect(res.status).toBe(404);
   });
 
   it('PATCH /admin/voicemails/:id/read marks a voicemail read', async () => {
@@ -360,20 +400,6 @@ describe('admin API', () => {
     const res = await request(app).delete('/admin/voicemails/vm-1');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ deleted: true, id: 'vm-1' });
-  });
-
-  it('GET /admin/voicemails/:id/recording returns a signed URL (?format=json)', async () => {
-    voicemailService.getById.mockResolvedValueOnce({ id: 'vm-1', recording_s3_key: 'k' });
-    s3.signedUrlForVoicemail.mockResolvedValueOnce('https://signed.example/x');
-    const res = await request(app).get('/admin/voicemails/vm-1/recording?format=json');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ url: 'https://signed.example/x' });
-  });
-
-  it('GET /admin/voicemails/:id/recording 404s when missing', async () => {
-    voicemailService.getById.mockResolvedValueOnce(null);
-    const res = await request(app).get('/admin/voicemails/vm-x/recording?format=json');
-    expect(res.status).toBe(404);
   });
 
   it('GET /admin/dids lists inventory', async () => {

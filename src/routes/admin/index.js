@@ -26,7 +26,6 @@ const adminUserService = require('../../services/adminUserService');
 const cdrService = require('../../services/cdrService');
 const usageService = require('../../services/usageService');
 const voicemailService = require('../../services/voicemailService');
-const s3 = require('../../integrations/s3');
 const tenantsRouter = require('./tenants');
 const { adminAuth, requireRole } = require('../../middleware/adminAuth');
 const { rateLimit } = require('../../middleware/rateLimiter');
@@ -198,7 +197,28 @@ router.get(
   }),
 );
 
-// Voicemails for an account (admin + super_admin).
+// Voicemails for an account — METADATA ONLY (admin + super_admin). Recording
+// playback is intentionally NOT available to admins for privacy; the audio is
+// reachable only by the subscriber (customer portal / dial-in IVR). The
+// transcription is truncated to a short preview for CSR context; the full text
+// is subscriber-only. Each metadata view is audit-logged.
+const TRANSCRIPTION_PREVIEW_MAX = 50;
+
+function toVoicemailMetadata(vm) {
+  const text = vm.transcription || '';
+  return {
+    id: vm.id,
+    caller_number: vm.caller_number,
+    caller_name: vm.caller_name,
+    duration_seconds: vm.duration_seconds,
+    is_read: vm.is_read,
+    created_at: vm.created_at,
+    // Preview only — never the full message body (privacy).
+    transcription_preview: text ? text.slice(0, TRANSCRIPTION_PREVIEW_MAX) : null,
+    transcription_truncated: text.length > TRANSCRIPTION_PREVIEW_MAX,
+  };
+}
+
 router.get(
   '/accounts/:id/voicemails',
   requireRole('super_admin', 'admin'),
@@ -209,29 +229,19 @@ router.get(
       { limit, offset },
       tenantScope(req),
     );
-    res.json({ voicemails });
+    // Audit: record that this admin viewed each voicemail's metadata.
+    voicemails.forEach((vm) => logger.info(
+      { adminId: req.admin.id, voicemailId: vm.id },
+      'admin viewed voicemail metadata',
+    ));
+    res.json({ voicemails: voicemails.map(toVoicemailMetadata) });
   }),
 );
 
-// Signed recording URL — 302 redirect, or ?format=json → { url } for the SPA
-// audio player (which can't send an auth header).
-router.get(
-  '/voicemails/:id/recording',
-  requireRole('super_admin', 'admin'),
-  asyncHandler(async (req, res) => {
-    const voicemail = await voicemailService.getById(req.params.id, {
-      tenantId: tenantScope(req),
-    });
-    if (!voicemail) throw errors.notFound('Voicemail not found.');
-    const url = await s3.signedUrlForVoicemail(voicemail, 3600);
-    if (!url) throw errors.notFound('No recording available.');
-    if (req.query.format === 'json') {
-      res.json({ url });
-      return;
-    }
-    res.redirect(302, url);
-  }),
-);
+// NOTE: the admin voicemail-recording playback endpoint has been removed for
+// privacy — admins can see that a voicemail was left but cannot listen to it.
+// Playback lives only with the subscriber (GET /v1/account/voicemails/:id/recording)
+// and the dial-in IVR.
 
 // Mark a voicemail read.
 router.patch(

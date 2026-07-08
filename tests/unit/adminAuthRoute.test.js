@@ -342,10 +342,9 @@ describe('voicemail admin routes (super_admin + admin)', () => {
     expect(voicemailService.deleteVoicemail).not.toHaveBeenCalled();
   });
 
-  it('forbids a viewer from the recording endpoint', async () => {
-    mockAdmin = { id: 'v', role: 'viewer' };
+  it('exposes no admin voicemail-recording endpoint (removed for privacy)', async () => {
     const res = await request(app).get('/admin/voicemails/vm-1/recording?format=json');
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
     expect(voicemailService.getById).not.toHaveBeenCalled();
   });
 });

@@ -55,6 +55,19 @@ describe('recordCall', () => {
     expect(db.query.mock.calls[1][0]).toMatch(/UPDATE call_records/);
   });
 
+  it("keeps a 'voicemail' outcome sticky against a later status (SQL CASE guard)", async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID, tenant_id: 'ten-1' }] }) // lookup
+      .mockResolvedValueOnce({ rows: [{ id: 'cr-1', status: 'voicemail' }] }); // UPDATE hit
+
+    await cdr.recordCall({
+      callSid: 'CA1', direction: 'inbound', from: OTHER, to: OUR_DID, status: 'completed',
+    });
+
+    // The UPDATE preserves an existing 'voicemail' status rather than overwriting it.
+    expect(db.query.mock.calls[1][0]).toMatch(/SET status = CASE WHEN status = 'voicemail' THEN status ELSE \$1 END/);
+  });
+
   it('infers inbound direction when no direction is given and the to-number is ours', async () => {
     db.query
       .mockResolvedValueOnce({ rows: [] }) // from not ours
