@@ -194,6 +194,25 @@ describe('typed API calls', () => {
     });
   });
 
+  it('updatePhoneNumber attaches the outbound voice profile on the voice sub-resource', async () => {
+    global.fetch
+      .mockResolvedValueOnce(ok({
+        data: [{ id: '2990277475533063368', phone_number: '+12085550100' }],
+      })) // GET /phone_numbers?filter -> numeric resource id
+      .mockResolvedValueOnce(ok({ data: {} })); // PATCH /voice
+
+    await telnyx.updatePhoneNumber('+12085550100', {
+      outbound_voice_profile_id: '2999700951977165829',
+    });
+
+    const patch = global.fetch.mock.calls[1];
+    expect(patch[0]).toBe('https://api.telnyx.com/v2/phone_numbers/2990277475533063368/voice');
+    expect(patch[1].method).toBe('PATCH');
+    expect(JSON.parse(patch[1].body)).toEqual({
+      outbound_voice_profile_id: '2999700951977165829',
+    });
+  });
+
   it('provisionPhoneNumber retries the messaging PATCH once on a 404 (sub-resource not ready)', async () => {
     global.fetch
       .mockResolvedValueOnce(ok({

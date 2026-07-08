@@ -314,6 +314,10 @@ async function updatePhoneNumber(e164, fields = {}) {
       cnam_listing_details: fields.caller_id_name_as,
     };
   }
+  // Attaching the outbound voice profile authorizes the DID for outbound SIP.
+  if (fields.outbound_voice_profile_id !== undefined) {
+    body.outbound_voice_profile_id = fields.outbound_voice_profile_id;
+  }
   return unwrap(await request('PATCH', `/phone_numbers/${numberId}/voice`, body));
 }
 

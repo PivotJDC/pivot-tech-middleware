@@ -142,10 +142,11 @@ function buildConfig() {
       apiKey: process.env.TELNYX_API_KEY || '',
       sipConnectionId: process.env.TELNYX_SIP_CONNECTION_ID || '',
       messagingProfileId: process.env.TELNYX_MESSAGING_PROFILE_ID || '',
-      // Outbound voice profile attached to the TeXML voice application. Defaults
-      // to the known-working "Default" profile (NOT the MobilityNet one).
+      // Outbound voice profile attached to each subscriber DID so Telnyx
+      // authorizes it for outbound SIP (without it, outbound calls present the
+      // wrong caller ID).
       outboundVoiceProfileId:
-        process.env.TELNYX_OUTBOUND_VOICE_PROFILE_ID || '2619744427022747121',
+        process.env.TELNYX_OUTBOUND_VOICE_PROFILE_ID || '2999700951977165829',
       // Ed25519 public key (base64, from Mission Control or GET /v2/public_key)
       // used to verify inbound Telnyx webhook signatures. When empty, signature
       // verification is skipped (dev/back-compat) — see telnyxWebhookVerify.

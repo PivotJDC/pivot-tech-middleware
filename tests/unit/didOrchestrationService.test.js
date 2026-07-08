@@ -46,6 +46,10 @@ describe('assignDid', () => {
       cnam_listing_enabled: true,
       caller_id_name_as: 'MobilityNet',
     });
+    // The DID is authorized for outbound SIP via the outbound voice profile.
+    expect(telnyx.updatePhoneNumber).toHaveBeenCalledWith('+12085550100', {
+      outbound_voice_profile_id: '2999700951977165829',
+    });
   });
 
   it('provisions E911 (best-effort) when an enrollment serviceAddress is supplied', async () => {
@@ -90,10 +94,24 @@ describe('assignDid', () => {
     telnyx.createSipEndpoint.mockResolvedValueOnce({
       id: 'ep-1', sip_username: 'u', sip_password: 'p',
     });
-    telnyx.updatePhoneNumber.mockRejectedValueOnce(new Error('telnyx 422'));
+    // 1st updatePhoneNumber = outbound voice profile (must succeed); 2nd = CNAM
+    // (best-effort — its failure must not fail account creation).
+    telnyx.updatePhoneNumber
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error('telnyx 422'));
 
     const cred = await did.assignDid('lewiston-id');
     expect(cred).toMatchObject({ phoneE164: '+12085550100', sipEndpointId: 'ep-1' });
+  });
+
+  it('propagates a failure to attach the outbound voice profile (not best-effort)', async () => {
+    telnyx.searchAvailableNumbers.mockResolvedValueOnce([{ number: '+12085550100' }]);
+    telnyx.provisionPhoneNumber.mockResolvedValueOnce({ id: 'sid-1' });
+    telnyx.updatePhoneNumber.mockRejectedValueOnce(new Error('telnyx 422'));
+
+    await expect(did.assignDid('lewiston-id')).rejects.toThrow('telnyx 422');
+    // Failed before creating the SIP credential.
+    expect(telnyx.createSipEndpoint).not.toHaveBeenCalled();
   });
 
   it('truncates a long subscriber name to the 15-char CNAM limit', async () => {

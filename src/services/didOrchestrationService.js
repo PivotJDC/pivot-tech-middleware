@@ -12,6 +12,7 @@
  */
 const nodeCrypto = require('crypto');
 const telnyx = require('../integrations/telnyx');
+const config = require('../config');
 const { logger } = require('../utils/logger');
 const { errors, AppError } = require('../middleware/errorHandler');
 const MARKET_AREA_CODES = require('../config/markets');
@@ -143,6 +144,14 @@ async function assignDid(
     purchase = await telnyx.provisionPhoneNumber(e164);
   }
   const signalwireSid = idOf(purchase);
+
+  // Authorize the DID for outbound SIP by attaching the outbound voice profile.
+  // Without it, Telnyx doesn't recognize the number as an authorized outbound
+  // caller ID and outbound calls present the wrong number.
+  await telnyx.updatePhoneNumber(e164, {
+    outbound_voice_profile_id: config.telnyx.outboundVoiceProfileId,
+  });
+  logger.info({ phoneE164: e164 }, 'attached outbound voice profile to DID');
 
   // Telnyx auto-generates the SIP credentials; we only supply a recognizable
   // name for the Telnyx portal. The credential's real sip_username/sip_password
