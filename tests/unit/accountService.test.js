@@ -2,6 +2,7 @@ jest.mock('../../src/db');
 jest.mock('../../src/services/didOrchestrationService');
 jest.mock('../../src/services/telgoo5Service');
 jest.mock('../../src/integrations/bics');
+jest.mock('../../src/integrations/telnyx');
 jest.mock('../../src/utils/crypto');
 jest.mock('../../src/utils/logger', () => ({
   logger: { info: () => {}, warn: () => {}, error: () => {} },
@@ -12,6 +13,7 @@ const db = require('../../src/db');
 const didOrchestration = require('../../src/services/didOrchestrationService');
 const telgoo5Service = require('../../src/services/telgoo5Service');
 const bics = require('../../src/integrations/bics');
+const telnyx = require('../../src/integrations/telnyx');
 const crypto = require('../../src/utils/crypto');
 const accountService = require('../../src/services/accountService');
 
@@ -870,6 +872,65 @@ describe('updateAccount status machine', () => {
     expect(sql).toMatch(/sip_endpoint_id = \$2/);
     expect(values).toEqual(['u2', 'ep2', baseRow.id]);
     expect(result.sip_username).toBe('u2');
+  });
+});
+
+describe('deleteAccount', () => {
+  let client;
+  beforeEach(() => {
+    telnyx.deletePhoneNumber.mockReset().mockResolvedValue(undefined);
+    telnyx.deleteSipEndpoint.mockReset().mockResolvedValue(undefined);
+    bics.suspendEndpoint.mockReset().mockResolvedValue(undefined);
+    client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    db.withTransaction.mockImplementation(async (fn) => fn(client));
+  });
+
+  it('releases the DID, deactivates BICS, and deletes child rows + the account', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ ...baseRow, bics_endpoint_id: 'ep-bics-1' }] }); // getAccountById
+
+    const result = await accountService.deleteAccount(baseRow.id);
+
+    expect(result).toEqual({ deleted: true });
+    expect(telnyx.deletePhoneNumber).toHaveBeenCalledWith('+12085550100');
+    expect(telnyx.deleteSipEndpoint).toHaveBeenCalledWith('ep-1');
+    expect(bics.suspendEndpoint).toHaveBeenCalledWith('ep-bics-1');
+
+    const statements = client.query.mock.calls.map((c) => c[0]);
+    // Child lines detached, every child table purged, account row removed last.
+    expect(statements).toEqual(expect.arrayContaining([
+      expect.stringMatching(/UPDATE accounts SET parent_account_id = NULL/),
+      expect.stringMatching(/DELETE FROM messages WHERE account_id = \$1/),
+      expect.stringMatching(/DELETE FROM call_records WHERE account_id = \$1/),
+      expect.stringMatching(/DELETE FROM voicemails WHERE account_id = \$1/),
+      expect.stringMatching(/DELETE FROM usage_records WHERE account_id = \$1/),
+      expect.stringMatching(/DELETE FROM push_tokens WHERE account_id = \$1/),
+      expect.stringMatching(/DELETE FROM dids WHERE account_id = \$1/),
+      expect.stringMatching(/DELETE FROM accounts WHERE id = \$1/),
+    ]));
+    // The accounts row delete is the final statement.
+    expect(statements[statements.length - 1]).toMatch(/DELETE FROM accounts WHERE id = \$1/);
+  });
+
+  it('skips BICS deactivation when the account has no endpoint', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ ...baseRow, bics_endpoint_id: null }] });
+    await accountService.deleteAccount(baseRow.id);
+    expect(bics.suspendEndpoint).not.toHaveBeenCalled();
+  });
+
+  it('still deletes the DB rows when the Telnyx DID release fails (best-effort)', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ ...baseRow, bics_endpoint_id: 'ep-bics-1' }] });
+    telnyx.deletePhoneNumber.mockRejectedValueOnce(new Error('telnyx down'));
+    const result = await accountService.deleteAccount(baseRow.id);
+    expect(result).toEqual({ deleted: true });
+    expect(client.query).toHaveBeenCalledWith('DELETE FROM accounts WHERE id = $1', [baseRow.id]);
+  });
+
+  it('throws NOT_FOUND for an unknown account and touches no vendor', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] }); // getAccountById → none
+    await expect(accountService.deleteAccount(baseRow.id))
+      .rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(telnyx.deletePhoneNumber).not.toHaveBeenCalled();
+    expect(db.withTransaction).not.toHaveBeenCalled();
   });
 });
 

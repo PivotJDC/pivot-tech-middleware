@@ -361,6 +361,15 @@ async function deleteSipEndpoint(sipEndpointId) {
   return request('DELETE', `/telephony_credentials/${sipEndpointId}`);
 }
 
+/**
+ * Release a phone number back to Telnyx (on account deletion). Per the number
+ * DECISION above, DELETE /v2/phone_numbers/{id} accepts the +E.164 directly.
+ * @param {string} e164
+ */
+async function deletePhoneNumber(e164) {
+  return request('DELETE', `/phone_numbers/${encodeURIComponent(e164)}`);
+}
+
 // Telnyx address-suggestion `source.pointer` -> our address field name.
 const E911_POINTER_TO_FIELD = {
   '/street_address': 'line1',
@@ -640,6 +649,7 @@ module.exports = {
   getSipEndpoint,
   updateSipEndpoint,
   deleteSipEndpoint,
+  deletePhoneNumber,
   updateConnectionOutbound,
   createE911Address,
   enableE911,

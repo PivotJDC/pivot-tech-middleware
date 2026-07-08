@@ -238,6 +238,31 @@ describe('admin API', () => {
     expect(accountService.updateAccount).not.toHaveBeenCalled();
   });
 
+  it('DELETE /admin/accounts/:id hard-deletes with the confirm header', async () => {
+    accountService.deleteAccount.mockResolvedValueOnce({ deleted: true });
+    const res = await request(app)
+      .delete('/admin/accounts/a1')
+      .set('X-Confirm-Delete', 'true');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: true });
+    expect(accountService.deleteAccount).toHaveBeenCalledWith('a1');
+  });
+
+  it('DELETE /admin/accounts/:id requires the X-Confirm-Delete header', async () => {
+    const res = await request(app).delete('/admin/accounts/a1');
+    expect(res.status).toBe(400);
+    expect(res.body.error.field).toBe('confirm');
+    expect(accountService.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('DELETE /admin/accounts/:id rejects a non-"true" confirm header', async () => {
+    const res = await request(app)
+      .delete('/admin/accounts/a1')
+      .set('X-Confirm-Delete', 'yes');
+    expect(res.status).toBe(400);
+    expect(accountService.deleteAccount).not.toHaveBeenCalled();
+  });
+
   it('PATCH /admin/accounts/:id rejects an unsupported action', async () => {
     const res = await request(app).patch('/admin/accounts/a1').send({ action: 'nope' });
     expect(res.status).toBe(400);

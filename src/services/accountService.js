@@ -15,6 +15,7 @@ const didOrchestration = require('./didOrchestrationService');
 const billingMigration = require('./billingMigrationService');
 const telgoo5Service = require('./telgoo5Service');
 const bics = require('../integrations/bics');
+const telnyx = require('../integrations/telnyx');
 const { DEFAULT_TENANT_ID } = require('./tenantService');
 const crypto = require('../utils/crypto');
 const e164 = require('../utils/e164');
@@ -737,6 +738,74 @@ async function transitionStatus(id, status) {
   return updateAccount(id, { status });
 }
 
+// Every table with an account_id FK to accounts(id). All child rows must go
+// before the account row or the DELETE hits a foreign-key violation. Order
+// among them is irrelevant (none reference each other).
+const ACCOUNT_CHILD_TABLES = [
+  'messages',
+  'message_records',
+  'call_records',
+  'voicemails',
+  'usage_records',
+  'push_tokens',
+  'billing_migrations',
+  'provisioning_tokens',
+  'port_requests',
+  'dids',
+];
+
+/**
+ * Hard-delete an account and everything attached to it — for removing test /
+ * duplicate accounts. Releases the DID at Telnyx and deactivates the BICS
+ * endpoint (both best-effort: external cleanup must not block the DB delete),
+ * then removes all child rows + the account row in one transaction.
+ * @param {string} id
+ * @returns {Promise<{ deleted: true }>}
+ */
+async function deleteAccount(id) {
+  const account = await getAccountById(id); // throws NOT_FOUND on a bad id
+
+  // Best-effort external cleanup. Log-and-continue on any failure so a vendor
+  // hiccup can't strand an account half-deleted in our DB.
+  if (account.phone_e164) {
+    try {
+      await telnyx.deletePhoneNumber(account.phone_e164);
+      logger.info({ accountId: id }, 'released DID at Telnyx during account deletion');
+    } catch (err) {
+      logger.warn({ accountId: id, err: err.message }, 'Telnyx DID release failed (best-effort)');
+    }
+  }
+  if (account.sip_endpoint_id) {
+    try {
+      await telnyx.deleteSipEndpoint(account.sip_endpoint_id);
+    } catch (err) {
+      logger.warn({ accountId: id, err: err.message }, 'Telnyx SIP credential delete failed (best-effort)');
+    }
+  }
+  if (account.bics_endpoint_id) {
+    try {
+      // BICS has no hard-delete; suspending the endpoint deactivates service.
+      await bics.suspendEndpoint(account.bics_endpoint_id);
+      logger.info({ accountId: id }, 'deactivated BICS endpoint during account deletion');
+    } catch (err) {
+      logger.warn({ accountId: id, err: err.message }, 'BICS endpoint deactivation failed (best-effort)');
+    }
+  }
+
+  await db.withTransaction(async (client) => {
+    // Detach any child (family) lines so their parent FK doesn't block the delete.
+    await client.query('UPDATE accounts SET parent_account_id = NULL WHERE parent_account_id = $1', [id]);
+    for (let i = 0; i < ACCOUNT_CHILD_TABLES.length; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(`DELETE FROM ${ACCOUNT_CHILD_TABLES[i]} WHERE account_id = $1`, [id]);
+    }
+    await client.query('DELETE FROM accounts WHERE id = $1', [id]);
+  });
+
+  logger.info({ accountId: id }, 'account hard-deleted');
+  return { deleted: true };
+}
+
 /**
  * Re-run BICS eSIM provisioning for an account whose initial attempt failed
  * (admin retry action). Unlike createAccount's best-effort path, a failure here
@@ -864,6 +933,7 @@ module.exports = {
   getAccountStatus,
   updateAccount,
   transitionStatus,
+  deleteAccount,
   retryBicsProvisioning,
   getEsimQr,
   setSipPasswordHash,

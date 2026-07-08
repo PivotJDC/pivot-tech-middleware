@@ -370,6 +370,25 @@ router.patch(
   }),
 );
 
+// Hard-delete an account and all related records (super_admin only). Guarded by
+// an explicit X-Confirm-Delete: true header so it can't be triggered casually.
+// Releases the DID at Telnyx + deactivates the BICS endpoint (best-effort).
+router.delete(
+  '/accounts/:id',
+  requireRole('super_admin'),
+  asyncHandler(async (req, res) => {
+    if (req.get('X-Confirm-Delete') !== 'true') {
+      throw errors.validation(
+        'Account deletion requires the "X-Confirm-Delete: true" header.',
+        'confirm',
+      );
+    }
+    const result = await accountService.deleteAccount(req.params.id);
+    logger.info({ adminId: req.admin.id, accountId: req.params.id }, 'admin hard-deleted account');
+    res.json(result);
+  }),
+);
+
 // Status transitions a given admin action maps to. transitionStatus enforces
 // the state machine (legal transitions) and stamps activated_at / cancelled_at.
 const STATUS_FOR_ACTION = {

@@ -68,6 +68,14 @@ describe('request retry policy', () => {
 });
 
 describe('typed API calls', () => {
+  it('deletePhoneNumber issues a DELETE keyed by the E.164', async () => {
+    global.fetch.mockResolvedValueOnce({ ok: true, status: 204, text: async () => '' });
+    await telnyx.deletePhoneNumber('+12085550100');
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.telnyx.com/v2/phone_numbers/%2B12085550100');
+    expect(init.method).toBe('DELETE');
+  });
+
   it('getCallRecordings first tries the call_session_id recordings filter', async () => {
     global.fetch.mockResolvedValueOnce(ok({
       data: [{ id: 'REC1', download_urls: { wav: 'https://telnyx/rec.wav' } }],
