@@ -92,6 +92,21 @@ describe('acrobits.buildAccountXml', () => {
     expect(xml).toContain('</rewriting>');
   });
 
+  it('asserts the subscriber identity via P-Preferred-Identity on outbound calls', () => {
+    const xml = acrobits.buildAccountXml(params);
+    // Header value is the subscriber's own E.164; angle brackets XML-escaped.
+    expect(xml).toContain(
+      '<action type="setHeader" param="P-Preferred-Identity: '
+      + '&lt;sip:+12085550100@sip.telnyx.com&gt;"/>',
+    );
+    // Applied to every outbound call — one setHeader per rewriting rule
+    // (10-digit, 11-digit-leading-1, already-+E.164).
+    const count = (xml.match(/type="setHeader"/g) || []).length;
+    expect(count).toBe(3);
+    // A catch-all rule for numbers already in +E.164.
+    expect(xml).toContain('<condition type="startsWith" param="+"/>');
+  });
+
   it('escapes XML special characters in values', () => {
     const xml = acrobits.buildAccountXml({ ...params, sipPassword: 'a&b<c>"d\'' });
     expect(xml).toContain('<password>a&amp;b&lt;c&gt;&quot;d&apos;</password>');

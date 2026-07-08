@@ -75,6 +75,14 @@ function buildAccountXml({
     + '&amp;pushTokenOther=%pushTokenOther%&amp;pushappid_incoming_call=%pushappid_incoming_call%'
     + '&amp;pushappid_other=%pushappid_other%';
 
+  // Set the subscriber's own E.164 as the SIP asserted identity on every
+  // outbound call. Telnyx honors P-Preferred-Identity to derive the caller ID,
+  // so calls present the subscriber's number even without an explicit ANI
+  // override. The header value is the SUBSCRIBER's number (fixed per account),
+  // not the dialed number; the angle brackets are XML-escaped for the attribute.
+  const ppiAction = '        <action type="setHeader" param="'
+    + `${escapeXml(`P-Preferred-Identity: <sip:${phoneE164}@sip.telnyx.com>`)}"/>`;
+
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<account>',
@@ -106,6 +114,7 @@ function buildAccountXml({
     '      </conditions>',
     '      <actions>',
     '        <action type="prepend" param="+1"/>',
+    ppiAction,
     '      </actions>',
     '    </rule>',
     '    <rule>',
@@ -116,6 +125,19 @@ function buildAccountXml({
     '      </conditions>',
     '      <actions>',
     '        <action type="prepend" param="+"/>',
+    ppiAction,
+    '      </actions>',
+    '    </rule>',
+    // Catch-all for numbers already in +E.164 (no prepend needed): still assert
+    // the subscriber identity so EVERY outbound call carries the header. Between
+    // the three rules the set {10-digit, 11-digit leading 1, +E.164} covers all
+    // valid outbound numbers, so exactly one rule fires per call.
+    '    <rule>',
+    '      <conditions>',
+    '        <condition type="startsWith" param="+"/>',
+    '      </conditions>',
+    '      <actions>',
+    ppiAction,
     '      </actions>',
     '    </rule>',
     '  </rewriting>',
