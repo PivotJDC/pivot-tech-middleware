@@ -41,14 +41,14 @@ describe('GET /v1/account/provisioning-qr', () => {
     accountService.getAccountById.mockResolvedValueOnce({ id: 'acc-1', sip_username: 'pivottech-abc' });
     provisioningService.buildProvisioningQr.mockResolvedValueOnce({
       qr_url: 'data:image/png;base64,AAA',
-      provisioning_url: 'cloudsoftphone://Pivot-Tech?username=pivottech-abc&password=pw',
+      provisioning_url: 'csc:pivottech-abc:pw@Pivot-Tech',
     });
 
     const res = await request(app).get('/v1/account/provisioning-qr').set('authorization', 'Bearer t');
 
     expect(res.status).toBe(200);
     expect(res.body.qr_url).toMatch(/^data:image\/png;base64,/);
-    expect(res.body.provisioning_url).toContain('cloudsoftphone://Pivot-Tech');
+    expect(res.body.provisioning_url).toMatch(/^csc:/);
     // Scoped to the token subject.
     expect(accountService.getAccountById).toHaveBeenCalledWith('acc-1');
   });

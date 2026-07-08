@@ -136,13 +136,13 @@ describe('provisionByToken', () => {
 });
 
 describe('buildProvisioningQr', () => {
-  it('encodes the Cloud Softphone deep link + a PNG data URL', async () => {
+  it('builds the Acrobits csc: QR text (csc:user:pass@CloudID) + a PNG data URL', async () => {
     didOrchestration.getSipPassword.mockResolvedValueOnce('s3cr3t/pw+1');
 
     const result = await provisioning.buildProvisioningQr(account);
 
-    expect(result.provisioning_url)
-      .toBe('cloudsoftphone://Pivot-Tech?username=pivottech-abc&password=s3cr3t%2Fpw%2B1');
+    // config.acrobits.cloudId is mocked to '54873' in this suite.
+    expect(result.provisioning_url).toBe('csc:pivottech-abc:s3cr3t%2Fpw%2B1@54873');
     expect(result.qr_url).toMatch(/^data:image\/png;base64,/);
     expect(didOrchestration.getSipPassword).toHaveBeenCalledWith('ep-1');
   });

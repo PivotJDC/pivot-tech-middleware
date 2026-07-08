@@ -250,7 +250,7 @@ describe('admin API', () => {
     accountService.getAccountById.mockResolvedValueOnce({ id: 'a1', sip_username: 'pivottech-abc' });
     provisioningService.buildProvisioningQr.mockResolvedValueOnce({
       qr_url: 'data:image/png;base64,AAA',
-      provisioning_url: 'cloudsoftphone://Pivot-Tech?username=pivottech-abc&password=pw',
+      provisioning_url: 'csc:pivottech-abc:pw@Pivot-Tech',
     });
     const res = await request(app).get('/admin/accounts/a1/provisioning-qr');
     expect(res.status).toBe(200);
