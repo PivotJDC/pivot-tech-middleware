@@ -246,6 +246,20 @@ describe('admin API', () => {
     expect(accountService.getPortPin).toHaveBeenCalledWith('a1');
   });
 
+  it('GET /admin/accounts/:id/provisioning-qr returns the dialer QR', async () => {
+    accountService.getAccountById.mockResolvedValueOnce({ id: 'a1', sip_username: 'pivottech-abc' });
+    provisioningService.buildProvisioningQr.mockResolvedValueOnce({
+      qr_url: 'data:image/png;base64,AAA',
+      provisioning_url: 'cloudsoftphone://Pivot-Tech?username=pivottech-abc&password=pw',
+    });
+    const res = await request(app).get('/admin/accounts/a1/provisioning-qr');
+    expect(res.status).toBe(200);
+    expect(res.body.qr_url).toMatch(/^data:image\/png;base64,/);
+    expect(provisioningService.buildProvisioningQr).toHaveBeenCalledWith(
+      expect.objectContaining({ sip_username: 'pivottech-abc' }),
+    );
+  });
+
   it('DELETE /admin/accounts/:id hard-deletes with the confirm header', async () => {
     accountService.deleteAccount.mockResolvedValueOnce({ deleted: true });
     const res = await request(app)

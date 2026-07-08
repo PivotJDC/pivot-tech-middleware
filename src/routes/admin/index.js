@@ -380,6 +380,17 @@ router.get(
   }),
 );
 
+// Dialer provisioning QR (Cloud Softphone deep link with live SIP credentials)
+// for CSR-assisted setup (admin + super_admin).
+router.get(
+  '/accounts/:id/provisioning-qr',
+  requireRole('super_admin', 'admin'),
+  asyncHandler(async (req, res) => {
+    const account = await accountService.getAccountById(req.params.id);
+    res.json(await provisioningService.buildProvisioningQr(account));
+  }),
+);
+
 // Hard-delete an account and all related records (super_admin only). Guarded by
 // an explicit X-Confirm-Delete: true header so it can't be triggered casually.
 // Releases the DID at Telnyx + deactivates the BICS endpoint (best-effort).

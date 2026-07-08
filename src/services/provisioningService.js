@@ -74,6 +74,34 @@ async function buildLinks(rawToken, cscUri) {
   };
 }
 
+// The Cloud Softphone deep-link host (the branded app id). The dialer QR encodes
+// cloudsoftphone://Pivot-Tech?username=...&password=... — scanning it hands the
+// app the SIP credentials directly.
+const CLOUD_SOFTPHONE_HOST = 'Pivot-Tech';
+
+/**
+ * Build the dialer provisioning QR for an account: a Cloud Softphone deep link
+ * carrying the live SIP credentials, plus a PNG data URL of its QR. The
+ * plaintext password is held in memory only for this call and is NEVER logged
+ * (security rule #1); the QR is rendered locally, never via a third-party.
+ * @param {{ sip_username: string, sip_endpoint_id: string }} account
+ * @returns {Promise<{ qr_url: string, provisioning_url: string }>}
+ */
+async function buildProvisioningQr(account) {
+  if (!account.sip_endpoint_id || !account.sip_username) {
+    throw new AppError(
+      'INTERNAL_ERROR',
+      'Account is not ready for provisioning (DID assignment incomplete).',
+    );
+  }
+  const sipPassword = await resolveSipPassword(account);
+  const provisioningUrl = `cloudsoftphone://${CLOUD_SOFTPHONE_HOST}`
+    + `?username=${encodeURIComponent(account.sip_username)}`
+    + `&password=${encodeURIComponent(sipPassword)}`;
+  const qrUrl = await qrcode.toDataURL(provisioningUrl, { errorCorrectionLevel: 'M' });
+  return { qr_url: qrUrl, provisioning_url: provisioningUrl };
+}
+
 /**
  * Issue a fresh provisioning token for an account.
  * @param {{ id: string }} account
@@ -184,4 +212,5 @@ module.exports = {
   generateAccountXml,
   provisionByToken,
   buildLinks,
+  buildProvisioningQr,
 };

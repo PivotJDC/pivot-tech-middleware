@@ -135,6 +135,25 @@ describe('provisionByToken', () => {
   });
 });
 
+describe('buildProvisioningQr', () => {
+  it('encodes the Cloud Softphone deep link + a PNG data URL', async () => {
+    didOrchestration.getSipPassword.mockResolvedValueOnce('s3cr3t/pw+1');
+
+    const result = await provisioning.buildProvisioningQr(account);
+
+    expect(result.provisioning_url)
+      .toBe('cloudsoftphone://Pivot-Tech?username=pivottech-abc&password=s3cr3t%2Fpw%2B1');
+    expect(result.qr_url).toMatch(/^data:image\/png;base64,/);
+    expect(didOrchestration.getSipPassword).toHaveBeenCalledWith('ep-1');
+  });
+
+  it('throws when the account has no SIP credentials yet', async () => {
+    await expect(provisioning.buildProvisioningQr({ id: 'a1' }))
+      .rejects.toMatchObject({ code: 'INTERNAL_ERROR' });
+    expect(didOrchestration.getSipPassword).not.toHaveBeenCalled();
+  });
+});
+
 describe('reissueToken', () => {
   it('validates the account then issues a fresh token', async () => {
     accountService.getAccountById.mockResolvedValueOnce(account);
