@@ -15,7 +15,7 @@ const accountService = require('./accountService');
 const pushService = require('./pushService');
 const cdrService = require('./cdrService');
 const { errors } = require('../middleware/errorHandler');
-const { extFor, compressImageIfNeeded } = require('../utils/media');
+const { extFor, compressMediaIfNeeded } = require('../utils/media');
 const { logger } = require('../utils/logger');
 
 // Telnyx messaging event_type -> the CDR status we log for it.
@@ -104,7 +104,7 @@ async function archiveInboundMedia(accountId, messageId, mediaList = []) {
       if (!res.ok) throw new Error(`download failed (${res.status})`);
       let buffer = Buffer.from(await res.arrayBuffer());
       let contentType = m.content_type || res.headers.get('content-type') || 'application/octet-stream';
-      ({ buffer, contentType } = await compressImageIfNeeded(buffer, contentType));
+      ({ buffer, contentType } = await compressMediaIfNeeded(buffer, contentType));
       const key = `mms-inbound/${accountId}/${messageId}_${index}.${extFor(contentType, url)}`;
       await s3.uploadObject({ key, body: buffer, contentType });
       logger.info({ accountId, messageId, key }, 'inbound MMS media archived to S3');
