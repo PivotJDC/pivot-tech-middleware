@@ -28,9 +28,12 @@ function escapeXml(value) {
  *                    credential connection regardless of the name we pass, so it
  *                    must be used for SIP REGISTER — the E.164 as <username> does
  *                    NOT authenticate.
- * The subscriber's E.164 is carried by <fromUser> (and <displayName>) for
- * caller-ID display; caller ID on the far end is driven by the outbound voice
- * profile + the P-Preferred-Identity header (see the rewriting rules below).
+ *   - <userCallerId>  the subscriber's E.164 — sets the SIP From header on
+ *                    outbound INVITEs (the actual caller ID), separate from the
+ *                    gencred <username>. Confirmed by Acrobits.
+ * The subscriber's E.164 is also carried by <fromUser> (and <displayName>) for
+ * caller-ID display; the outbound voice profile + P-Preferred-Identity header
+ * (see the rewriting rules below) back it up on the Telnyx side.
  *
  * Per-subscriber caller ID:
  *   - callerIdName   = "{firstName} {lastName}" → the From-header display name
@@ -89,6 +92,10 @@ function buildAccountXml({
     `  <username>${escapeXml(sipUsername)}</username>`,
     `  <fromUser>${escapeXml(phoneE164)}</fromUser>`,
     `  <authUsername>${escapeXml(sipUsername)}</authUsername>`,
+    // Sets the SIP From header on outbound INVITEs to the subscriber's number
+    // (the actual caller ID), separate from the gencred <username> used for
+    // REGISTER/auth. Confirmed by Acrobits.
+    `  <userCallerId>${escapeXml(phoneE164)}</userCallerId>`,
     `  <password>${escapeXml(sipPassword)}</password>`,
     '  <host>sip.telnyx.com</host>',
     '  <transport>udp</transport>',

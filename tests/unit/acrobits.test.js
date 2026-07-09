@@ -28,6 +28,8 @@ describe('acrobits.buildAccountXml', () => {
     // Outbound From-header user is the E.164, via <fromUser> (not <callerID>,
     // which isn't a recognized Acrobits Account XML property).
     expect(xml).toContain('<fromUser>+12085550100</fromUser>');
+    // Sets the SIP From header on outbound INVITEs to the E.164 (caller ID).
+    expect(xml).toContain('<userCallerId>+12085550100</userCallerId>');
     expect(xml).not.toContain('<callerID>');
     expect(xml).toContain('<displayName>(208) 555-0100</displayName>');
     expect(xml).toContain('<codecPriority>OPUS,ULAW,ALAW</codecPriority>');
