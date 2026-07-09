@@ -3,6 +3,12 @@ FROM node:20-slim AS base
 WORKDIR /app
 ENV NODE_ENV=production
 
+# ffmpeg for outbound MMS video compression (src/utils/media.js). Installed in
+# the base stage so the runtime image (FROM base) inherits it.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/*
+
 # --- deps stage: install production dependencies only ---
 FROM base AS deps
 COPY package.json package-lock.json* ./
@@ -11,11 +17,6 @@ RUN npm ci --omit=dev
 # --- runtime stage ---
 FROM base AS runtime
 ENV PORT=3000
-
-# ffmpeg for outbound MMS video compression (src/utils/media.js).
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg \
-  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
