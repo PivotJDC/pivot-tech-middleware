@@ -81,6 +81,13 @@ async function getObjectText(key) {
   return out.Body.transformToString();
 }
 
+/** Read an object's raw bytes as a Buffer (e.g., a video thumbnail to base64). */
+async function getObjectBuffer(key) {
+  if (!bucket()) throw new Error('no S3 bucket configured');
+  const out = await getClient().send(new GetObjectCommand({ Bucket: bucket(), Key: key }));
+  return Buffer.from(await out.Body.transformToByteArray());
+}
+
 /**
  * Generate a short-lived signed GET URL for an object key.
  * @param {string} key
@@ -118,6 +125,20 @@ function keyFromObjectUrl(url) {
 }
 
 /**
+ * Extract the object key from one of our own S3 URLs, tolerating a presigned
+ * query string (unlike keyFromObjectUrl). Returns null for external URLs.
+ * @param {string} url
+ * @returns {string|null}
+ */
+function keyFromUrl(url) {
+  if (!bucket() || typeof url !== 'string') return null;
+  const prefix = `https://${bucket()}.s3.${config.aws.region}.amazonaws.com/`;
+  if (!url.startsWith(prefix)) return null;
+  const key = url.slice(prefix.length).split('?')[0];
+  return key || null;
+}
+
+/**
  * Presign a URL for GET if it points at one of our own S3 objects; otherwise
  * return it unchanged (external URLs pass through). Used to serve archived MMS
  * media to Acrobits with a fresh, short-lived link. Best-effort — on a signing
@@ -152,9 +173,11 @@ module.exports = {
   archiveRecording,
   uploadObject,
   getObjectText,
+  getObjectBuffer,
   getSignedRecordingUrl,
   signedUrlForVoicemail,
   presignUrlIfOwn,
+  keyFromUrl,
   objectUrl,
   bucket,
 };

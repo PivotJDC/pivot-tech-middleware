@@ -12,7 +12,9 @@
  */
 const nodeCrypto = require('crypto');
 const s3 = require('../integrations/s3');
-const { extFor, compressMediaIfNeeded } = require('../utils/media');
+const {
+  extFor, compressMediaIfNeeded, isVideo, generateVideoThumbnail,
+} = require('../utils/media');
 const { logger } = require('../utils/logger');
 
 /**
@@ -29,6 +31,21 @@ function decryptMedia(encryptedBuffer, hexKey) {
   const decipher = nodeCrypto.createDecipheriv('aes-128-ctr', key, nonce);
   decipher.setAutoPadding(false); // CTR mode has no padding
   return Buffer.concat([decipher.update(encryptedBuffer), decipher.final()]);
+}
+
+/**
+ * Best-effort: generate a JPEG thumbnail for a video and store it at
+ * {videoKey}_thumb.jpg so the fetch handler can serve a preview. Never throws.
+ */
+async function uploadVideoThumbnail(videoKey, buffer, contentType, accountId) {
+  try {
+    const thumb = await generateVideoThumbnail(buffer, contentType);
+    if (thumb) {
+      await s3.uploadObject({ key: `${videoKey}_thumb.jpg`, body: thumb, contentType: 'image/jpeg' });
+    }
+  } catch (err) {
+    logger.warn({ accountId, err: err.message }, 'MMS video thumbnail upload failed (best-effort)');
+  }
 }
 
 /** Resolve a single attachment to a Telnyx-fetchable URL, or null to skip. */
@@ -59,6 +76,10 @@ async function resolveOne(accountId, att) {
     const { buffer, contentType } = await compressMediaIfNeeded(decrypted, att.contentType);
     const key = `mms/${accountId}/${nodeCrypto.randomUUID()}.${extFor(contentType, url)}`;
     await s3.uploadObject({ key, body: buffer, contentType });
+    // Best-effort: store a video thumbnail alongside the clip ({key}_thumb.jpg).
+    if (isVideo(contentType)) {
+      await uploadVideoThumbnail(key, buffer, contentType, accountId);
+    }
     const signed = await s3.getSignedRecordingUrl(key, 3600);
     logger.info({ accountId, key, bytes: buffer.length }, 'proxied encrypted MMS media to S3');
     return signed;

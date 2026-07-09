@@ -448,6 +448,62 @@ describe('GET /v1/acrobits/fetch', () => {
     });
   });
 
+  it('includes a base64 thumbnail preview for a video attachment', async () => {
+    s3.presignUrlIfOwn.mockImplementation((url) => Promise.resolve(`${url}?signed=1`));
+    s3.keyFromUrl.mockReturnValue('mms-inbound/acc-1/r5_0.mp4');
+    s3.getObjectBuffer.mockResolvedValueOnce(Buffer.from('THUMBDATA'));
+    messagingService.fetchForAcrobits.mockResolvedValueOnce({
+      received: [{
+        id: 'r5',
+        from_number: '+12085550142',
+        body: '',
+        created_at: '2026-06-25T12:00:00.000Z',
+        media_urls: ['https://bucket.s3.us-east-1.amazonaws.com/mms-inbound/acc-1/r5_0.mp4'],
+      }],
+      sent: [],
+    });
+
+    const res = await request(app)
+      .get('/v1/acrobits/fetch')
+      .query({ username: 'pivottech-abc', password: 'pw' });
+
+    expect(res.status).toBe(200);
+    // Thumbnail fetched from {key}_thumb.jpg.
+    expect(s3.getObjectBuffer).toHaveBeenCalledWith('mms-inbound/acc-1/r5_0.mp4_thumb.jpg');
+    const json = JSON.parse(smsTextJson(res.text));
+    expect(json.attachments[0]).toEqual({
+      'content-url': 'https://bucket.s3.us-east-1.amazonaws.com/mms-inbound/acc-1/r5_0.mp4?signed=1',
+      'content-type': 'video/mp4',
+      preview: {
+        'content-type': 'image/jpeg',
+        content: Buffer.from('THUMBDATA').toString('base64'),
+      },
+    });
+  });
+
+  it('omits the preview when no thumbnail is stored for a video', async () => {
+    s3.keyFromUrl.mockReturnValue('mms-inbound/acc-1/r6_0.mp4');
+    s3.getObjectBuffer.mockRejectedValueOnce(new Error('NoSuchKey'));
+    messagingService.fetchForAcrobits.mockResolvedValueOnce({
+      received: [{
+        id: 'r6',
+        from_number: '+12085550142',
+        body: '',
+        created_at: '2026-06-25T12:00:00.000Z',
+        media_urls: ['https://bucket.s3.us-east-1.amazonaws.com/mms-inbound/acc-1/r6_0.mp4'],
+      }],
+      sent: [],
+    });
+
+    const res = await request(app)
+      .get('/v1/acrobits/fetch')
+      .query({ username: 'pivottech-abc', password: 'pw' });
+
+    const json = JSON.parse(smsTextJson(res.text));
+    expect(json.attachments[0].preview).toBeUndefined();
+    expect(json.attachments[0]['content-type']).toBe('video/mp4');
+  });
+
   it('omits the text field and media elements appropriately', async () => {
     messagingService.fetchForAcrobits.mockResolvedValueOnce({
       received: [{

@@ -1,6 +1,11 @@
 jest.mock('../../src/db');
 jest.mock('../../src/integrations/telnyx');
 jest.mock('../../src/integrations/s3');
+// Keep the real media helpers but stub video thumbnail generation (no ffmpeg).
+jest.mock('../../src/utils/media', () => ({
+  ...jest.requireActual('../../src/utils/media'),
+  generateVideoThumbnail: jest.fn(),
+}));
 jest.mock('../../src/services/accountService');
 jest.mock('../../src/services/pushService');
 jest.mock('../../src/services/cdrService');
@@ -17,6 +22,7 @@ const s3 = require('../../src/integrations/s3');
 const accountService = require('../../src/services/accountService');
 const cdrService = require('../../src/services/cdrService');
 const pushService = require('../../src/services/pushService');
+const media = require('../../src/utils/media');
 const messaging = require('../../src/services/messagingService');
 
 const ACCOUNT_ID = '11111111-1111-4111-8111-111111111111';
@@ -204,6 +210,27 @@ describe('archiveInboundMedia', () => {
     ]);
     expect(urls).toEqual(['https://telnyx/x.jpg']);
     expect(s3.uploadObject).not.toHaveBeenCalled();
+  });
+
+  it('stores a video thumbnail alongside an inbound video ({key}_thumb.jpg)', async () => {
+    media.generateVideoThumbnail.mockResolvedValueOnce(Buffer.from('thumb-bytes'));
+    global.fetch.mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'video/mp4' },
+      arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+    });
+
+    await messaging.archiveInboundMedia('acc-1', 'msg-7', [
+      { url: 'https://telnyx/clip.mp4', content_type: 'video/mp4' },
+    ]);
+
+    const keys = s3.uploadObject.mock.calls.map((c) => c[0].key);
+    expect(keys).toEqual([
+      'mms-inbound/acc-1/msg-7_0.mp4',
+      'mms-inbound/acc-1/msg-7_0.mp4_thumb.jpg',
+    ]);
+    const thumb = s3.uploadObject.mock.calls.find((c) => c[0].key.endsWith('_thumb.jpg'));
+    expect(thumb[0].contentType).toBe('image/jpeg');
   });
 });
 

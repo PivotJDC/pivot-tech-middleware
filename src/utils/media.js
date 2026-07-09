@@ -13,9 +13,12 @@ const nodeCrypto = require('crypto');
 const sharp = require('sharp');
 const { logger } = require('./logger');
 
-// Media larger than this is compressed before upload (500 KB) — the carrier MMS
-// ceiling. Also the ffmpeg hard file-size cap (-fs) for video.
+// Images larger than this are compressed before upload (500 KB).
 const MAX_MEDIA_BYTES = 500 * 1024;
+
+// Videos larger than this are transcoded; also the ffmpeg hard file-size cap
+// (-fs). 1 MB gives carriers headroom (most accept up to ~1.5 MB for video).
+const MAX_VIDEO_BYTES = 1000 * 1000;
 
 // content-type → file extension for the S3 object key.
 const EXT_BY_TYPE = {
@@ -116,7 +119,7 @@ function runFfmpeg(args) {
  * @returns {Promise<{ buffer: Buffer, contentType: string }>}
  */
 async function compressVideoIfNeeded(buffer, contentType) {
-  if (!buffer || !isVideo(contentType) || buffer.length <= MAX_MEDIA_BYTES) {
+  if (!buffer || !isVideo(contentType) || buffer.length <= MAX_VIDEO_BYTES) {
     return { buffer, contentType };
   }
   const originalBytes = buffer.length;
@@ -129,11 +132,11 @@ async function compressVideoIfNeeded(buffer, contentType) {
       '-y',
       '-loglevel', 'error',
       '-i', inputPath,
-      '-vf', 'scale=480:-2', // 480px width, keep aspect (height rounded to even)
-      '-c:v', 'libx264', '-preset', 'fast', '-crf', '28',
+      '-vf', 'scale=720:-2', // 720px width, keep aspect (height rounded to even)
+      '-c:v', 'libx264', '-preset', 'fast', '-crf', '24',
       '-c:a', 'aac', '-b:a', '64k',
       '-movflags', '+faststart', // streaming-friendly (moov atom up front)
-      '-fs', '500000', // hard 500 KB output cap
+      '-fs', '1000000', // hard 1 MB output cap
       outputPath,
     ]);
     const out = await fs.readFile(outputPath);
@@ -155,6 +158,41 @@ async function compressVideoIfNeeded(buffer, contentType) {
 }
 
 /**
+ * Extract a JPEG thumbnail from a video (frame at ~1s, 240px wide). Returns the
+ * JPEG Buffer, or null for non-videos / any ffmpeg failure (best-effort — a
+ * missing thumbnail must never break a send/archive). Requires ffmpeg.
+ * @param {Buffer} buffer
+ * @param {string} contentType
+ * @returns {Promise<Buffer|null>}
+ */
+async function generateVideoThumbnail(buffer, contentType) {
+  if (!buffer || !isVideo(contentType)) return null;
+  const id = nodeCrypto.randomUUID();
+  const inputPath = path.join(os.tmpdir(), `mms-${id}-thumb-in.${extFor(contentType)}`);
+  const thumbPath = path.join(os.tmpdir(), `mms-${id}-thumb.jpg`);
+  try {
+    await fs.writeFile(inputPath, buffer);
+    await runFfmpeg([
+      '-y',
+      '-loglevel', 'error',
+      '-i', inputPath,
+      '-ss', '00:00:01', // seek ~1s in for a representative frame
+      '-vframes', '1',
+      '-vf', 'scale=240:-2',
+      '-f', 'image2',
+      thumbPath,
+    ]);
+    return await fs.readFile(thumbPath);
+  } catch (err) {
+    logger.warn({ err: err.message }, 'MMS video thumbnail generation failed');
+    return null;
+  } finally {
+    await fs.rm(inputPath, { force: true }).catch(() => {});
+    await fs.rm(thumbPath, { force: true }).catch(() => {});
+  }
+}
+
+/**
  * Compress oversized MMS media by type: images via sharp, videos via ffmpeg;
  * anything else passes through unchanged. Best-effort throughout.
  * @param {Buffer} buffer
@@ -169,10 +207,12 @@ async function compressMediaIfNeeded(buffer, contentType) {
 
 module.exports = {
   MAX_MEDIA_BYTES,
+  MAX_VIDEO_BYTES,
   isImage,
   isVideo,
   extFor,
   compressImageIfNeeded,
   compressVideoIfNeeded,
   compressMediaIfNeeded,
+  generateVideoThumbnail,
 };

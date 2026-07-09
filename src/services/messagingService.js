@@ -15,7 +15,9 @@ const accountService = require('./accountService');
 const pushService = require('./pushService');
 const cdrService = require('./cdrService');
 const { errors } = require('../middleware/errorHandler');
-const { extFor, compressMediaIfNeeded } = require('../utils/media');
+const {
+  extFor, compressMediaIfNeeded, isVideo, generateVideoThumbnail,
+} = require('../utils/media');
 const { logger } = require('../utils/logger');
 
 // Telnyx messaging event_type -> the CDR status we log for it.
@@ -107,6 +109,17 @@ async function archiveInboundMedia(accountId, messageId, mediaList = []) {
       ({ buffer, contentType } = await compressMediaIfNeeded(buffer, contentType));
       const key = `mms-inbound/${accountId}/${messageId}_${index}.${extFor(contentType, url)}`;
       await s3.uploadObject({ key, body: buffer, contentType });
+      // Best-effort: store a video thumbnail alongside the clip ({key}_thumb.jpg).
+      if (isVideo(contentType)) {
+        try {
+          const thumb = await generateVideoThumbnail(buffer, contentType);
+          if (thumb) {
+            await s3.uploadObject({ key: `${key}_thumb.jpg`, body: thumb, contentType: 'image/jpeg' });
+          }
+        } catch (thumbErr) {
+          logger.warn({ accountId, messageId, err: thumbErr.message }, 'inbound video thumbnail failed');
+        }
+      }
       logger.info({ accountId, messageId, key }, 'inbound MMS media archived to S3');
       return s3.objectUrl(key);
     } catch (err) {

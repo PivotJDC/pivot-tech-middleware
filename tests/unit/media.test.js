@@ -20,10 +20,12 @@ const fsp = require('fs').promises;
 const sharp = require('sharp');
 const {
   compressImageIfNeeded, compressVideoIfNeeded, compressMediaIfNeeded,
-  extFor, isImage, isVideo, MAX_MEDIA_BYTES,
+  generateVideoThumbnail, extFor, isImage, isVideo,
+  MAX_MEDIA_BYTES, MAX_VIDEO_BYTES,
 } = require('../../src/utils/media');
 
 const big = (n = MAX_MEDIA_BYTES + 1) => Buffer.alloc(n, 1);
+const bigVideo = (n = MAX_VIDEO_BYTES + 1) => Buffer.alloc(n, 1);
 const small = (n = 100) => Buffer.alloc(n, 2);
 
 // Simulate a successful ffmpeg run: write `size` bytes to the output path (the
@@ -121,26 +123,26 @@ describe('compressVideoIfNeeded', () => {
     expect(mockExecFile).not.toHaveBeenCalled();
   });
 
-  it('returns small videos unchanged (no ffmpeg)', async () => {
-    const buf = small();
+  it('leaves videos under the 1 MB threshold unchanged (no ffmpeg)', async () => {
+    const buf = big(); // ~512 KB — over the image cap but under the 1 MB video cap
     const out = await compressVideoIfNeeded(buf, 'video/mp4');
     expect(out).toEqual({ buffer: buf, contentType: 'video/mp4' });
     expect(mockExecFile).not.toHaveBeenCalled();
   });
 
-  it('transcodes an oversized video to H.264/AAC mp4 with the size cap', async () => {
+  it('transcodes an over-1MB video to H.264/AAC mp4 (720p, crf 24, 1 MB cap)', async () => {
     ffmpegWrites(80); // ffmpeg produces an 80-byte output
 
-    const out = await compressVideoIfNeeded(big(), 'video/quicktime');
+    const out = await compressVideoIfNeeded(bigVideo(), 'video/quicktime');
 
     expect(out.contentType).toBe('video/mp4');
     expect(out.buffer.length).toBe(80);
-    // ffmpeg args carry the required flags.
+    // ffmpeg args carry the quality-bumped flags.
     const [cmd, args] = mockExecFile.mock.calls[0];
     expect(cmd).toBe('ffmpeg');
     expect(args).toEqual(expect.arrayContaining([
-      '-vf', 'scale=480:-2', '-c:v', 'libx264', '-crf', '28',
-      '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', '-fs', '500000',
+      '-vf', 'scale=720:-2', '-c:v', 'libx264', '-crf', '24',
+      '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', '-fs', '1000000',
     ]));
     // Input temp file uses the source extension (mov for quicktime).
     expect(args[args.indexOf('-i') + 1]).toMatch(/\.mov$/);
@@ -151,11 +153,38 @@ describe('compressVideoIfNeeded', () => {
 
   it('returns the original when ffmpeg fails (best-effort)', async () => {
     mockExecFile.mockImplementation((file, args, opts, cb) => cb(new Error('ffmpeg boom')));
-    const buf = big();
+    const buf = bigVideo();
 
     const out = await compressVideoIfNeeded(buf, 'video/mp4');
 
     expect(out).toEqual({ buffer: buf, contentType: 'video/mp4' });
+  });
+});
+
+describe('generateVideoThumbnail', () => {
+  it('returns null for non-videos (no ffmpeg)', async () => {
+    expect(await generateVideoThumbnail(big(), 'image/png')).toBeNull();
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it('extracts a JPEG frame at ~1s scaled to 240px', async () => {
+    ffmpegWrites(64); // thumbnail bytes
+
+    const thumb = await generateVideoThumbnail(bigVideo(), 'video/mp4');
+
+    expect(Buffer.isBuffer(thumb)).toBe(true);
+    expect(thumb.length).toBe(64);
+    const [, args] = mockExecFile.mock.calls[0];
+    expect(args).toEqual(expect.arrayContaining([
+      '-ss', '00:00:01', '-vframes', '1', '-vf', 'scale=240:-2', '-f', 'image2',
+    ]));
+    // Temp files cleaned up.
+    await expect(fsp.access(args[args.indexOf('-i') + 1])).rejects.toBeDefined();
+  });
+
+  it('returns null on ffmpeg failure (best-effort)', async () => {
+    mockExecFile.mockImplementation((file, args, opts, cb) => cb(new Error('no frame')));
+    expect(await generateVideoThumbnail(bigVideo(), 'video/mp4')).toBeNull();
   });
 });
 
@@ -169,7 +198,7 @@ describe('compressMediaIfNeeded (dispatcher)', () => {
 
     // Video → ffmpeg.
     ffmpegWrites(50);
-    const vid = await compressMediaIfNeeded(big(), 'video/mp4');
+    const vid = await compressMediaIfNeeded(bigVideo(), 'video/mp4');
     expect(vid.contentType).toBe('video/mp4');
     expect(vid.buffer.length).toBe(50);
 

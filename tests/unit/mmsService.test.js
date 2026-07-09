@@ -1,4 +1,9 @@
 jest.mock('../../src/integrations/s3');
+// Keep the real media helpers but stub video thumbnail generation (no ffmpeg).
+jest.mock('../../src/utils/media', () => ({
+  ...jest.requireActual('../../src/utils/media'),
+  generateVideoThumbnail: jest.fn(),
+}));
 jest.mock('../../src/utils/logger', () => ({
   logger: { info: () => {}, warn: () => {}, error: () => {} },
   REDACT_PATHS: [],
@@ -6,6 +11,7 @@ jest.mock('../../src/utils/logger', () => ({
 
 const nodeCrypto = require('crypto');
 const s3 = require('../../src/integrations/s3');
+const media = require('../../src/utils/media');
 const mms = require('../../src/services/mmsService');
 
 // A known AES-128 key (16 bytes) as a hex string.
@@ -90,6 +96,26 @@ describe('resolveMediaUrls', () => {
     expect(upload.body.equals(plain)).toBe(true);
     expect(upload.contentType).toBe('image/jpeg');
     expect(s3.getSignedRecordingUrl).toHaveBeenCalledWith(upload.key, 3600);
+  });
+
+  it('uploads a video and stores its thumbnail at {key}_thumb.jpg', async () => {
+    const plain = Buffer.from('video bytes');
+    const ct = ctrEncrypt(plain);
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      arrayBuffer: async () => new Uint8Array(ct).buffer,
+    });
+    media.generateVideoThumbnail.mockResolvedValueOnce(Buffer.from('thumb'));
+
+    await mms.resolveMediaUrls('acc-1', [
+      { url: 'https://acrobits/enc', contentType: 'video/mp4', encryptionKey: HEX_KEY },
+    ]);
+
+    const keys = s3.uploadObject.mock.calls.map((c) => c[0].key);
+    expect(keys.some((k) => /^mms\/acc-1\/[0-9a-f-]+\.mp4$/.test(k))).toBe(true);
+    const thumb = s3.uploadObject.mock.calls.find((c) => c[0].key.endsWith('.mp4_thumb.jpg'));
+    expect(thumb).toBeDefined();
+    expect(thumb[0].contentType).toBe('image/jpeg');
   });
 
   it('skips an attachment (best-effort) when the download fails', async () => {

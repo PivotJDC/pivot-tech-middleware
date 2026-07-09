@@ -134,3 +134,27 @@ describe('getObjectText', () => {
     });
   });
 });
+
+describe('getObjectBuffer', () => {
+  it('GetObjects the key and returns the body as a Buffer', async () => {
+    mockSend.mockResolvedValueOnce({
+      Body: { transformToByteArray: async () => new Uint8Array([1, 2, 3]) },
+    });
+    const buf = await s3.getObjectBuffer('mms/a/x.mp4_thumb.jpg');
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.equals(Buffer.from([1, 2, 3]))).toBe(true);
+    expect(mockSend.mock.calls[0][0].Get.Key).toBe('mms/a/x.mp4_thumb.jpg');
+  });
+});
+
+describe('keyFromUrl', () => {
+  it('extracts the key from our canonical URL', () => {
+    expect(s3.keyFromUrl(s3.objectUrl('mms/a/x.mp4'))).toBe('mms/a/x.mp4');
+  });
+  it('tolerates a presigned query string (unlike keyFromObjectUrl)', () => {
+    expect(s3.keyFromUrl(`${s3.objectUrl('mms/a/x.mp4')}?X-Amz-Signature=abc`)).toBe('mms/a/x.mp4');
+  });
+  it('returns null for an external URL', () => {
+    expect(s3.keyFromUrl('https://external/x.mp4')).toBeNull();
+  });
+});

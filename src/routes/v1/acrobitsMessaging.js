@@ -85,16 +85,19 @@ function contentTypeForUrl(url) {
  * (content_type text/plain, <sms_text> = the body).
  */
 function smsXml(m, sender, recipient, streamId) {
-  const media = Array.isArray(m.media_urls) ? m.media_urls.filter(Boolean) : [];
+  const media = Array.isArray(m.media_urls) ? m.media_urls : [];
+  const previews = Array.isArray(m.mediaPreviews) ? m.mediaPreviews : [];
   let smsText = m.body || '';
   let contentType = 'text/plain';
   if (media.length > 0) {
     contentType = 'application/x-acro-filetransfer+json';
     const payload = {
-      attachments: media.map((url) => ({
-        'content-url': url,
-        'content-type': contentTypeForUrl(url),
-      })),
+      attachments: media.map((url, i) => {
+        const attachment = { 'content-url': url, 'content-type': contentTypeForUrl(url) };
+        // Video attachments carry a base64 JPEG preview (Acrobits thumbnail).
+        if (previews[i]) attachment.preview = previews[i];
+        return attachment;
+      }),
     };
     if (m.body) payload.text = m.body;
     smsText = JSON.stringify(payload);
@@ -137,14 +140,31 @@ function fetchXml(received, sent, subscriberNumber) {
 }
 
 /**
- * Replace a message's media_urls with fresh presigned URLs for any that point at
- * our own S3 bucket (mutates the row in place). Best-effort — external URLs and
- * signing failures are left as-is.
+ * Prepare a message's media for the fetch response (mutates the row in place):
+ *   - load a base64 JPEG preview for each video attachment (from the stored
+ *     {key}_thumb.jpg in S3) into m.mediaPreviews, aligned to media_urls;
+ *   - replace media_urls with fresh presigned URLs for our own S3 objects.
+ * Best-effort throughout — external URLs, missing thumbnails, and signing
+ * failures are left as-is.
  */
-async function presignMessageMedia(m) {
+async function prepareMessageMedia(m) {
   if (!m || !Array.isArray(m.media_urls) || m.media_urls.length === 0) return;
+  const rawUrls = m.media_urls;
+  const previews = await Promise.all(rawUrls.map(async (rawUrl) => {
+    if (!contentTypeForUrl(rawUrl).startsWith('video/')) return null;
+    const key = s3.keyFromUrl(rawUrl);
+    if (!key) return null;
+    try {
+      const buf = await s3.getObjectBuffer(`${key}_thumb.jpg`);
+      return { 'content-type': 'image/jpeg', content: buf.toString('base64') };
+    } catch {
+      return null; // no thumbnail stored
+    }
+  }));
   // eslint-disable-next-line no-param-reassign
-  m.media_urls = await Promise.all(m.media_urls.map((u) => s3.presignUrlIfOwn(u, 3600)));
+  m.mediaPreviews = previews;
+  // eslint-disable-next-line no-param-reassign
+  m.media_urls = await Promise.all(rawUrls.map((u) => s3.presignUrlIfOwn(u, 3600)));
 }
 
 /** Merge query + body so handlers work for both GET and POST templates. */
@@ -277,9 +297,9 @@ router.get(
       p.last_id,
       p.last_sent_id,
     );
-    // MMS media archived to our (private) S3 bucket needs a fresh presigned URL
-    // for the app to download; external URLs pass through unchanged.
-    await Promise.all([...received, ...sent].map(presignMessageMedia));
+    // Presign our S3 media (external URLs pass through) and attach base64 video
+    // thumbnails for the Acrobits preview.
+    await Promise.all([...received, ...sent].map(prepareMessageMedia));
     sendXml(res, 200, fetchXml(received, sent, account.phone_e164));
   }),
 );
