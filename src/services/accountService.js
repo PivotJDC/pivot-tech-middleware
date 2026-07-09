@@ -758,6 +758,18 @@ async function resetPortPin(id) {
   return { port_out_pin: pin };
 }
 
+/**
+ * All distinct sip_endpoint_ids referenced by accounts (any status). Used by the
+ * orphaned-credential cleanup to tell which Telnyx credentials are still in use.
+ * @returns {Promise<string[]>}
+ */
+async function getSipEndpointIds() {
+  const { rows } = await db.query(
+    'SELECT DISTINCT sip_endpoint_id FROM accounts WHERE sip_endpoint_id IS NOT NULL',
+  );
+  return rows.map((r) => r.sip_endpoint_id);
+}
+
 /** Lightweight status projection for the app onboarding poll. */
 async function getAccountStatus(id) {
   assertUuid(id);
@@ -1117,6 +1129,7 @@ module.exports = {
   deleteAccount,
   getPortPin,
   resetPortPin,
+  getSipEndpointIds,
   retryBicsProvisioning,
   getEsimQr,
   setSipPasswordHash,

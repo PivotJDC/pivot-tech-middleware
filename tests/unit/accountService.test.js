@@ -1185,6 +1185,16 @@ describe('deleteAccount', () => {
   });
 });
 
+describe('getSipEndpointIds', () => {
+  it('returns the distinct non-null sip_endpoint_ids', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ sip_endpoint_id: 'ep-1' }, { sip_endpoint_id: 'ep-2' }] });
+    const ids = await accountService.getSipEndpointIds();
+    expect(ids).toEqual(['ep-1', 'ep-2']);
+    const [sql] = db.query.mock.calls[0];
+    expect(sql).toMatch(/SELECT DISTINCT sip_endpoint_id FROM accounts WHERE sip_endpoint_id IS NOT NULL/);
+  });
+});
+
 describe('port-out PIN', () => {
   it('getPortPin returns the stored PIN', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ port_out_pin: '123456' }] });

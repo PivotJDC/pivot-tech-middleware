@@ -145,9 +145,10 @@ async function assignDid(
   }
   const signalwireSid = idOf(purchase);
 
-  // Authorize the DID for outbound SIP by attaching the outbound voice profile.
-  // Without it, Telnyx doesn't recognize the number as an authorized outbound
-  // caller ID and outbound calls present the wrong number.
+  // Attach the outbound voice profile to the DID. NOTE: this may be redundant now
+  // that caller ID is set via the Account XML <userCallerId> (SIP From header) —
+  // kept as belt-and-suspenders for the outbound SIP path; safe to remove once
+  // confirmed unnecessary in production.
   await telnyx.updatePhoneNumber(e164, {
     outbound_voice_profile_id: config.telnyx.outboundVoiceProfileId,
   });
@@ -266,8 +267,23 @@ async function getSipPassword(sipEndpointId) {
   return credential.sip_password;
 }
 
+/**
+ * Fetch the live SIP credential (gencred username + plaintext password) straight
+ * from Telnyx. Used to build the provisioning QR without depending on a possibly
+ * stale stored sip_username. Plaintext stays in memory only for the caller.
+ * @returns {Promise<{ sip_username: string, sip_password: string }>}
+ */
+async function getSipCredential(sipEndpointId) {
+  const credential = await telnyx.getSipEndpoint(sipEndpointId);
+  return {
+    sip_username: credential.sip_username,
+    sip_password: credential.sip_password,
+  };
+}
+
 module.exports = {
   assignDid,
   getSipPassword,
+  getSipCredential,
   findAvailableNumber,
 };

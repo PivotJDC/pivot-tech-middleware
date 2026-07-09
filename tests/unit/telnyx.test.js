@@ -68,6 +68,23 @@ describe('request retry policy', () => {
 });
 
 describe('typed API calls', () => {
+  it('listSipEndpoints pages through credentials filtered by the connection', async () => {
+    // First page full (250) → second page short → stop.
+    const page1 = Array.from({ length: 250 }, (_, i) => ({ id: `ep-${i}` }));
+    global.fetch
+      .mockResolvedValueOnce(ok({ data: page1 }))
+      .mockResolvedValueOnce(ok({ data: [{ id: 'ep-last' }] }));
+
+    const creds = await telnyx.listSipEndpoints();
+
+    expect(creds).toHaveLength(251);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    const url0 = decodeURIComponent(global.fetch.mock.calls[0][0]);
+    expect(url0).toContain('/telephony_credentials?');
+    expect(url0).toContain('filter[connection_id]=conn-1');
+    expect(url0).toContain('page[number]=1');
+  });
+
   it('deletePhoneNumber issues a DELETE keyed by the E.164', async () => {
     global.fetch.mockResolvedValueOnce({ ok: true, status: 204, text: async () => '' });
     await telnyx.deletePhoneNumber('+12085550100');

@@ -136,21 +136,24 @@ describe('provisionByToken', () => {
 });
 
 describe('buildProvisioningQr', () => {
-  it('builds the Acrobits csc: QR text (csc:user:pass@CloudID) + a PNG data URL', async () => {
-    didOrchestration.getSipPassword.mockResolvedValueOnce('s3cr3t/pw+1');
+  it('reads the live gencred + password and builds the csc: QR (no stored sip_username)', async () => {
+    didOrchestration.getSipCredential.mockResolvedValueOnce({
+      sip_username: 'gencred-live', sip_password: 's3cr3t/pw+1',
+    });
 
     const result = await provisioning.buildProvisioningQr(account);
 
-    // config.acrobits.cloudId is mocked to '54873' in this suite.
-    expect(result.provisioning_url).toBe('csc:pivottech-abc:s3cr3t%2Fpw%2B1@54873');
+    // config.acrobits.cloudId is mocked to '54873'; both parts come from the
+    // live GET, so a stale account.sip_username is never used.
+    expect(result.provisioning_url).toBe('csc:gencred-live:s3cr3t%2Fpw%2B1@54873');
     expect(result.qr_url).toMatch(/^data:image\/png;base64,/);
-    expect(didOrchestration.getSipPassword).toHaveBeenCalledWith('ep-1');
+    expect(didOrchestration.getSipCredential).toHaveBeenCalledWith('ep-1');
   });
 
-  it('throws when the account has no SIP credentials yet', async () => {
+  it('throws when the account has no SIP endpoint yet', async () => {
     await expect(provisioning.buildProvisioningQr({ id: 'a1' }))
       .rejects.toMatchObject({ code: 'INTERNAL_ERROR' });
-    expect(didOrchestration.getSipPassword).not.toHaveBeenCalled();
+    expect(didOrchestration.getSipCredential).not.toHaveBeenCalled();
   });
 });
 

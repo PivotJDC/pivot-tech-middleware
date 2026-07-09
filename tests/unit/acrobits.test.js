@@ -95,19 +95,14 @@ describe('acrobits.buildAccountXml', () => {
     expect(xml).toContain('</rewriting>');
   });
 
-  it('asserts the subscriber identity via P-Preferred-Identity on outbound calls', () => {
+  it('no longer emits P-Preferred-Identity setHeader actions (userCallerId replaces them)', () => {
     const xml = acrobits.buildAccountXml(params);
-    // Header value is the subscriber's own E.164; angle brackets XML-escaped.
-    expect(xml).toContain(
-      '<action type="setHeader" param="P-Preferred-Identity: '
-      + '&lt;sip:+12085550100@sip.telnyx.com&gt;"/>',
-    );
-    // Applied to every outbound call — one setHeader per rewriting rule
-    // (10-digit, 11-digit-leading-1, already-+E.164).
-    const count = (xml.match(/type="setHeader"/g) || []).length;
-    expect(count).toBe(3);
-    // A catch-all rule for numbers already in +E.164.
-    expect(xml).toContain('<condition type="startsWith" param="+"/>');
+    // Caller ID now comes from <userCallerId>, not the SIP header.
+    expect(xml).not.toContain('P-Preferred-Identity');
+    expect(xml).not.toContain('type="setHeader"');
+    // The number-normalization prepend rules remain.
+    expect(xml).toContain('<action type="prepend" param="+1"/>');
+    expect(xml).toContain('<action type="prepend" param="+"/>');
   });
 
   it('escapes XML special characters in values', () => {

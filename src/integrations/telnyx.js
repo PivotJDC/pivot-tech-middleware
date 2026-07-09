@@ -360,6 +360,31 @@ async function updateSipEndpoint(sipEndpointId, fields) {
   return unwrap(await request('PATCH', `/telephony_credentials/${sipEndpointId}`, fields));
 }
 
+/**
+ * List all SIP credentials on our credential connection (paginated). Used by the
+ * orphaned-credential cleanup audit. Returns the raw credential resources.
+ * @returns {Promise<object[]>}
+ */
+async function listSipEndpoints() {
+  const connId = config.telnyx.sipConnectionId;
+  const size = 250;
+  const results = [];
+  // Bounded page loop — a guard against runaway; a connection won't realistically
+  // exceed this many credentials.
+  for (let page = 1; page <= 200; page += 1) {
+    const params = new URLSearchParams();
+    if (connId) params.append('filter[connection_id]', connId);
+    params.append('page[number]', String(page));
+    params.append('page[size]', String(size));
+    // eslint-disable-next-line no-await-in-loop
+    const data = unwrap(await request('GET', `/telephony_credentials?${params.toString()}`));
+    const list = Array.isArray(data) ? data : [];
+    results.push(...list);
+    if (list.length < size) break;
+  }
+  return results;
+}
+
 /** Delete a SIP credential (on account cancellation). */
 async function deleteSipEndpoint(sipEndpointId) {
   return request('DELETE', `/telephony_credentials/${sipEndpointId}`);
@@ -651,6 +676,7 @@ module.exports = {
   updatePhoneNumber,
   createSipEndpoint,
   getSipEndpoint,
+  listSipEndpoints,
   updateSipEndpoint,
   deleteSipEndpoint,
   deletePhoneNumber,

@@ -14,6 +14,7 @@ jest.mock('../../src/services/cdrService');
 jest.mock('../../src/services/usageService');
 jest.mock('../../src/services/voicemailService');
 jest.mock('../../src/integrations/s3');
+jest.mock('../../src/integrations/telnyx');
 
 const express = require('express');
 const request = require('supertest');
@@ -23,6 +24,7 @@ const provisioningService = require('../../src/services/provisioningService');
 const cdrService = require('../../src/services/cdrService');
 const usageService = require('../../src/services/usageService');
 const voicemailService = require('../../src/services/voicemailService');
+const telnyx = require('../../src/integrations/telnyx');
 const adminRouter = require('../../src/routes/admin');
 const { errorHandler } = require('../../src/middleware/errorHandler');
 const { logger } = require('../../src/utils/logger');
@@ -529,5 +531,26 @@ describe('admin API', () => {
       .get('/admin/analytics/billing-reconciliation?from=nope&to=2026-07-31');
     expect(res2.status).toBe(400);
     expect(adminService.getBillingReconciliation).not.toHaveBeenCalled();
+  });
+
+  it('GET /admin/cleanup/orphaned-credentials returns credentials no account references', async () => {
+    telnyx.listSipEndpoints.mockResolvedValueOnce([
+      {
+        id: 'ep-1', name: 'pivottech-a', sip_username: 'gen-a', created_at: '2026-01-01T00:00:00Z',
+      },
+      { id: 'ep-2', name: 'pivottech-b', sip_username: 'gen-b' }, // orphan
+      { id: 'ep-3', name: 'pivottech-c', sip_username: 'gen-c' }, // orphan
+    ]);
+    accountService.getSipEndpointIds.mockResolvedValueOnce(['ep-1']);
+
+    const res = await request(app).get('/admin/cleanup/orphaned-credentials');
+
+    expect(res.status).toBe(200);
+    expect(res.body.total_credentials).toBe(3);
+    expect(res.body.referenced_by_accounts).toBe(1);
+    expect(res.body.orphan_count).toBe(2);
+    expect(res.body.orphans.map((o) => o.id)).toEqual(['ep-2', 'ep-3']);
+    // Read-only audit — nothing is deleted.
+    expect(telnyx.deleteSipEndpoint).not.toHaveBeenCalled();
   });
 });

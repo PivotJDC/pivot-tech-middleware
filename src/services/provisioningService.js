@@ -77,21 +77,25 @@ async function buildLinks(rawToken, cscUri) {
 /**
  * Build the dialer provisioning QR for an account: the Acrobits Cloud Softphone
  * QR text (csc:user:pass@CloudID — see doc.acrobits.net/cloudsoftphone/qr.html)
- * carrying the live SIP credentials, plus a PNG data URL of its QR. The
- * plaintext password is held in memory only for this call and is NEVER logged
- * (security rule #1); the QR is rendered locally, never via a third-party.
- * @param {{ sip_username: string, sip_endpoint_id: string }} account
+ * carrying the live SIP credentials, plus a PNG data URL of its QR.
+ *
+ * The gencred username AND password are read LIVE from Telnyx (not the stored
+ * sip_username), so "Show QR" is always correct and works without first rotating
+ * credentials. The plaintext is held in memory only for this call and is NEVER
+ * logged (security rule #1); the QR is rendered locally, never via a third-party.
+ * @param {{ sip_endpoint_id: string }} account
  * @returns {Promise<{ qr_url: string, provisioning_url: string }>}
  */
 async function buildProvisioningQr(account) {
-  if (!account.sip_endpoint_id || !account.sip_username) {
+  if (!account.sip_endpoint_id) {
     throw new AppError(
       'INTERNAL_ERROR',
       'Account is not ready for provisioning (DID assignment incomplete).',
     );
   }
-  const sipPassword = await resolveSipPassword(account);
-  const provisioningUrl = `csc:${encodeURIComponent(account.sip_username)}`
+  const { sip_username: sipUsername, sip_password: sipPassword } = await didOrchestration
+    .getSipCredential(account.sip_endpoint_id);
+  const provisioningUrl = `csc:${encodeURIComponent(sipUsername)}`
     + `:${encodeURIComponent(sipPassword)}@${config.acrobits.cloudId}`;
   const qrUrl = await qrcode.toDataURL(provisioningUrl, { errorCorrectionLevel: 'M' });
   return { qr_url: qrUrl, provisioning_url: provisioningUrl };

@@ -26,6 +26,8 @@ const adminUserService = require('../../services/adminUserService');
 const cdrService = require('../../services/cdrService');
 const usageService = require('../../services/usageService');
 const voicemailService = require('../../services/voicemailService');
+const telnyx = require('../../integrations/telnyx');
+const config = require('../../config');
 const tenantsRouter = require('./tenants');
 const { adminAuth, requireRole } = require('../../middleware/adminAuth');
 const { rateLimit } = require('../../middleware/rateLimiter');
@@ -618,6 +620,42 @@ router.get(
       throw errors.validation('from and to are required as YYYY-MM-DD dates.', 'from');
     }
     res.json(await adminService.getBillingReconciliation(from, to, tenantScope(req)));
+  }),
+);
+
+// --- Cleanup / audits (super_admin) ---
+
+// Orphaned Telnyx SIP credentials: credentials on our connection that no account
+// still references (by sip_endpoint_id). Read-only audit — returns the orphans
+// for manual review/deletion; it does NOT delete anything.
+router.get(
+  '/cleanup/orphaned-credentials',
+  requireRole('super_admin'),
+  asyncHandler(async (req, res) => {
+    const [credentials, referencedIds] = await Promise.all([
+      telnyx.listSipEndpoints(),
+      accountService.getSipEndpointIds(),
+    ]);
+    const referenced = new Set(referencedIds);
+    const orphans = credentials
+      .filter((c) => c && c.id && !referenced.has(c.id))
+      .map((c) => ({
+        id: c.id,
+        name: c.name || null,
+        sip_username: c.sip_username || null,
+        created_at: c.created_at || null,
+      }));
+    logger.info(
+      { adminId: req.admin.id, total: credentials.length, orphans: orphans.length },
+      'audited orphaned Telnyx SIP credentials',
+    );
+    res.json({
+      connection_id: config.telnyx.sipConnectionId,
+      total_credentials: credentials.length,
+      referenced_by_accounts: referenced.size,
+      orphan_count: orphans.length,
+      orphans,
+    });
   }),
 );
 

@@ -23,12 +23,11 @@ platform that white-labels the same stack for partner brands (multi-tenant).
 | Dialer app | Acrobits Cloud Softphone | White-label dialer, external provisioning, HTTP messaging, push notifications |
 | PSTN gateway | Telnyx | SIP trunking (credential connection 2984224004669178914), DID inventory, SMS P2P, E911, CNAM, number porting (FastPort) |
 
-> **Migration note:** The platform was originally specced against SignalWire and
-> was fully migrated to **Telnyx**. Two DB column names are retained for
-> compatibility and now hold Telnyx identifiers: `dids.signalwire_sid` (the
-> Telnyx phone-number resource id) and `port_requests.signalwire_port_id` (the
-> Telnyx port-order id). `SIGNALWIRE_WEBHOOK_SECRET` is likewise a legacy env
-> name for the shared HMAC secret. There is no live SignalWire integration.
+> **Legacy names:** a few identifiers keep older names that now hold Telnyx
+> values — `dids.signalwire_sid` (Telnyx number resource id),
+> `port_requests.signalwire_port_id` (Telnyx port-order id), and the
+> `SIGNALWIRE_WEBHOOK_SECRET` env (the shared HMAC secret). Kept as-is to avoid a
+> data migration; they carry no SignalWire behavior.
 
 ### Key Architectural Insight
 Customer DIDs exist **only** in the Telnyx/SIP stack. The native iOS Phone.app
@@ -73,7 +72,7 @@ Queue:          AWS SQS
 Secrets:        AWS Secrets Manager (SECRETS_ARN injects the JSON secret at boot)
 Containers:     Docker → AWS ECR → AWS App Runner
 CI/CD:          GitHub Actions → ECR → App Runner
-Testing:        Jest + Supertest (570 tests)
+Testing:        Jest + Supertest (781 tests)
 Linting:        ESLint (airbnb-base)
 Logging:        Pino (structured JSON) — never log SIP passwords, transfer PINs, account numbers
 ```
@@ -257,8 +256,7 @@ Always return this shape on errors — no exceptions:
 
 Standard codes: `VALIDATION_ERROR`, `NOT_FOUND`, `UNAUTHORIZED`, `FORBIDDEN`,
 `DID_UNAVAILABLE`, `PORT_ALREADY_PENDING`, `PORT_SUBMISSION_FAILED`,
-`TOKEN_EXPIRED`, `TELNYX_ERROR` (migrated equivalent of the old
-`SIGNALWIRE_ERROR`), `INTERNAL_ERROR`.
+`TOKEN_EXPIRED`, `TELNYX_ERROR`, `INTERNAL_ERROR`.
 
 ---
 
@@ -300,8 +298,9 @@ current element choices (each is load-bearing — see decisions below):
 ```xml
 <account>
   <username>{gencred SIP username}</username>        <!-- gencred (SIP REGISTER) -->
-  <fromUser>{phone_e164}</fromUser>                  <!-- outbound caller ID number -->
+  <fromUser>{phone_e164}</fromUser>                  <!-- caller ID display -->
   <authUsername>{gencred SIP username}</authUsername> <!-- gencred (SIP digest auth) -->
+  <userCallerId>{phone_e164}</userCallerId>          <!-- SIP From header = caller ID -->
   <password>{sip_password_plaintext}</password>
   <host>sip.telnyx.com</host>                         <!-- NOT <domain> -->
   <transport>udp</transport>                          <!-- lowercase; NO <port> element -->
@@ -402,19 +401,31 @@ repeatedly), accepting `username`/`password` or `cloud_username`/`cloud_password
   **gencred** SIP credential (`sip_username`). Telnyx auto-generates the gencred
   on the credential connection regardless of the `name` we pass, so the gencred
   is required for SIP REGISTER — using the E.164 as `<username>` does NOT
-  authenticate (tried and reverted). The subscriber's E.164 lives in `<fromUser>`
-  / `<displayName>` for caller-ID display; correct caller ID on the far end comes
-  from the outbound voice profile + the `P-Preferred-Identity` header, not from
-  `<username>`.
+  authenticate (tried and reverted). The gencred username/password are read live
+  from Telnyx (`GET /telephony_credentials/{id}`); the POST response may omit
+  `sip_username`.
+- **[DECISION]** `<userCallerId>` = the subscriber's E.164 sets the SIP **From**
+  header on outbound INVITEs — this is the outbound caller ID. Confirmed by the
+  Acrobits developer (Krystof). This is the canonical caller-ID mechanism; the
+  earlier `<fromUser>`-only / `P-Preferred-Identity` approaches did not set the
+  From header. `<fromUser>` / `<displayName>` remain for in-app display. The
+  outbound voice profile attached at DID purchase is now belt-and-suspenders and
+  may be removable.
 - **[DECISION]** SIP account uses `<host>` (not `<domain>`), lowercase
   `<transport>udp`, and **no** `<port>` element (unrecognized) — this is what
   Telnyx SIP registration accepts.
 - **[DECISION]** `<allowMessage>0</allowMessage>` — SIP SIMPLE messaging is off;
   all messaging runs over HTTP via the generic SMS web service.
-- **[DECISION]** Telnyx SIP credential passwords are vendor-generated and cannot
-  be rotated; provisioning fetches the existing credential rather than rotating.
-- **[DECISION]** `dids.signalwire_sid` / `port_requests.signalwire_port_id` keep
-  their legacy names but hold Telnyx ids; not renamed to avoid a data migration.
+- **[DECISION]** Telnyx generates the SIP credential password; provisioning
+  fetches the existing password rather than changing it in place. To rotate, the
+  admin refresh-sip-credentials flow deletes the credential and creates a fresh
+  one (and re-hashes the new password). "Show QR" reads the live credential, so
+  it works without first rotating.
+- **[DECISION]** Two DB columns keep legacy Telnyx-migration names but hold Telnyx
+  ids: `dids.signalwire_sid` (number resource id) and
+  `port_requests.signalwire_port_id` (port-order id). Not renamed to avoid a data
+  migration; likewise `SIGNALWIRE_WEBHOOK_SECRET` is the legacy env name for the
+  shared HMAC secret.
 
 ---
 
@@ -461,7 +472,7 @@ Stripe billing, customer self-service portal, CPNI/CCPA tooling.
 - **App Runner service:** `pivot-tech-middleware-v11`
 - **Middleware URL:** `https://bwgwcrstym.us-east-1.awsapprunner.com`
 - **Dashboard:** `https://mymobilitynet.io` (Netlify, separate Next.js repo)
-- **Version:** `v0.5.1-alpha` — 570 tests passing
+- **Version:** `v0.5.1-alpha` — 781 tests passing
 - CI/CD: GitHub Actions → ECR → App Runner. Do **not** run
   `aws apprunner start-deployment` unprompted.
 
