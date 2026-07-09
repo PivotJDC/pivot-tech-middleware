@@ -53,7 +53,7 @@ describe('issueToken', () => {
 
     const result = await provisioning.issueToken(account);
 
-    expect(result.deep_link).toBe('csc:+12085550100:qr-pw@54873');
+    expect(result.deep_link).toBe('csc:pivottech-abc:qr-pw@54873');
     expect(didOrchestration.getSipPassword).toHaveBeenCalledWith('ep-1');
     // Telnyx credentials are immutable: nothing is re-persisted at issuance.
     expect(accountService.setSipPasswordHash).not.toHaveBeenCalled();
@@ -106,6 +106,7 @@ describe('generateAccountXml', () => {
     // Immutable Telnyx credential — no re-hash/persist on the provisioning path.
     expect(accountService.setSipPasswordHash).not.toHaveBeenCalled();
     expect(acrobits.buildAccountXml).toHaveBeenCalledWith({
+      sipUsername: 'pivottech-abc',
       sipPassword: 'new-pw',
       phoneE164: '+12085550100',
     });
@@ -140,9 +141,8 @@ describe('buildProvisioningQr', () => {
 
     const result = await provisioning.buildProvisioningQr(account);
 
-    // config.acrobits.cloudId is mocked to '54873'; the E.164 (+ → %2B) is the
-    // SIP username.
-    expect(result.provisioning_url).toBe('csc:%2B12085550100:s3cr3t%2Fpw%2B1@54873');
+    // config.acrobits.cloudId is mocked to '54873' in this suite.
+    expect(result.provisioning_url).toBe('csc:pivottech-abc:s3cr3t%2Fpw%2B1@54873');
     expect(result.qr_url).toMatch(/^data:image\/png;base64,/);
     expect(didOrchestration.getSipPassword).toHaveBeenCalledWith('ep-1');
   });

@@ -10,6 +10,7 @@
  * Sequence: pick area code (by market) -> search available numbers -> purchase
  * -> create SIP endpoint -> assign number to endpoint -> return credentials.
  */
+const nodeCrypto = require('crypto');
 const telnyx = require('../integrations/telnyx');
 const config = require('../config');
 const { logger } = require('../utils/logger');
@@ -152,15 +153,17 @@ async function assignDid(
   });
   logger.info({ phoneE164: e164 }, 'attached outbound voice profile to DID');
 
-  // The subscriber's E.164 number IS the SIP credential username (the SIP
-  // identity / caller ID) — no gencred. Telnyx generates only the password on
-  // the credential connection; the username is the phone number.
+  // Telnyx auto-generates the SIP credentials; we only supply a recognizable
+  // name for the Telnyx portal. The credential's real sip_username/sip_password
+  // come back in the create response and are what the account actually uses —
+  // we must NOT substitute our own generated values (they wouldn't authenticate).
+  const credentialName = `pivottech-${nodeCrypto.randomUUID()}`;
   const endpoint = await telnyx.createSipEndpoint({
-    username: e164,
+    username: credentialName,
     callerId: e164,
   });
   const sipEndpointId = idOf(endpoint);
-  const sipUsername = e164;
+  const sipUsername = endpoint.sip_username;
   const sipPassword = endpoint.sip_password;
 
   // Do NOT assign the number to the SIP connection here: provisionPhoneNumber

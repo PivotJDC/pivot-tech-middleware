@@ -39,12 +39,19 @@ async function resolveSipPassword(account) {
  * URI needs no percent-encoding. NEVER log the result — it embeds the live
  * SIP password (security rule #1).
  *
- * The subscriber's E.164 is the single SIP username Acrobits uses for both the
- * From identity (caller ID) and digest auth, so the csc: form carries it
- * directly: csc:{phoneE164}:{password}@{cloudId}.
+ * DECISION (per-subscriber caller ID): the csc: form carries only ONE username,
+ * which Acrobits uses as BOTH the SIP <username> (From identity) and the
+ * <authUsername> (digest auth) — it cannot encode the split identity. We pass
+ * the gencred so SIP REGISTER still authenticates; the subscriber's own caller
+ * ID (From = E.164) is delivered authoritatively by the Account XML
+ * (<username> = phone_e164, <authUsername> = gencred) served from the
+ * token-based GET /v1/provision endpoint. If the branded app provisions purely
+ * from this csc: deep link (bypassing the XML web service), point the QR at
+ * provisioning_url instead so the full split-identity XML is applied. Flagged
+ * for Jim — see acrobits.buildAccountXml.
  */
-function buildCscUri(phoneE164, sipPassword) {
-  return `csc:${phoneE164}:${sipPassword}@${config.acrobits.cloudId}`;
+function buildCscUri(sipUsername, sipPassword) {
+  return `csc:${sipUsername}:${sipPassword}@${config.acrobits.cloudId}`;
 }
 
 /**
@@ -84,8 +91,7 @@ async function buildProvisioningQr(account) {
     );
   }
   const sipPassword = await resolveSipPassword(account);
-  // The E.164 is the SIP username (no gencred).
-  const provisioningUrl = `csc:${encodeURIComponent(account.phone_e164)}`
+  const provisioningUrl = `csc:${encodeURIComponent(account.sip_username)}`
     + `:${encodeURIComponent(sipPassword)}@${config.acrobits.cloudId}`;
   const qrUrl = await qrcode.toDataURL(provisioningUrl, { errorCorrectionLevel: 'M' });
   return { qr_url: qrUrl, provisioning_url: provisioningUrl };
@@ -119,7 +125,7 @@ async function issueToken(account) {
   // (no rotation), so the QR and the XML endpoint now deliver the SAME valid
   // credential — fetching one no longer invalidates the other.
   const sipPassword = await resolveSipPassword(account);
-  const cscUri = buildCscUri(account.phone_e164, sipPassword);
+  const cscUri = buildCscUri(account.sip_username, sipPassword);
 
   const links = await buildLinks(rawToken, cscUri);
   return { raw_token: rawToken, expires_at: rows[0].expires_at, ...links };
@@ -158,9 +164,9 @@ async function validateAndConsumeToken(rawToken) {
 
 /**
  * Assemble the Acrobits Account XML for an account. The account's current SIP
- * password is fetched from Telnyx and rendered into the XML — held only in
- * memory for the duration of this call. The subscriber's E.164 is the SIP
- * username (no gencred), so buildAccountXml derives it from phoneE164.
+ * password is fetched from Telnyx (credentials are immutable, so it is not
+ * rotated) and rendered into the XML — held only in memory for the duration of
+ * this call. The Telnyx-issued sip_username on the account is used as-is.
  * @returns {Promise<string>} XML document
  */
 async function generateAccountXml(account) {
@@ -173,6 +179,7 @@ async function generateAccountXml(account) {
   const sipPassword = await resolveSipPassword(account);
 
   return acrobits.buildAccountXml({
+    sipUsername: account.sip_username,
     sipPassword,
     phoneE164: account.phone_e164,
     // Per-subscriber caller ID display name (first + last). Optional — falls

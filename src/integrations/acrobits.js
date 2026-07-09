@@ -22,10 +22,15 @@ function escapeXml(value) {
 /**
  * Build the Acrobits Account XML.
  *
- * SIP identity: the subscriber's E.164 number IS the SIP credential — there is
- * no gencred. <username>, <authUsername>, and <fromUser> are all the E.164, so
- * the phone number is both the SIP From identity (caller ID) and the SIP digest
- * auth username. <displayName> carries the caller-ID display name.
+ * SIP identity:
+ *   - <username> / <authUsername>  both the Telnyx gencred credential username
+ *                    (sipUsername). Telnyx auto-generates the gencred on the
+ *                    credential connection regardless of the name we pass, so it
+ *                    must be used for SIP REGISTER — the E.164 as <username> does
+ *                    NOT authenticate.
+ * The subscriber's E.164 is carried by <fromUser> (and <displayName>) for
+ * caller-ID display; caller ID on the far end is driven by the outbound voice
+ * profile + the P-Preferred-Identity header (see the rewriting rules below).
  *
  * Per-subscriber caller ID:
  *   - callerIdName   = "{firstName} {lastName}" → the From-header display name
@@ -33,15 +38,15 @@ function escapeXml(value) {
  *                      national-format number when the subscriber has no name.
  *   - phoneE164      → the From-header user, rendered as <fromUser> (the
  *                      recognized Acrobits property; <callerID> is not one).
- * @param {{ sipPassword: string, phoneE164: string,
+ * @param {{ sipUsername: string, sipPassword: string, phoneE164: string,
  *          firstName?: string, lastName?: string }} params
- *   phoneE164 is the subscriber's number — the SIP username AND the SIP identity
- *   / caller ID; sipPassword is the Telnyx credential password; firstName +
+ *   sipUsername is the Telnyx gencred credential (SIP auth only); phoneE164 is
+ *   the subscriber's number (the SIP identity / caller ID number); firstName +
  *   lastName form the caller ID display name.
  * @returns {string} XML document (Content-Type: application/xml)
  */
 function buildAccountXml({
-  sipPassword, phoneE164, firstName, lastName,
+  sipUsername, sipPassword, phoneE164, firstName, lastName,
 }) {
   // Caller ID display name = subscriber's full name; fall back to the
   // national-format number when no name is on file (name fields are optional).
@@ -55,7 +60,7 @@ function buildAccountXml({
   // <authUsername> and <password> from THIS document; %sms_to%/%sms_body%/
   // %last_known_sms_id% are Acrobits service-specific variables. The URL is XML
   // content so the query separators must be escaped as "&amp;". We send
-  // %account[authUsername]% (the subscriber's E.164), which is what authAcrobits
+  // %account[authUsername]% (the Telnyx gencred), which is what authAcrobits
   // keys on via sip_username (with a phone_e164 fallback).
   const base = (config.provisioning.baseUrl || '').replace(/\/+$/, '');
   const smsSendUrl = `${base}/v1/acrobits/send?username=%account[authUsername]%&amp;password=%account[password]%&amp;to=%sms_to%&amp;body=%sms_body%`;
@@ -81,9 +86,9 @@ function buildAccountXml({
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<account>',
-    `  <username>${escapeXml(phoneE164)}</username>`,
+    `  <username>${escapeXml(sipUsername)}</username>`,
     `  <fromUser>${escapeXml(phoneE164)}</fromUser>`,
-    `  <authUsername>${escapeXml(phoneE164)}</authUsername>`,
+    `  <authUsername>${escapeXml(sipUsername)}</authUsername>`,
     `  <password>${escapeXml(sipPassword)}</password>`,
     '  <host>sip.telnyx.com</host>',
     '  <transport>udp</transport>',
