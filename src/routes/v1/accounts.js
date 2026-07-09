@@ -36,8 +36,9 @@ router.post(
       first_name: firstName, last_name: lastName,
       service_address: serviceAddress, billing_address: billingAddress,
     } = req.body || {};
-    // market is optional — any US area code is allowed; createAccount defaults
-    // it to "direct" and derives the search area code from the chosen number.
+    // market is optional — any US area code is allowed (new or port-in);
+    // createAccount defaults it to "national" and derives the search area code
+    // from the chosen number. Market never rejects a signup.
     const account = await accountService.createAccount({
       email,
       market,

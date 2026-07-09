@@ -289,17 +289,17 @@ describe('createAccount', () => {
     expect(updateCall).toBeTruthy();
   });
 
-  it('accepts a non-launched area code: defaults market to "direct" and searches that area code', async () => {
+  it('accepts a non-launched area code: defaults market to "national" and searches that area code', async () => {
     wireHappyPath();
 
     await accountService.createAccount({
       email: 'a@b.co', phone_e164: '+13035550100', service_address: SVC_ADDR,
     });
 
-    // No market provided -> "direct"; area code derived from the chosen number,
+    // No market provided -> "national"; area code derived from the chosen number,
     // and the exact chosen number is passed through as requestedNumber (bought
     // exactly, never substituted).
-    expect(didOrchestration.assignDid).toHaveBeenCalledWith('direct', '303', { firstName: null, lastName: null, serviceAddress: SVC_ADDR_NORM }, '+13035550100');
+    expect(didOrchestration.assignDid).toHaveBeenCalledWith('national', '303', { firstName: null, lastName: null, serviceAddress: SVC_ADDR_NORM }, '+13035550100');
   });
 
   it('routes a FOX promo code to gaiia + broadband fields on the account', async () => {

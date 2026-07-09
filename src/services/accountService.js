@@ -29,8 +29,9 @@ const PLAN_THRESHOLD_MB = {
 };
 
 // Market used when a number is outside any launched market — customers can pick
-// any US area code, so we don't gate on market membership.
-const DEFAULT_MARKET = 'direct';
+// any US area code (and port in from anywhere), so we never gate on market
+// membership; DID orchestration searches by the number's area code.
+const DEFAULT_MARKET = 'national';
 
 // Customer-facing message when the eSIM step fails but the account is kept.
 const BICS_RETRY_MESSAGE = 'BICS provisioning failed — retry from admin';
@@ -343,8 +344,9 @@ async function createAccount(input = {}) {
   // The tenant that owns this account + its DID. Defaults to MobilityNet so
   // single-tenant signups are unchanged.
   const tenantId = input.tenant_id || DEFAULT_TENANT_ID;
-  // Market is optional. Any US area code is allowed; default to "direct" for
-  // numbers outside a launched market (didOrchestration searches by area code).
+  // Market is optional. Any US area code is allowed (new or port-in); default to
+  // "national" for numbers outside a launched market (didOrchestration searches
+  // by the number's area code). Market is NEVER used to reject a signup.
   const market = (typeof input.market === 'string' && input.market.trim())
     ? input.market.trim()
     : DEFAULT_MARKET;

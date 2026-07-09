@@ -65,7 +65,7 @@ describe('POST /v1/accounts', () => {
       .post('/v1/accounts')
       .send({ email: 'a@b.co', phone_e164: '+13035550100' });
     expect(res.status).toBe(201);
-    // market is optional now; createAccount defaults it to "direct".
+    // market is optional now; createAccount defaults it to "national".
     expect(accountService.createAccount).toHaveBeenCalledWith(
       expect.objectContaining({ email: 'a@b.co', phone_e164: '+13035550100' }),
     );
