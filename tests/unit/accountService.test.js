@@ -889,15 +889,21 @@ describe('refreshSipCredentials (rotation)', () => {
   beforeEach(() => {
     telnyx.deleteSipEndpoint.mockReset().mockResolvedValue(undefined);
     telnyx.createSipEndpoint.mockReset();
+    // GET /telephony_credentials/{id} returns the real gencred after the POST.
+    telnyx.getSipEndpoint.mockReset().mockResolvedValue({
+      sip_username: 'pivottech-new', sip_password: 'plaintext-new',
+    });
     crypto.hashPassword.mockReset();
   });
 
-  it('deletes the old credential, creates a new one, persists it, and returns plaintext', async () => {
+  it('creates the credential, GETs the real gencred, persists it, and returns plaintext', async () => {
     db.query
       .mockResolvedValueOnce({ rows: [baseRow] }) // getAccountById
       .mockResolvedValueOnce({}); // UPDATE
-    telnyx.createSipEndpoint.mockResolvedValueOnce({
-      id: 'ep-2', sip_username: 'pivottech-new', sip_password: 'plaintext-new',
+    // POST echoes only the name (no sip_username) — the bug this fix addresses.
+    telnyx.createSipEndpoint.mockResolvedValueOnce({ id: 'ep-2', name: 'pivottech-xyz' });
+    telnyx.getSipEndpoint.mockResolvedValueOnce({
+      sip_username: 'pivottech-new', sip_password: 'plaintext-new',
     });
     crypto.hashPassword.mockResolvedValueOnce('bcrypt$new');
 
@@ -909,7 +915,9 @@ describe('refreshSipCredentials (rotation)', () => {
       expect.objectContaining({ callerId: baseRow.phone_e164 }),
     );
     expect(telnyx.createSipEndpoint.mock.calls[0][0].username).toMatch(/^pivottech-/);
-    // Persists new username + endpoint id + hash (NOT the plaintext).
+    // The real sip_username comes from GET, not the POST response.
+    expect(telnyx.getSipEndpoint).toHaveBeenCalledWith('ep-2');
+    // Persists the GET's gencred + endpoint id + hash (NOT the plaintext).
     const update = db.query.mock.calls.find(
       ([sql]) => /UPDATE accounts SET sip_username = \$1, sip_endpoint_id = \$2, sip_password_hash = \$3/.test(sql),
     );

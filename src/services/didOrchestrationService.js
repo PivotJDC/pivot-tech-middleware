@@ -154,17 +154,24 @@ async function assignDid(
   logger.info({ phoneE164: e164 }, 'attached outbound voice profile to DID');
 
   // Telnyx auto-generates the SIP credentials; we only supply a recognizable
-  // name for the Telnyx portal. The credential's real sip_username/sip_password
-  // come back in the create response and are what the account actually uses —
-  // we must NOT substitute our own generated values (they wouldn't authenticate).
+  // name for the Telnyx portal. The POST response may NOT include the real
+  // sip_username (it can echo the `name`), so we GET the credential afterward to
+  // read the actual gencred username/password Telnyx assigned.
   const credentialName = `pivottech-${nodeCrypto.randomUUID()}`;
-  const endpoint = await telnyx.createSipEndpoint({
+  const created = await telnyx.createSipEndpoint({
     username: credentialName,
     callerId: e164,
   });
-  const sipEndpointId = idOf(endpoint);
+  logger.info({
+    postName: created.name,
+    postSipUsername: created.sip_username,
+    postKeys: Object.keys(created || {}),
+  }, 'Telnyx credential POST response');
+  const sipEndpointId = idOf(created);
+  const endpoint = await telnyx.getSipEndpoint(sipEndpointId);
   const sipUsername = endpoint.sip_username;
   const sipPassword = endpoint.sip_password;
+  logger.info({ sipEndpointId, name: credentialName, sipUsername }, 'fetched Telnyx SIP credential');
 
   // Do NOT assign the number to the SIP connection here: provisionPhoneNumber
   // already pointed the number's voice connection at the TeXML app (for inbound

@@ -10,6 +10,10 @@ const did = require('../../src/services/didOrchestrationService');
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // The real gencred is read via GET /telephony_credentials/{id} after the POST.
+  telnyx.getSipEndpoint.mockResolvedValue({
+    sip_username: 'telnyx-user-1', sip_password: 'telnyx-pw-1',
+  });
 });
 
 describe('assignDid', () => {
@@ -50,6 +54,24 @@ describe('assignDid', () => {
     expect(telnyx.updatePhoneNumber).toHaveBeenCalledWith('+12085550100', {
       outbound_voice_profile_id: '2999700951977165829',
     });
+  });
+
+  it('reads the real gencred via GET when the POST omits sip_username', async () => {
+    telnyx.searchAvailableNumbers.mockResolvedValueOnce([{ number: '+12085550100' }]);
+    telnyx.provisionPhoneNumber.mockResolvedValueOnce({ id: 'sid-1' });
+    // POST response echoes only the name — no sip_username.
+    telnyx.createSipEndpoint.mockResolvedValueOnce({ id: 'ep-9', name: 'pivottech-xyz' });
+    telnyx.getSipEndpoint.mockResolvedValueOnce({
+      sip_username: 'gencred-from-get', sip_password: 'pw-from-get',
+    });
+
+    const cred = await did.assignDid('lewiston-id');
+
+    // The credential id comes from the POST; the username/password from the GET.
+    expect(telnyx.getSipEndpoint).toHaveBeenCalledWith('ep-9');
+    expect(cred.sipEndpointId).toBe('ep-9');
+    expect(cred.sipUsername).toBe('gencred-from-get');
+    expect(cred.sipPassword).toBe('pw-from-get');
   });
 
   it('provisions E911 (best-effort) when an enrollment serviceAddress is supplied', async () => {
