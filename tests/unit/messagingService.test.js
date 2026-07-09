@@ -170,6 +170,30 @@ describe('handleInboundMessage', () => {
     expect(pushService.sendMessagePush).not.toHaveBeenCalled();
   });
 
+  it('gracefully returns the existing row when the INSERT hits a unique conflict (race)', async () => {
+    const existing = { id: 'in-race', direction: 'inbound' };
+    db.query
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] }) // account by `to`
+      .mockResolvedValueOnce({ rows: [] }) // pre-insert dedup: not found (race window)
+      .mockResolvedValueOnce({ rows: [] }) // INSERT ... ON CONFLICT DO NOTHING → no row
+      .mockResolvedValueOnce({ rows: [existing] }); // SELECT existing after conflict
+
+    const msg = await messaging.handleInboundMessage({
+      id: 'tmsg-race',
+      from: { phone_number: '+12085550142' },
+      to: [{ phone_number: '+12085550100' }],
+      text: 'hi',
+    });
+
+    expect(msg).toEqual(existing);
+    // The INSERT uses ON CONFLICT DO NOTHING (partial-index predicate), then
+    // re-selects the winner; no error, no push.
+    expect(db.query.mock.calls[2][0])
+      .toMatch(/ON CONFLICT \(telnyx_message_id\) WHERE telnyx_message_id IS NOT NULL DO NOTHING/);
+    expect(db.query.mock.calls[3][0]).toMatch(/SELECT \* FROM messages WHERE telnyx_message_id = \$1/);
+    expect(pushService.sendMessagePush).not.toHaveBeenCalled();
+  });
+
   it('archives inbound media to S3 and rewrites media_urls (bucket set)', async () => {
     s3.bucket.mockReturnValue('mobilitynet-recordings');
     s3.uploadObject.mockResolvedValue({ key: 'k' });

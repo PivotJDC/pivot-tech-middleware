@@ -178,11 +178,22 @@ async function handleInboundMessage(payload = {}) {
        (account_id, direction, from_number, to_number, body, media_urls,
         telnyx_message_id, status)
      VALUES ($1, 'inbound', $2, $3, $4, $5, $6, 'received')
+     ON CONFLICT (telnyx_message_id) WHERE telnyx_message_id IS NOT NULL DO NOTHING
      RETURNING *`,
     [accountId, from, to, body, mediaUrls, telnyxMessageId],
   );
-  logger.info({ accountId, telnyxMessageId }, 'inbound message stored');
   const inbound = rows[0];
+  if (!inbound) {
+    // Lost a concurrent-insert race (the UNIQUE index rejected the duplicate) —
+    // return the row the other delivery stored. No error, no retry.
+    const existing = await db.query(
+      'SELECT * FROM messages WHERE telnyx_message_id = $1',
+      [telnyxMessageId],
+    );
+    logger.info({ accountId, telnyxMessageId }, 'duplicate inbound message skipped');
+    return existing.rows[0] || null;
+  }
+  logger.info({ accountId, telnyxMessageId }, 'inbound message stored');
 
   // Best-effort: archive Telnyx media to our S3 (Telnyx URLs expire), compressing
   // oversized images. Rewrite media_urls to the durable S3 URLs. Never let this
