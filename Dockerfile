@@ -11,6 +11,12 @@ RUN npm ci --omit=dev
 # --- runtime stage ---
 FROM base AS runtime
 ENV PORT=3000
+
+# ffmpeg for outbound MMS video compression (src/utils/media.js).
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src

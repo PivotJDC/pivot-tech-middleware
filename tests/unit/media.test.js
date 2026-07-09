@@ -6,18 +6,34 @@ const mockChain = {
   toBuffer: jest.fn(),
 };
 jest.mock('sharp', () => jest.fn(() => mockChain));
+// Only the ffmpeg invocation is mocked; temp-file I/O uses real fs (tmpdir), so
+// the video path is exercised end to end without deopting the whole file with an
+// fs mock.
+const mockExecFile = jest.fn();
+jest.mock('child_process', () => ({ execFile: (...args) => mockExecFile(...args) }));
 jest.mock('../../src/utils/logger', () => ({
   logger: { info: () => {}, warn: () => {}, error: () => {} },
   REDACT_PATHS: [],
 }));
 
+const fsp = require('fs').promises;
 const sharp = require('sharp');
 const {
-  compressImageIfNeeded, extFor, isImage, MAX_MEDIA_BYTES,
+  compressImageIfNeeded, compressVideoIfNeeded, compressMediaIfNeeded,
+  extFor, isImage, isVideo, MAX_MEDIA_BYTES,
 } = require('../../src/utils/media');
 
 const big = (n = MAX_MEDIA_BYTES + 1) => Buffer.alloc(n, 1);
 const small = (n = 100) => Buffer.alloc(n, 2);
+
+// Simulate a successful ffmpeg run: write `size` bytes to the output path (the
+// last arg) and call back with no error.
+function ffmpegWrites(size) {
+  mockExecFile.mockImplementation((file, args, options, cb) => {
+    const outputPath = args[args.length - 1];
+    fsp.writeFile(outputPath, Buffer.alloc(size, 3)).then(() => cb(null)).catch(cb);
+  });
+}
 
 beforeEach(() => {
   sharp.mockClear();
@@ -25,6 +41,7 @@ beforeEach(() => {
   mockChain.resize.mockClear();
   mockChain.jpeg.mockClear();
   mockChain.toBuffer.mockReset();
+  mockExecFile.mockReset();
 });
 
 describe('extFor / isImage', () => {
@@ -84,5 +101,81 @@ describe('compressImageIfNeeded', () => {
     const buf = big();
     const out = await compressImageIfNeeded(buf, 'image/heic');
     expect(out).toEqual({ buffer: buf, contentType: 'image/heic' });
+  });
+});
+
+describe('isVideo', () => {
+  it('detects video content-types', () => {
+    expect(isVideo('video/mp4')).toBe(true);
+    expect(isVideo('video/3gpp')).toBe(true);
+    expect(isVideo('image/jpeg')).toBe(false);
+    expect(isVideo(undefined)).toBe(false);
+  });
+});
+
+describe('compressVideoIfNeeded', () => {
+  it('returns non-videos unchanged (no ffmpeg)', async () => {
+    const buf = big();
+    const out = await compressVideoIfNeeded(buf, 'image/png');
+    expect(out).toEqual({ buffer: buf, contentType: 'image/png' });
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it('returns small videos unchanged (no ffmpeg)', async () => {
+    const buf = small();
+    const out = await compressVideoIfNeeded(buf, 'video/mp4');
+    expect(out).toEqual({ buffer: buf, contentType: 'video/mp4' });
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it('transcodes an oversized video to H.264/AAC mp4 with the size cap', async () => {
+    ffmpegWrites(80); // ffmpeg produces an 80-byte output
+
+    const out = await compressVideoIfNeeded(big(), 'video/quicktime');
+
+    expect(out.contentType).toBe('video/mp4');
+    expect(out.buffer.length).toBe(80);
+    // ffmpeg args carry the required flags.
+    const [cmd, args] = mockExecFile.mock.calls[0];
+    expect(cmd).toBe('ffmpeg');
+    expect(args).toEqual(expect.arrayContaining([
+      '-vf', 'scale=480:-2', '-c:v', 'libx264', '-crf', '28',
+      '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', '-fs', '500000',
+    ]));
+    // Input temp file uses the source extension (mov for quicktime).
+    expect(args[args.indexOf('-i') + 1]).toMatch(/\.mov$/);
+    // Temp files are cleaned up.
+    await expect(fsp.access(args[args.indexOf('-i') + 1])).rejects.toBeDefined();
+    await expect(fsp.access(args[args.length - 1])).rejects.toBeDefined();
+  });
+
+  it('returns the original when ffmpeg fails (best-effort)', async () => {
+    mockExecFile.mockImplementation((file, args, opts, cb) => cb(new Error('ffmpeg boom')));
+    const buf = big();
+
+    const out = await compressVideoIfNeeded(buf, 'video/mp4');
+
+    expect(out).toEqual({ buffer: buf, contentType: 'video/mp4' });
+  });
+});
+
+describe('compressMediaIfNeeded (dispatcher)', () => {
+  it('routes images to sharp and videos to ffmpeg; passes others through', async () => {
+    // Image → sharp (mocked to return small).
+    mockChain.toBuffer.mockResolvedValueOnce(small());
+    const img = await compressMediaIfNeeded(big(), 'image/png');
+    expect(img.contentType).toBe('image/jpeg');
+    expect(mockExecFile).not.toHaveBeenCalled();
+
+    // Video → ffmpeg.
+    ffmpegWrites(50);
+    const vid = await compressMediaIfNeeded(big(), 'video/mp4');
+    expect(vid.contentType).toBe('video/mp4');
+    expect(vid.buffer.length).toBe(50);
+
+    // Other (audio) → unchanged.
+    const buf = big();
+    const audio = await compressMediaIfNeeded(buf, 'audio/mpeg');
+    expect(audio).toEqual({ buffer: buf, contentType: 'audio/mpeg' });
   });
 });

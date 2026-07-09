@@ -12,7 +12,7 @@
  */
 const nodeCrypto = require('crypto');
 const s3 = require('../integrations/s3');
-const { extFor, compressImageIfNeeded } = require('../utils/media');
+const { extFor, compressMediaIfNeeded } = require('../utils/media');
 const { logger } = require('../utils/logger');
 
 /**
@@ -54,8 +54,9 @@ async function resolveOne(accountId, att) {
     const encrypted = Buffer.from(await res.arrayBuffer());
     const decrypted = decryptMedia(encrypted, att.encryptionKey);
 
-    // Compress oversized images before upload (image/jpeg out).
-    const { buffer, contentType } = await compressImageIfNeeded(decrypted, att.contentType);
+    // Compress oversized media before upload — images via sharp, videos via
+    // ffmpeg (image/jpeg or video/mp4 out).
+    const { buffer, contentType } = await compressMediaIfNeeded(decrypted, att.contentType);
     const key = `mms/${accountId}/${nodeCrypto.randomUUID()}.${extFor(contentType, url)}`;
     await s3.uploadObject({ key, body: buffer, contentType });
     const signed = await s3.getSignedRecordingUrl(key, 3600);
