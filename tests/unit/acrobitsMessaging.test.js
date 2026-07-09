@@ -77,10 +77,10 @@ describe('GET /v1/acrobits/provision', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/text\/xml/);
-    // SIP identity: <username> is the subscriber E.164 (SIP From / caller ID);
-    // <authUsername> is the gencred (SIP digest auth only).
+    // SIP identity: the E.164 is BOTH <username> (SIP From / caller ID) and
+    // <authUsername> (digest auth) — no gencred.
     expect(res.text).toContain('<username>+12085550100</username>');
-    expect(res.text).toContain('<authUsername>pivottech-abc</authUsername>');
+    expect(res.text).toContain('<authUsername>+12085550100</authUsername>');
     // The verified plaintext password is rendered into the XML (no Telnyx call).
     expect(res.text).toContain('<password>sip-secret</password>');
     expect(res.text).toContain('<displayName>Jane Doe</displayName>');
@@ -97,7 +97,7 @@ describe('GET /v1/acrobits/provision', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/text\/xml/);
-    expect(res.text).toContain('<authUsername>pivottech-abc</authUsername>');
+    expect(res.text).toContain('<authUsername>+12085550100</authUsername>');
     expect(res.text).toContain('<password>sip-secret</password>');
     expect(accountService.lookupBySipUsername).toHaveBeenCalledWith('pivottech-abc');
     expect(crypto.verifyPassword).toHaveBeenCalledWith('sip-secret', 'bcrypt$x');

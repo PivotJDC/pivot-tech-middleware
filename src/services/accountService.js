@@ -591,14 +591,14 @@ async function refreshSipCredentials(id) {
     }
   }
 
-  // 2. Create a NEW credential — Telnyx auto-generates the username + password.
-  const credentialName = `pivottech-${nodeCrypto.randomUUID()}`;
+  // 2. Create a NEW credential — the subscriber's E.164 is the SIP username
+  // (no gencred); Telnyx generates only the password.
   const endpoint = await telnyx.createSipEndpoint({
-    username: credentialName,
+    username: account.phone_e164,
     callerId: account.phone_e164,
   });
   const sipEndpointId = endpoint.id || endpoint.sid;
-  const sipUsername = endpoint.sip_username;
+  const sipUsername = account.phone_e164;
   const sipPassword = endpoint.sip_password;
 
   // 3. Persist the new username + endpoint id + password hash.

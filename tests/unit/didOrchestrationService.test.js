@@ -28,15 +28,16 @@ describe('assignDid', () => {
       areaCode: '208',
       signalwireSid: 'sid-1',
       sipEndpointId: 'ep-1',
-      // The account uses Telnyx's returned credentials, not self-generated ones.
-      sipUsername: 'telnyx-user-1',
+      // The subscriber's E.164 IS the SIP username (no gencred); only the
+      // password comes from Telnyx.
+      sipUsername: '+12085550100',
       sipPassword: 'telnyx-pw-1',
     });
-    // We still pass a recognizable credential name, but never a password (Telnyx generates it).
+    // The credential is created with the E.164 as its username; never a password
+    // (Telnyx generates it).
     expect(telnyx.createSipEndpoint).toHaveBeenCalledWith(
-      expect.objectContaining({ callerId: '+12085550100' }),
+      expect.objectContaining({ username: '+12085550100', callerId: '+12085550100' }),
     );
-    expect(telnyx.createSipEndpoint.mock.calls[0][0].username).toMatch(/^pivottech-/);
     expect(telnyx.createSipEndpoint.mock.calls[0][0]).not.toHaveProperty('password');
     // The number's connection_id stays on the TeXML app (set by
     // provisionPhoneNumber); we must NOT reassign it to the SIP connection.

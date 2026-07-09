@@ -903,20 +903,19 @@ describe('refreshSipCredentials (rotation)', () => {
 
     const result = await accountService.refreshSipCredentials(baseRow.id);
 
-    // Old credential deleted; new one created bound to the account's number.
+    // Old credential deleted; new one created with the E.164 as its username.
     expect(telnyx.deleteSipEndpoint).toHaveBeenCalledWith(baseRow.sip_endpoint_id);
     expect(telnyx.createSipEndpoint).toHaveBeenCalledWith(
-      expect.objectContaining({ callerId: baseRow.phone_e164 }),
+      expect.objectContaining({ username: baseRow.phone_e164, callerId: baseRow.phone_e164 }),
     );
-    expect(telnyx.createSipEndpoint.mock.calls[0][0].username).toMatch(/^pivottech-/);
-    // Persists new username + endpoint id + hash (NOT the plaintext).
+    // Persists the E.164 as sip_username + endpoint id + hash (NOT the plaintext).
     const update = db.query.mock.calls.find(
       ([sql]) => /UPDATE accounts SET sip_username = \$1, sip_endpoint_id = \$2, sip_password_hash = \$3/.test(sql),
     );
-    expect(update[1]).toEqual(['pivottech-new', 'ep-2', 'bcrypt$new', baseRow.id]);
-    // Returns the plaintext once for QR generation.
+    expect(update[1]).toEqual([baseRow.phone_e164, 'ep-2', 'bcrypt$new', baseRow.id]);
+    // Returns the E.164 username + the plaintext once for QR generation.
     expect(result).toEqual({
-      sip_username: 'pivottech-new', sip_password: 'plaintext-new', updated: true,
+      sip_username: baseRow.phone_e164, sip_password: 'plaintext-new', updated: true,
     });
   });
 

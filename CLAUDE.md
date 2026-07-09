@@ -275,10 +275,13 @@ Key capabilities used:
   `PATCH /phone_numbers/{id}/voice` (point at the TeXML voice connection) and
   `PATCH /phone_numbers/{id}/messaging` (attach the messaging profile). The
   messaging sub-resource can lag the order; retry once on 404.
-- **SIP credentials (gencred)** — Telnyx auto-generates the SIP
-  username/password on the credential connection; we store the bcrypt hash and
-  hold plaintext only in memory during Account XML rendering. Passwords are NOT
-  rotatable — fetch the existing credential on GET when needed.
+- **SIP credentials** — the subscriber's **E.164 number is the SIP credential
+  username** (no gencred), so the phone number is the SIP identity / caller ID.
+  The credential is created on the credential connection with the E.164 as its
+  name; Telnyx generates the password. We store the E.164 as `sip_username` and
+  the bcrypt hash of the password; plaintext is held only in memory during
+  Account XML / QR rendering. Rotating credentials (admin refresh-sip-credentials)
+  deletes the old credential and creates a fresh E.164-named one.
 - **CNAM** — `PATCH /phone_numbers/{id}/voice` with a `cnam_listing` object
   (name capped at 15 chars; brand fallback "MobilityNet").
 - **E911** — create address + enable emergency calling (best-effort).
@@ -301,7 +304,7 @@ current element choices (each is load-bearing — see decisions below):
 <account>
   <username>{phone_e164}</username>                  <!-- SIP From / caller ID -->
   <fromUser>{phone_e164}</fromUser>                  <!-- outbound caller ID number -->
-  <authUsername>{gencred SIP username}</authUsername> <!-- SIP digest auth only -->
+  <authUsername>{phone_e164}</authUsername>          <!-- SIP digest auth (also E.164) -->
   <password>{sip_password_plaintext}</password>
   <host>sip.telnyx.com</host>                         <!-- NOT <domain> -->
   <transport>udp</transport>                          <!-- lowercase; NO <port> element -->
@@ -398,20 +401,25 @@ repeatedly), accepting `username`/`password` or `cloud_username`/`cloud_password
   `%pushappid_incoming_call%`, `%pushappid_other%`.
 - **[DECISION]** The `/v1/acrobits/send` handler reads the body from
   `p.body || p.sms_body || p.message_body` (Acrobits varies the field name).
-- **[DECISION]** `<username>` in the Account XML is the subscriber's **E.164**
-  number (per Acrobits developer guidance): Acrobits puts `<username>` into the
-  SIP From header, so it controls the outbound caller ID. `<authUsername>` is the
-  **gencred** SIP credential, used for SIP digest auth only. (This reverses the
-  earlier decision that had `<username>` = gencred — that presented the wrong
-  caller ID.) The messaging/push web-service URLs still authenticate with
-  `%account[authUsername]%` (the gencred), which `authAcrobits` keys on.
+- **[DECISION]** The subscriber's **E.164 number is the SIP credential username**
+  — there is no gencred anywhere. `<username>`, `<authUsername>`, and `<fromUser>`
+  in the Account XML are all the E.164, and the credential is created on Telnyx
+  with the E.164 as its name. The phone number is the SIP identity, which fixes
+  caller ID without an ANI override. Messaging/push URLs authenticate with
+  `%account[authUsername]%` (= the E.164), which `authAcrobits` keys on via
+  `sip_username` (keep the `phone_e164` fallback). Existing subscribers need a
+  credential rotation (admin refresh-sip-credentials) to move onto the new
+  E.164-based credential. (Supersedes the earlier gencred / split-identity
+  decisions.)
 - **[DECISION]** SIP account uses `<host>` (not `<domain>`), lowercase
   `<transport>udp`, and **no** `<port>` element (unrecognized) — this is what
   Telnyx SIP registration accepts.
 - **[DECISION]** `<allowMessage>0</allowMessage>` — SIP SIMPLE messaging is off;
   all messaging runs over HTTP via the generic SMS web service.
-- **[DECISION]** Telnyx SIP credential passwords are vendor-generated and cannot
-  be rotated; provisioning fetches the existing credential rather than rotating.
+- **[DECISION]** Telnyx generates the SIP credential password; provisioning
+  fetches the existing password rather than changing it in place. To rotate, the
+  admin refresh-sip-credentials flow deletes the credential and creates a new
+  E.164-named one (and re-hashes the new password).
 - **[DECISION]** `dids.signalwire_sid` / `port_requests.signalwire_port_id` keep
   their legacy names but hold Telnyx ids; not renamed to avoid a data migration.
 
