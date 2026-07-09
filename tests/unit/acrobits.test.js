@@ -10,9 +10,10 @@ describe('acrobits.buildAccountXml', () => {
   it('renders the Acrobits Account XML with all required fields', () => {
     const xml = acrobits.buildAccountXml(params);
     expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
-    // <username> and <authUsername> are both the Telnyx gencred — <username> is
-    // used for SIP REGISTER and must match what Telnyx expects.
-    expect(xml).toContain('<username>pivottech-abc</username>');
+    // <username> is the subscriber's E.164 — Acrobits puts it in the SIP From
+    // header, so it controls the outbound caller ID. <authUsername> is the
+    // Telnyx gencred, used only for SIP digest auth.
+    expect(xml).toContain('<username>+12085550100</username>');
     expect(xml).toContain('<authUsername>pivottech-abc</authUsername>');
     expect(xml).toContain('<password>sip-secret-123</password>');
     // Correct Account XML property names: <host> (not <domain>), lowercase
@@ -31,8 +32,8 @@ describe('acrobits.buildAccountXml', () => {
     expect(xml).not.toContain('<callerID>');
     expect(xml).toContain('<displayName>(208) 555-0100</displayName>');
     expect(xml).toContain('<codecPriority>OPUS,ULAW,ALAW</codecPriority>');
-    // The E.164 number is caller ID only, never the SIP <username>.
-    expect(xml).not.toContain('<username>+12085550100</username>');
+    // The gencred is the SIP auth username (authUsername), never the <username>.
+    expect(xml).not.toContain('<username>pivottech-abc</username>');
   });
 
   it('embeds the generic SMS web-service URLs with Acrobits template variables', () => {

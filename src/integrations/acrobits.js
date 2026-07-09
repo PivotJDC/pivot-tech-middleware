@@ -22,15 +22,16 @@ function escapeXml(value) {
 /**
  * Build the Acrobits Account XML.
  *
- * SIP identity:
- *   - <username>     the SIP account username used for REGISTER — it must match
- *                    what Telnyx expects, i.e. the Telnyx-generated gencred
- *                    credential username (sipUsername). Using the E.164 number
- *                    here breaks registration.
- *   - <authUsername> the username used in SIP authorization (digest) headers —
- *                    also the gencred credential, so it matches <username>.
- * The subscriber's E.164 number is carried by <fromUser> and <displayName>
- * (below) for outbound caller-ID display, not by <username>.
+ * SIP identity (per Acrobits developer guidance — this is what controls the
+ * outbound caller ID):
+ *   - <username>     the subscriber's E.164 number (phoneE164). Acrobits puts
+ *                    <username> into the SIP From header, so this is what sets
+ *                    the caller ID on outbound calls.
+ *   - <authUsername> the Telnyx gencred credential (sipUsername), used ONLY for
+ *                    SIP digest authentication (it's what Telnyx authenticates
+ *                    REGISTER/INVITE against).
+ * The subscriber's E.164 also stays in <fromUser> (below) for backward
+ * compatibility; <displayName> carries the caller-ID display name.
  *
  * Per-subscriber caller ID:
  *   - callerIdName   = "{firstName} {lastName}" → the From-header display name
@@ -86,7 +87,7 @@ function buildAccountXml({
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<account>',
-    `  <username>${escapeXml(sipUsername)}</username>`,
+    `  <username>${escapeXml(phoneE164)}</username>`,
     `  <fromUser>${escapeXml(phoneE164)}</fromUser>`,
     `  <authUsername>${escapeXml(sipUsername)}</authUsername>`,
     `  <password>${escapeXml(sipPassword)}</password>`,

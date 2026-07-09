@@ -299,9 +299,9 @@ current element choices (each is load-bearing — see decisions below):
 
 ```xml
 <account>
-  <username>{gencred SIP username}</username>        <!-- NOT the phone number -->
+  <username>{phone_e164}</username>                  <!-- SIP From / caller ID -->
   <fromUser>{phone_e164}</fromUser>                  <!-- outbound caller ID number -->
-  <authUsername>{gencred SIP username}</authUsername>
+  <authUsername>{gencred SIP username}</authUsername> <!-- SIP digest auth only -->
   <password>{sip_password_plaintext}</password>
   <host>sip.telnyx.com</host>                         <!-- NOT <domain> -->
   <transport>udp</transport>                          <!-- lowercase; NO <port> element -->
@@ -398,10 +398,13 @@ repeatedly), accepting `username`/`password` or `cloud_username`/`cloud_password
   `%pushappid_incoming_call%`, `%pushappid_other%`.
 - **[DECISION]** The `/v1/acrobits/send` handler reads the body from
   `p.body || p.sms_body || p.message_body` (Acrobits varies the field name).
-- **[DECISION]** `<username>` in the Account XML must be the **gencred** SIP
-  credential (matching `<authUsername>`) so SIP REGISTER authenticates — **not**
-  the phone number. The subscriber's E.164 lives in `<fromUser>` / `<callerID>` /
-  `<displayName>`.
+- **[DECISION]** `<username>` in the Account XML is the subscriber's **E.164**
+  number (per Acrobits developer guidance): Acrobits puts `<username>` into the
+  SIP From header, so it controls the outbound caller ID. `<authUsername>` is the
+  **gencred** SIP credential, used for SIP digest auth only. (This reverses the
+  earlier decision that had `<username>` = gencred — that presented the wrong
+  caller ID.) The messaging/push web-service URLs still authenticate with
+  `%account[authUsername]%` (the gencred), which `authAcrobits` keys on.
 - **[DECISION]** SIP account uses `<host>` (not `<domain>`), lowercase
   `<transport>udp`, and **no** `<port>` element (unrecognized) — this is what
   Telnyx SIP registration accepts.
