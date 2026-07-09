@@ -159,6 +159,20 @@ async function handleInboundMessage(payload = {}) {
   }
   const accountId = account.rows[0].id;
 
+  // Idempotency: Telnyx can deliver the same webhook more than once. If we've
+  // already stored this message, return the existing row instead of inserting a
+  // duplicate (which would double it up in the fetch response).
+  if (telnyxMessageId) {
+    const existing = await db.query(
+      'SELECT * FROM messages WHERE telnyx_message_id = $1',
+      [telnyxMessageId],
+    );
+    if (existing.rows.length > 0) {
+      logger.info({ accountId, telnyxMessageId }, 'duplicate inbound message skipped');
+      return existing.rows[0];
+    }
+  }
+
   const { rows } = await db.query(
     `INSERT INTO messages
        (account_id, direction, from_number, to_number, body, media_urls,

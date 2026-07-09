@@ -112,6 +112,7 @@ describe('handleInboundMessage', () => {
   it('creates an inbound record from a Telnyx payload', async () => {
     db.query
       .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] }) // account by `to`
+      .mockResolvedValueOnce({ rows: [] }) // idempotency: no existing message
       .mockResolvedValueOnce({ rows: [{ id: 'in-1', direction: 'inbound' }] }); // INSERT
 
     const payload = {
@@ -127,7 +128,7 @@ describe('handleInboundMessage', () => {
     expect(lookup[0]).toMatch(/WHERE phone_e164 = \$1/);
     expect(lookup[1]).toEqual(['+12085550100']);
 
-    const [sql, params] = db.query.mock.calls[1];
+    const [sql, params] = db.query.mock.calls[2];
     expect(sql).toMatch(/'inbound'/);
     expect(params[0]).toBe(ACCOUNT_ID);
     expect(params[1]).toBe('+12085550142'); // from
@@ -147,6 +148,28 @@ describe('handleInboundMessage', () => {
     expect(db.query).toHaveBeenCalledTimes(1); // no INSERT
   });
 
+  it('skips a duplicate webhook (same telnyx_message_id) and returns the existing row', async () => {
+    const existing = { id: 'in-dup', direction: 'inbound', from_number: '+12085550142' };
+    db.query
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] }) // account by `to`
+      .mockResolvedValueOnce({ rows: [existing] }); // idempotency: already stored
+
+    const msg = await messaging.handleInboundMessage({
+      id: 'tmsg-dup',
+      from: { phone_number: '+12085550142' },
+      to: [{ phone_number: '+12085550100' }],
+      text: 'hi',
+    });
+
+    expect(msg).toEqual(existing);
+    // Looked up by telnyx_message_id; no INSERT, no push.
+    const dedup = db.query.mock.calls[1];
+    expect(dedup[0]).toMatch(/SELECT \* FROM messages WHERE telnyx_message_id = \$1/);
+    expect(dedup[1]).toEqual(['tmsg-dup']);
+    expect(db.query).toHaveBeenCalledTimes(2); // account lookup + dedup only
+    expect(pushService.sendMessagePush).not.toHaveBeenCalled();
+  });
+
   it('archives inbound media to S3 and rewrites media_urls (bucket set)', async () => {
     s3.bucket.mockReturnValue('mobilitynet-recordings');
     s3.uploadObject.mockResolvedValue({ key: 'k' });
@@ -157,6 +180,7 @@ describe('handleInboundMessage', () => {
     });
     db.query
       .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] }) // account by `to`
+      .mockResolvedValueOnce({ rows: [] }) // idempotency: no existing message
       .mockResolvedValueOnce({ rows: [{ id: 'in-9', media_urls: ['https://telnyx/a.jpg'] }] }) // INSERT
       .mockResolvedValueOnce({ rows: [] }); // UPDATE media_urls
 
@@ -169,7 +193,7 @@ describe('handleInboundMessage', () => {
       media: [{ url: 'https://telnyx/a.jpg', content_type: 'image/jpeg' }],
     });
 
-    const update = db.query.mock.calls[2];
+    const update = db.query.mock.calls[3];
     expect(update[0]).toMatch(/UPDATE messages SET media_urls = \$1 WHERE id = \$2/);
     expect(update[1]).toEqual([[s3Url], 'in-9']);
     expect(msg.media_urls).toEqual([s3Url]);
@@ -303,6 +327,7 @@ describe('handleMessagingWebhook', () => {
   it('pushes an inbound message to the account, threaded by sender', async () => {
     db.query
       .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] }) // account lookup by `to`
+      .mockResolvedValueOnce({ rows: [] }) // idempotency: no existing message
       .mockResolvedValueOnce({ // inbound insert RETURNING *
         rows: [{
           id: 'in-9', from_number: '+12022762305', to_number: '+12085550100', body: 'Hello there',
