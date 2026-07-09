@@ -127,6 +127,9 @@ function voicemailPromptXml(account, accountId, from, greetingUrl) {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<Response>',
+    // Let the audio channel establish before the greeting — when the call rings
+    // through (rather than being declined) the first ~1-2s would otherwise clip.
+    '  <Pause length="1"/>',
     greeting,
     '  <Say voice="alice">Or press star to reach the voicemail menu.</Say>',
     // Transcription intentionally omitted for now — we can add it later via a

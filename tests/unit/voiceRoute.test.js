@@ -377,7 +377,8 @@ describe('POST /v1/voice/voicemail-handler', () => {
       .type('form')
       .send({ DialCallStatus: 'no-answer' });
     expect(res.status).toBe(200);
-    expect(res.text).toContain('<Say voice="alice">You have reached Jane Doe.');
+    // A 1s pause precedes the greeting so the audio channel establishes first.
+    expect(res.text).toMatch(/<Pause length="1"\/>\s*<Say voice="alice">You have reached Jane Doe\./);
     expect(res.text).toContain('Or press star to reach the voicemail menu.');
     expect(res.text).toContain('<Record maxLength="120"');
     // Fires the action on 5s of silence / hangup, not only on # (most callers).
@@ -401,7 +402,8 @@ describe('POST /v1/voice/voicemail-handler', () => {
       .post('/v1/voice/voicemail-handler?accountId=a1&from=%2B1')
       .type('form')
       .send({ DialCallStatus: 'busy' });
-    expect(res.text).toContain('<Play>https://cdn/greet.mp3</Play>');
+    // Pause precedes the custom <Play> greeting too (avoids clipping).
+    expect(res.text).toMatch(/<Pause length="1"\/>\s*<Play>https:\/\/cdn\/greet\.mp3<\/Play>/);
     expect(res.text).not.toContain('<Say voice="alice">You have reached');
   });
 
