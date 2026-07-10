@@ -348,6 +348,51 @@ describe('listPorts', () => {
   });
 });
 
+describe('listPortOrders', () => {
+  it('lists FastPort port orders and strips encrypted secrets', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'po1',
+          status: 'submitted',
+          pin_encrypted: 'iv:tag:ct',
+          account_number_encrypted: 'iv:tag:ct2',
+        }],
+      });
+    const result = await adminService.listPortOrders({ status: 'submitted' });
+    expect(result.port_orders[0]).not.toHaveProperty('pin_encrypted');
+    expect(result.port_orders[0]).not.toHaveProperty('account_number_encrypted');
+    expect(result.port_orders[0].id).toBe('po1');
+    expect(db.query.mock.calls[0][0]).toContain('FROM port_orders');
+  });
+
+  it('scopes to a tenant via the owning account subquery', async () => {
+    db.query.mockResolvedValue({ rows: [{ total: 0 }] });
+    await adminService.listPortOrders({ tenantId: 'ten-1' });
+    expect(db.query.mock.calls[0][0]).toContain('account_id IN (SELECT id FROM accounts WHERE tenant_id');
+  });
+});
+
+describe('getPortOrder', () => {
+  it('returns one order with secrets stripped', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'po1', status: 'submitted', pin_encrypted: 'x', account_number_encrypted: 'y',
+      }],
+    });
+    const result = await adminService.getPortOrder('po1', null);
+    expect(result.id).toBe('po1');
+    expect(result).not.toHaveProperty('pin_encrypted');
+  });
+
+  it('throws NOT_FOUND when the order is absent or out of tenant scope', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await expect(adminService.getPortOrder('nope', 'ten-1'))
+      .rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
 describe('retryPort', () => {
   it('resubmits a failed port and clears the failure', async () => {
     db.query

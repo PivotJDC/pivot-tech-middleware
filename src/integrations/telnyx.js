@@ -543,6 +543,99 @@ async function submitPort(payload) {
   return unwrap(await request('POST', '/porting_orders', payload));
 }
 
+// --- FastPort porting (Phase 1) ---
+// The Telnyx porting-order native flow used by portService. Each function wraps
+// a single Telnyx endpoint and unwraps the `data` envelope so callers see the
+// bare resource.
+
+/**
+ * Check whether a number can be ported in, and whether it qualifies for FastPort
+ * (same-day). POST /v2/portability_checks accepts a list of numbers and returns a
+ * per-number result array; we check a single number and normalize the first
+ * result to a flat shape.
+ * @param {string} phoneNumber - E.164 number to check.
+ * @returns {Promise<{ portable: boolean, fast_portable: boolean,
+ *   carrier_name: string|null, not_portable_reason: string|null }>}
+ */
+async function checkPortability(phoneNumber) {
+  const data = unwrap(await request('POST', '/portability_checks', {
+    phone_numbers: [phoneNumber],
+  }));
+  const result = (Array.isArray(data) ? data[0] : data) || {};
+  return {
+    portable: Boolean(result.portable),
+    fast_portable: Boolean(result.fast_portable),
+    carrier_name: result.carrier_name || null,
+    not_portable_reason: result.not_portable_reason || null,
+  };
+}
+
+/**
+ * Create a Telnyx porting order for one or more numbers.
+ * DECISION: Telnyx configures porting webhooks account-wide (Mission Control),
+ * not per order — the create body has no webhook field. We accept `webhookUrl`
+ * for signature clarity / forward-compat and log it, but do not send it (an
+ * unknown field would 422). The porting webhook lands on /v1/webhooks/porting.
+ * @param {string[]} phoneNumbers - E.164 numbers to port in.
+ * @param {string} [webhookUrl] - our porting webhook URL (informational).
+ * @returns {Promise<object>} the created porting order resource.
+ */
+async function createPortOrder(phoneNumbers, webhookUrl) {
+  const numbers = Array.isArray(phoneNumbers) ? phoneNumbers : [phoneNumbers];
+  if (webhookUrl) {
+    logger.info({ webhookUrl, count: numbers.length }, 'creating Telnyx porting order');
+  }
+  const data = unwrap(await request('POST', '/porting_orders', {
+    phone_numbers: numbers,
+  }));
+  // Telnyx may return the created order(s) as an array; normalize to the first.
+  return Array.isArray(data) ? data[0] : data;
+}
+
+/**
+ * Update a porting order with the losing-carrier authorization details
+ * (account number, PIN, authorized person, service address, requested FOC date).
+ * PATCH /v2/porting_orders/{id}.
+ * @param {string} orderId - Telnyx porting-order id.
+ * @param {object} details - Telnyx porting-order fields to set.
+ * @returns {Promise<object>} the updated porting order resource.
+ */
+async function updatePortOrder(orderId, details) {
+  return unwrap(await request('PATCH', `/porting_orders/${orderId}`, details));
+}
+
+/**
+ * List the FOC (Firm Order Commitment) windows the losing carrier allows for a
+ * porting order — the dates/times the port can be scheduled to complete.
+ * GET /v2/porting_orders/{id}/allowed_foc_windows.
+ * @param {string} orderId
+ * @returns {Promise<object[]>} the allowed FOC windows (empty array if none).
+ */
+async function getPortOrderFocWindows(orderId) {
+  const data = unwrap(await request('GET', `/porting_orders/${orderId}/allowed_foc_windows`));
+  return Array.isArray(data) ? data : [];
+}
+
+/**
+ * Confirm a porting order — submit it to the losing carrier for processing.
+ * POST /v2/porting_orders/{id}/actions/confirm.
+ * @param {string} orderId
+ * @returns {Promise<object>} the porting order resource.
+ */
+async function confirmPortOrder(orderId) {
+  return unwrap(await request('POST', `/porting_orders/${orderId}/actions/confirm`));
+}
+
+/**
+ * Activate a ported number (FastPort same-day activation).
+ * POST /v2/porting_orders/{id}/actions/activate.
+ * @param {string} orderId
+ * @returns {Promise<object>} the porting order resource.
+ */
+async function activatePortOrder(orderId) {
+  return unwrap(await request('POST', `/porting_orders/${orderId}/actions/activate`));
+}
+
 /** Send an SMS via Telnyx Messaging. */
 async function sendSms({ from, to, text }) {
   return unwrap(await request('POST', '/messages', {
@@ -686,6 +779,12 @@ module.exports = {
   assignNumberToEndpoint,
   assignNumberToCampaign,
   submitPort,
+  checkPortability,
+  createPortOrder,
+  updatePortOrder,
+  getPortOrderFocWindows,
+  confirmPortOrder,
+  activatePortOrder,
   sendSms,
   sendMessage,
   getCallRecordings,

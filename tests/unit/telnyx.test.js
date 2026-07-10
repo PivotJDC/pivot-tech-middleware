@@ -546,3 +546,86 @@ describe('typed API calls', () => {
     });
   });
 });
+
+describe('FastPort porting', () => {
+  it('checkPortability posts the number and normalizes the result', async () => {
+    global.fetch.mockResolvedValueOnce(ok({
+      data: [{
+        portable: true,
+        fast_portable: true,
+        carrier_name: 'AT&T Mobility',
+        not_portable_reason: null,
+      }],
+    }));
+    const result = await telnyx.checkPortability('+12085550142');
+    expect(result).toEqual({
+      portable: true,
+      fast_portable: true,
+      carrier_name: 'AT&T Mobility',
+      not_portable_reason: null,
+    });
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.telnyx.com/v2/portability_checks');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ phone_numbers: ['+12085550142'] });
+  });
+
+  it('checkPortability defaults missing fields (not portable)', async () => {
+    global.fetch.mockResolvedValueOnce(ok({ data: [{ portable: false, not_portable_reason: 'Invalid number' }] }));
+    const result = await telnyx.checkPortability('+15005550000');
+    expect(result).toEqual({
+      portable: false,
+      fast_portable: false,
+      carrier_name: null,
+      not_portable_reason: 'Invalid number',
+    });
+  });
+
+  it('createPortOrder posts phone_numbers and returns the created order', async () => {
+    global.fetch.mockResolvedValueOnce(ok({ data: { id: 'tpo-1', status: 'draft' } }));
+    const order = await telnyx.createPortOrder(['+12085550142'], 'https://mw/v1/webhooks/porting');
+    expect(order).toEqual({ id: 'tpo-1', status: 'draft' });
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.telnyx.com/v2/porting_orders');
+    expect(init.method).toBe('POST');
+    // The webhook URL is NOT sent (Telnyx configures porting webhooks account-wide).
+    expect(JSON.parse(init.body)).toEqual({ phone_numbers: ['+12085550142'] });
+  });
+
+  it('createPortOrder normalizes an array response to the first order', async () => {
+    global.fetch.mockResolvedValueOnce(ok({ data: [{ id: 'tpo-2' }] }));
+    expect(await telnyx.createPortOrder('+12085550142')).toEqual({ id: 'tpo-2' });
+  });
+
+  it('updatePortOrder PATCHes the order with details', async () => {
+    global.fetch.mockResolvedValueOnce(ok({ data: { id: 'tpo-1', status: 'in-process' } }));
+    await telnyx.updatePortOrder('tpo-1', { end_user: { admin: { account_number: '123' } } });
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.telnyx.com/v2/porting_orders/tpo-1');
+    expect(init.method).toBe('PATCH');
+  });
+
+  it('getPortOrderFocWindows GETs the allowed windows and returns an array', async () => {
+    global.fetch.mockResolvedValueOnce(ok({ data: [{ id: 'w1' }, { id: 'w2' }] }));
+    const windows = await telnyx.getPortOrderFocWindows('tpo-1');
+    expect(windows).toHaveLength(2);
+    expect(global.fetch.mock.calls[0][0])
+      .toBe('https://api.telnyx.com/v2/porting_orders/tpo-1/allowed_foc_windows');
+  });
+
+  it('confirmPortOrder POSTs the confirm action', async () => {
+    global.fetch.mockResolvedValueOnce(ok({ data: { id: 'tpo-1', status: 'submitted' } }));
+    await telnyx.confirmPortOrder('tpo-1');
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.telnyx.com/v2/porting_orders/tpo-1/actions/confirm');
+    expect(init.method).toBe('POST');
+  });
+
+  it('activatePortOrder POSTs the activate action', async () => {
+    global.fetch.mockResolvedValueOnce(ok({ data: { id: 'tpo-1', status: 'ported' } }));
+    await telnyx.activatePortOrder('tpo-1');
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.telnyx.com/v2/porting_orders/tpo-1/actions/activate');
+    expect(init.method).toBe('POST');
+  });
+});

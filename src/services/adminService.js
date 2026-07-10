@@ -148,6 +148,60 @@ async function retryPort(portId) {
   return serializePort(updated);
 }
 
+/** Strip the encrypted account number + PIN from a port_orders row. */
+function serializePortOrder(row) {
+  if (!row) return null;
+  const {
+    // eslint-disable-next-line camelcase, no-unused-vars
+    account_number_encrypted, pin_encrypted, ...safe
+  } = row;
+  return safe;
+}
+
+/**
+ * Paginated FastPort port_orders list with status filter. Tenant-scoped via the
+ * owning account (port_orders has no tenant_id). Secrets stripped.
+ */
+async function listPortOrders(filters = {}) {
+  const { limit, offset } = paginate(filters);
+  const conditions = [];
+  const params = [];
+  if (filters.status) { params.push(filters.status); conditions.push(`status = $${params.length}`); }
+  if (filters.tenantId) {
+    params.push(filters.tenantId);
+    conditions.push(`account_id IN (SELECT id FROM accounts WHERE tenant_id = $${params.length})`);
+  }
+  const where = whereClause(conditions);
+
+  const { total } = (await db.query(`SELECT COUNT(*)::int AS total FROM port_orders ${where}`, params))
+    .rows[0];
+  const pageParams = params.concat([limit, offset]);
+  const { rows } = await db.query(
+    `SELECT * FROM port_orders ${where}
+       ORDER BY created_at DESC
+       LIMIT $${pageParams.length - 1} OFFSET $${pageParams.length}`,
+    pageParams,
+  );
+
+  return { port_orders: rows.map(serializePortOrder), pagination: { limit, offset, total } };
+}
+
+/**
+ * One port order by id (secrets stripped). Tenant-scoped so a tenant admin can't
+ * read another tenant's port. Throws NOT_FOUND when absent or out of scope.
+ */
+async function getPortOrder(id, tenantId) {
+  const params = [id];
+  let where = 'WHERE id = $1';
+  if (tenantId) {
+    params.push(tenantId);
+    where += ' AND account_id IN (SELECT id FROM accounts WHERE tenant_id = $2)';
+  }
+  const { rows } = await db.query(`SELECT * FROM port_orders ${where}`, params);
+  if (rows.length === 0) throw errors.notFound('Port order not found.');
+  return serializePortOrder(rows[0]);
+}
+
 function countsByStatus(rows) {
   return rows.reduce((acc, r) => { acc[r.status] = r.count; return acc; }, {});
 }
@@ -498,6 +552,8 @@ module.exports = {
   listAccounts,
   listDids,
   listPorts,
+  listPortOrders,
+  getPortOrder,
   retryPort,
   getMetrics,
   getAccountUsageStats,

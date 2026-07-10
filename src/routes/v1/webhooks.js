@@ -18,6 +18,7 @@
 const express = require('express');
 const webhookService = require('../../services/webhookService');
 const messagingService = require('../../services/messagingService');
+const portService = require('../../services/portService');
 const { asyncHandler, errors } = require('../../middleware/errorHandler');
 const { verifyTelnyxWebhook } = require('../../middleware/telnyxWebhookVerify');
 const { logger } = require('../../utils/logger');
@@ -41,6 +42,24 @@ router.post(
   asyncHandler(async (req, res) => {
     const result = await webhookService.handlePortEvent(req.body || {});
     res.status(200).json({ received: true, ...result });
+  }),
+);
+
+// Telnyx FastPort porting lifecycle (porting_order.status_changed). Ed25519
+// verified like the messaging webhook (this is a real Telnyx v2 webhook, not the
+// legacy shared-secret /port route). Always ack 200 so Telnyx doesn't retry;
+// the handler is idempotent (keyed by the Telnyx porting-order id).
+router.post(
+  '/porting',
+  verifyTelnyxWebhook,
+  asyncHandler(async (req, res) => {
+    try {
+      const result = await portService.handlePortingWebhook(req.body || {});
+      res.status(200).json({ received: true, ...result });
+    } catch (err) {
+      logger.error({ err: err.message }, 'porting webhook processing error');
+      res.status(200).json({ received: true });
+    }
   }),
 );
 

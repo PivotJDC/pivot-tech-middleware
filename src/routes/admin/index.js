@@ -514,12 +514,14 @@ router.get(
   }),
 );
 
-// --- Ports ---
+// --- Ports (FastPort port_orders) ---
 
+// List FastPort port orders (filters: status). The legacy port_requests retry
+// path below is retained for the older port-in flow.
 router.get(
   '/ports',
   asyncHandler(async (req, res) => {
-    res.json(await adminService.listPorts({ ...req.query, tenantId: tenantScope(req) }));
+    res.json(await adminService.listPortOrders({ ...req.query, tenantId: tenantScope(req) }));
   }),
 );
 
@@ -529,6 +531,15 @@ router.post(
     const result = await adminService.retryPort(req.params.id);
     logger.info({ adminId: req.admin.id, portId: req.params.id }, 'admin retried port');
     res.json(result);
+  }),
+);
+
+// Port order detail (mounted after the more specific /ports/:id/retry POST above;
+// GET vs POST keeps them distinct regardless).
+router.get(
+  '/ports/:id',
+  asyncHandler(async (req, res) => {
+    res.json(await adminService.getPortOrder(req.params.id, tenantScope(req)));
   }),
 );
 

@@ -413,10 +413,20 @@ describe('admin API', () => {
     );
   });
 
-  it('GET /admin/ports lists port requests', async () => {
-    adminService.listPorts.mockResolvedValueOnce({ ports: [], pagination: {} });
-    const res = await request(app).get('/admin/ports?status=failed');
+  it('GET /admin/ports lists FastPort port orders', async () => {
+    adminService.listPortOrders.mockResolvedValueOnce({ port_orders: [], pagination: {} });
+    const res = await request(app).get('/admin/ports?status=submitted');
     expect(res.status).toBe(200);
+    expect(adminService.listPortOrders).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'submitted' }),
+    );
+  });
+
+  it('GET /admin/ports/:id returns a port order detail', async () => {
+    adminService.getPortOrder.mockResolvedValueOnce({ id: 'po1', status: 'submitted' });
+    const res = await request(app).get('/admin/ports/po1');
+    expect(res.status).toBe(200);
+    expect(adminService.getPortOrder).toHaveBeenCalledWith('po1', null);
   });
 
   it('POST /admin/ports/:id/retry resubmits a port', async () => {
