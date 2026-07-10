@@ -153,6 +153,52 @@ describe('GET/POST /v1/acrobits/send', () => {
     });
   });
 
+  it('routes multiple comma-separated recipients to the group endpoint', async () => {
+    messagingService.sendGroupMessage.mockResolvedValueOnce({ id: 'grp-1' });
+    const res = await request(app)
+      .get('/v1/acrobits/send')
+      .query({
+        username: 'pivottech-abc',
+        password: 'pw',
+        to: '+12085550142,2085550143,+12085550144',
+        sms_body: 'group hi',
+      });
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<sms_id>grp-1</sms_id>');
+    expect(messagingService.sendGroupMessage).toHaveBeenCalledWith('acc-1', {
+      to: ['+12085550142', '+12085550143', '+12085550144'], // normalized to E.164
+      body: 'group hi',
+      mediaUrls: [],
+    });
+    expect(messagingService.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('routes repeated `to` params (array) to the group endpoint', async () => {
+    messagingService.sendGroupMessage.mockResolvedValueOnce({ id: 'grp-2' });
+    const res = await request(app)
+      .get('/v1/acrobits/send')
+      .query('username=pivottech-abc&password=pw&to=%2B12085550142&to=%2B12085550143&sms_body=hey');
+    expect(res.status).toBe(200);
+    expect(messagingService.sendGroupMessage).toHaveBeenCalledWith('acc-1', {
+      to: ['+12085550142', '+12085550143'],
+      body: 'hey',
+      mediaUrls: [],
+    });
+  });
+
+  it('keeps a single recipient on the 1:1 send path', async () => {
+    messagingService.sendMessage.mockResolvedValueOnce({ id: 'solo-1' });
+    await request(app)
+      .get('/v1/acrobits/send')
+      .query({
+        username: 'pivottech-abc', password: 'pw', to: '2085550142', sms_body: 'hi',
+      });
+    expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
+      to: '+12085550142', body: 'hi', mediaUrls: [],
+    });
+    expect(messagingService.sendGroupMessage).not.toHaveBeenCalled();
+  });
+
   it('sends an MMS: parses a JSON attachments body into media_urls', async () => {
     messagingService.sendMessage.mockResolvedValueOnce({ id: 'mms-1' });
     const body = JSON.stringify({
@@ -406,6 +452,52 @@ describe('GET /v1/acrobits/fetch', () => {
     expect(res.text).not.toContain('<sms_to>');
     expect(res.text).not.toContain('<body>');
     expect(messagingService.fetchForAcrobits).toHaveBeenCalledWith('acc-1', 'r0', 's0');
+  });
+
+  it('threads a group message by group_id and lists participants', async () => {
+    messagingService.fetchForAcrobits.mockResolvedValueOnce({
+      received: [{
+        id: 'gr1',
+        from_number: '+12085550142',
+        to_number: '+12087869908', // the subscriber's DID
+        cc: ['+12085550143', '+12085550144'],
+        group_id: 'gm-9',
+        body: 'group hi',
+        created_at: '2026-06-25T12:00:00.000Z',
+      }],
+      sent: [],
+    });
+    const res = await request(app)
+      .get('/v1/acrobits/fetch')
+      .query({ username: 'pivottech-abc', password: 'pw' });
+
+    expect(res.status).toBe(200);
+    // Threads by the group id (not the sender number).
+    expect(res.text).toContain('<stream_id>gm-9</stream_id>');
+    expect(res.text).toContain('<group_id>gm-9</group_id>');
+    // Participants exclude the subscriber; label uses national-format numbers.
+    expect(res.text).toContain('<participant>+12085550142</participant>');
+    expect(res.text).toContain('<participant>+12085550143</participant>');
+    expect(res.text).toContain('<participant>+12085550144</participant>');
+    expect(res.text).not.toContain('<participant>+12087869908</participant>');
+    expect(res.text).toContain(
+      '<group_label>Group: (208) 555-0142, (208) 555-0143, (208) 555-0144</group_label>',
+    );
+  });
+
+  it('omits group elements for a 1:1 message', async () => {
+    messagingService.fetchForAcrobits.mockResolvedValueOnce({
+      received: [{
+        id: 'p1', from_number: '+12085550142', body: 'hi', created_at: '2026-06-25T12:00:00.000Z',
+      }],
+      sent: [],
+    });
+    const res = await request(app)
+      .get('/v1/acrobits/fetch')
+      .query({ username: 'pivottech-abc', password: 'pw' });
+    expect(res.text).not.toContain('<group_id>');
+    expect(res.text).not.toContain('<group_participants>');
+    expect(res.text).toContain('<stream_id>+12085550142</stream_id>');
   });
 
   it('renders MMS as a filetransfer JSON payload in sms_text (presigned URLs)', async () => {

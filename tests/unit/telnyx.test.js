@@ -545,6 +545,27 @@ describe('typed API calls', () => {
       messaging_profile_id: 'mp-1',
     });
   });
+
+  it('sendGroupMessage posts to /messages/group_mms with an array of recipients', async () => {
+    global.fetch.mockResolvedValueOnce(ok({ data: { id: 'grp-1', group_message_id: 'gm-1' } }));
+    const res = await telnyx.sendGroupMessage({
+      from: '+12085550100',
+      to: ['+12085550142', '+12085550143'],
+      body: 'hey team',
+      mediaUrls: ['https://s3/pic.jpg'],
+    });
+    expect(res).toEqual({ id: 'grp-1', group_message_id: 'gm-1' });
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.telnyx.com/v2/messages/group_mms');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      from: '+12085550100',
+      to: ['+12085550142', '+12085550143'],
+      text: 'hey team',
+      media_urls: ['https://s3/pic.jpg'],
+      messaging_profile_id: 'mp-1',
+    });
+  });
 });
 
 describe('FastPort porting', () => {

@@ -30,6 +30,7 @@ const ACCOUNT_ID = '11111111-1111-4111-8111-111111111111';
 beforeEach(() => {
   db.query.mockReset();
   telnyx.sendMessage.mockReset();
+  telnyx.sendGroupMessage.mockReset();
   accountService.getAccountById.mockReset();
   accountService.lookupByPhoneE164.mockReset();
   cdrService.recordMessage.mockReset();
@@ -108,6 +109,55 @@ describe('sendMessage', () => {
   });
 });
 
+describe('sendGroupMessage', () => {
+  it('sends via the group endpoint and stores group_id + cc', async () => {
+    accountService.getAccountById.mockResolvedValueOnce({
+      id: ACCOUNT_ID, status: 'active', phone_e164: '+12085550100',
+    });
+    telnyx.sendGroupMessage.mockResolvedValueOnce({ id: 'tmsg-g1', group_message_id: 'gm-1' });
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'mg1', group_id: 'gm-1' }] });
+
+    const msg = await messaging.sendGroupMessage(ACCOUNT_ID, {
+      to: ['+12085550142', '+12085550143'], body: 'hey team', mediaUrls: [],
+    });
+
+    expect(telnyx.sendGroupMessage).toHaveBeenCalledWith({
+      from: '+12085550100', to: ['+12085550142', '+12085550143'], body: 'hey team', mediaUrls: [],
+    });
+    expect(telnyx.sendMessage).not.toHaveBeenCalled();
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/INSERT INTO messages/);
+    expect(sql).toMatch(/group_id, cc/);
+    expect(params[2]).toBe('+12085550142'); // to_number = first recipient
+    expect(params[5]).toBe('tmsg-g1'); // telnyx_message_id
+    expect(params[6]).toBe('gm-1'); // group_id (group_message_id)
+    expect(params[7]).toEqual(['+12085550142', '+12085550143']); // cc
+    expect(msg.id).toBe('mg1');
+  });
+
+  it('falls back to the message id when no group_message_id is returned', async () => {
+    accountService.getAccountById.mockResolvedValueOnce({
+      id: ACCOUNT_ID, status: 'active', phone_e164: '+12085550100',
+    });
+    telnyx.sendGroupMessage.mockResolvedValueOnce({ id: 'tmsg-g2' });
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'mg2' }] });
+
+    await messaging.sendGroupMessage(ACCOUNT_ID, {
+      to: ['+12085550142', '+12085550143'], body: 'hi',
+    });
+    expect(db.query.mock.calls[0][1][6]).toBe('tmsg-g2'); // group_id falls back to id
+  });
+
+  it('rejects a group with fewer than two recipients', async () => {
+    accountService.getAccountById.mockResolvedValueOnce({
+      id: ACCOUNT_ID, status: 'active', phone_e164: '+12085550100',
+    });
+    await expect(messaging.sendGroupMessage(ACCOUNT_ID, { to: ['+12085550142'], body: 'hi' }))
+      .rejects.toMatchObject({ code: 'VALIDATION_ERROR', field: 'to' });
+    expect(telnyx.sendGroupMessage).not.toHaveBeenCalled();
+  });
+});
+
 describe('handleInboundMessage', () => {
   it('creates an inbound record from a Telnyx payload', async () => {
     db.query
@@ -137,6 +187,50 @@ describe('handleInboundMessage', () => {
     expect(params[4]).toEqual(['https://x/a.jpg']); // media
     expect(params[5]).toBe('tmsg-in-1');
     expect(msg.id).toBe('in-1');
+  });
+
+  it('stores group_id + cc for an inbound group message (cc present)', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] }) // account by `to`
+      .mockResolvedValueOnce({ rows: [] }) // idempotency: no existing message
+      .mockResolvedValueOnce({ rows: [{ id: 'in-g', direction: 'inbound', group_id: 'gm-7' }] });
+
+    const msg = await messaging.handleInboundMessage({
+      id: 'tmsg-in-g',
+      group_message_id: 'gm-7',
+      from: { phone_number: '+12085550142' },
+      to: [{ phone_number: '+12085550100' }],
+      cc: [{ phone_number: '+12085550143' }, '+12085550144'], // mixed object/string
+      text: 'group hi',
+    });
+
+    const [sql, params] = db.query.mock.calls[2];
+    expect(sql).toMatch(/group_id, cc/);
+    expect(params[6]).toBe('gm-7'); // group_id from group_message_id
+    expect(params[7]).toEqual(['+12085550143', '+12085550144']); // cc normalized
+    expect(msg.id).toBe('in-g');
+    // Push threads by the group id, not the sender.
+    expect(pushService.sendMessagePush).toHaveBeenCalledWith(
+      ACCOUNT_ID,
+      expect.objectContaining({ streamId: 'gm-7' }),
+    );
+  });
+
+  it('leaves group_id null and cc empty for a 1:1 inbound message (no cc)', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 'in-solo', direction: 'inbound' }] });
+
+    await messaging.handleInboundMessage({
+      id: 'tmsg-solo',
+      from: { phone_number: '+12085550142' },
+      to: [{ phone_number: '+12085550100' }],
+      text: 'just you',
+    });
+    const params = db.query.mock.calls[2][1];
+    expect(params[6]).toBeNull(); // group_id
+    expect(params[7]).toEqual([]); // cc
   });
 
   it('ignores an inbound message for an unknown number', async () => {

@@ -669,6 +669,32 @@ async function sendMessage({
 }
 
 /**
+ * Send a group SMS/MMS via the Telnyx Group MMS endpoint
+ * (POST /v2/messages/group_mms). Unlike sendMessage, `to` is an ARRAY of
+ * recipients — Telnyx fans the message out to all of them as one group thread
+ * and returns a resource whose `group_message_id` (and per-recipient `to[]`)
+ * correlates the thread and its delivery webhooks.
+ * @param {object} params
+ * @param {string} params.from - the subscriber's E.164 (the group originator).
+ * @param {string[]} params.to - the recipient E.164s (two or more).
+ * @param {string} [params.body] - message text (may be empty for media-only MMS).
+ * @param {string[]} [params.mediaUrls] - public media URLs (MMS).
+ * @param {string} [params.messagingProfileId] - overrides the config default.
+ * @returns {Promise<object>} the Telnyx group message resource.
+ */
+async function sendGroupMessage({
+  from, to, body, mediaUrls, messagingProfileId,
+}) {
+  return unwrap(await request('POST', '/messages/group_mms', {
+    from,
+    to: to || [],
+    text: body || '',
+    media_urls: mediaUrls || [],
+    messaging_profile_id: messagingProfileId || config.telnyx.messagingProfileId,
+  }));
+}
+
+/**
  * Fetch recordings for a call. Used by the voicemail hangup safety net: when a
  * caller hangs up mid-recording the <Record> action callback never fires, so we
  * pull any recording Telnyx captured for the call and process it.
@@ -787,6 +813,7 @@ module.exports = {
   activatePortOrder,
   sendSms,
   sendMessage,
+  sendGroupMessage,
   getCallRecordings,
   // exposed for tests
   request,

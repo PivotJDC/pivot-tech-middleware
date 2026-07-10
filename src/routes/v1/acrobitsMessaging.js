@@ -22,6 +22,7 @@ const pushService = require('../../services/pushService');
 const acrobits = require('../../integrations/acrobits');
 const s3 = require('../../integrations/s3');
 const crypto = require('../../utils/crypto');
+const { formatNational } = require('../../utils/e164');
 const { asyncHandler } = require('../../middleware/errorHandler');
 
 const router = express.Router();
@@ -72,11 +73,53 @@ function contentTypeForUrl(url) {
 }
 
 /**
+ * The other participants in a group message, excluding the subscriber, deduped
+ * in first-seen order. Union of the sender, the recipient side (to_number), and
+ * the stored `cc` list. Empty for a 1:1 message (no group_id).
+ */
+function groupParticipants(m, subscriberNumber) {
+  const out = [];
+  const seen = new Set([subscriberNumber]);
+  const add = (n) => {
+    if (n && !seen.has(n)) {
+      seen.add(n);
+      out.push(n);
+    }
+  };
+  add(m.from_number);
+  add(m.to_number);
+  (Array.isArray(m.cc) ? m.cc : []).forEach(add);
+  return out;
+}
+
+/**
+ * Group-thread elements for an <item>: the group id, a human label for the
+ * conversation list, and the participant numbers. DECISION: the middleware only
+ * knows E.164 numbers (no contact names), so the label lists national-format
+ * numbers — the app substitutes its own contact names on top. Returns [] for a
+ * 1:1 message so the item is unchanged.
+ */
+function groupXmlLines(m, subscriberNumber) {
+  if (!m.group_id) return [];
+  const participants = groupParticipants(m, subscriberNumber);
+  const label = `Group: ${participants.map(formatNational).join(', ')}`;
+  return [
+    `      <group_id>${escapeXml(m.group_id)}</group_id>`,
+    `      <group_label>${escapeXml(label)}</group_label>`,
+    '      <group_participants>',
+    ...participants.map((p) => `        <participant>${escapeXml(p)}</participant>`),
+    '      </group_participants>',
+  ];
+}
+
+/**
  * Render one <item> block (Acrobits Modern API). Both <sender> and <recipient>
  * are emitted so the app can thread the message correctly: it needs to know the
  * subscriber's own number (not just the peer) to place an inbound message in the
  * conversation thread instead of a group chat. `streamId` is the peer number so
- * inbound + outbound of the same conversation share a thread.
+ * inbound + outbound of the same conversation share a thread — except for group
+ * messages, where the caller passes the group_id so the whole group threads
+ * together and `groupXmlLines` adds the participant list.
  *
  * MMS: Cloud Softphone renders inbound media via a file-transfer payload — the
  * content_type is application/x-acro-filetransfer+json and <sms_text> carries a
@@ -84,7 +127,7 @@ function contentTypeForUrl(url) {
  * plain text. Any caption rides along as a "text" field. Plain SMS is unchanged
  * (content_type text/plain, <sms_text> = the body).
  */
-function smsXml(m, sender, recipient, streamId) {
+function smsXml(m, sender, recipient, streamId, subscriberNumber) {
   const media = Array.isArray(m.media_urls) ? m.media_urls : [];
   const previews = Array.isArray(m.mediaPreviews) ? m.mediaPreviews : [];
   let smsText = m.body || '';
@@ -111,18 +154,22 @@ function smsXml(m, sender, recipient, streamId) {
     `      <sms_text>${escapeXml(smsText)}</sms_text>`,
     `      <content_type>${contentType}</content_type>`,
     `      <stream_id>${escapeXml(streamId)}</stream_id>`,
+    ...groupXmlLines(m, subscriberNumber),
     '    </item>',
   ].join('\n');
 }
 
 function fetchXml(received, sent, subscriberNumber) {
-  // Received: sender = external peer, recipient = the subscriber; thread by peer.
+  const sub = subscriberNumber;
+  // Received: sender = external peer, recipient = the subscriber. Thread by the
+  // group id when the message is part of a group, else by the peer number.
   const recv = received
-    .map((m) => smsXml(m, m.from_number, subscriberNumber, m.from_number))
+    .map((m) => smsXml(m, m.from_number, sub, m.group_id || m.from_number, sub))
     .join('\n');
-  // Sent: sender = the subscriber, recipient = external peer; thread by peer.
+  // Sent: sender = the subscriber, recipient = external peer. Thread by group id
+  // when set, else by the peer number.
   const snt = sent
-    .map((m) => smsXml(m, subscriberNumber, m.to_number, m.to_number))
+    .map((m) => smsXml(m, sub, m.to_number, m.group_id || m.to_number, sub))
     .join('\n');
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -236,6 +283,41 @@ function parseSendBody(rawBody) {
   return { text: rawBody, attachments: [] };
 }
 
+// Acrobits may send a destination unprefixed (a 10-digit US number, or 11 with a
+// leading 1); normalize to E.164 before handing it to Telnyx.
+function normalizeToE164(raw) {
+  const n = typeof raw === 'string' ? raw.trim() : '';
+  if (!n || n.startsWith('+')) return n;
+  if (n.length === 10) return `+1${n}`;
+  if (n.length === 11 && n.startsWith('1')) return `+${n}`;
+  return `+${n}`;
+}
+
+/**
+ * Parse the recipient(s) from an Acrobits send. Cloud Softphone delivers group
+ * recipients either as a repeated `to` param (Express parses `to=+1A&to=+1B`
+ * into an array) or comma-separated (`to=+1A,+1B,+1C`) — handle both, plus the
+ * `sms_to` alias. Returns E.164 numbers, deduped in order. A single recipient
+ * yields a one-element array (a normal 1:1 send); two or more mean a group MMS.
+ */
+function parseRecipients(p) {
+  const raw = p.to != null ? p.to : p.sms_to;
+  const list = Array.isArray(raw) ? raw : [raw];
+  const out = [];
+  const seen = new Set();
+  list
+    .flatMap((entry) => String(entry == null ? '' : entry).split(','))
+    .map(normalizeToE164)
+    .filter(Boolean)
+    .forEach((n) => {
+      if (!seen.has(n)) {
+        seen.add(n);
+        out.push(n);
+      }
+    });
+  return out;
+}
+
 // --- Send (GET or POST) ---
 async function sendHandler(req, res) {
   const p = params(req);
@@ -244,18 +326,7 @@ async function sendHandler(req, res) {
     sendXml(res, 403, errorXml('Authentication failed.'));
     return;
   }
-  // Acrobits may send the destination unprefixed (e.g. a 10-digit US number);
-  // normalize to E.164 before handing it to Telnyx.
-  let toNumber = p.to || p.sms_to;
-  if (toNumber && !toNumber.startsWith('+')) {
-    if (toNumber.length === 10) {
-      toNumber = `+1${toNumber}`;
-    } else if (toNumber.length === 11 && toNumber.startsWith('1')) {
-      toNumber = `+${toNumber}`;
-    } else {
-      toNumber = `+${toNumber}`;
-    }
-  }
+  const recipients = parseRecipients(p);
   // SMS vs MMS: an attachments JSON body yields media; plain text is SMS.
   const { text, attachments } = parseSendBody(p.body || p.sms_body || p.message_body);
   try {
@@ -268,11 +339,10 @@ async function sendHandler(req, res) {
     if (!body && mediaUrls.length === 0 && attachments.length > 0) {
       body = '[Photo message]';
     }
-    const message = await messagingService.sendMessage(account.id, {
-      to: toNumber,
-      body,
-      mediaUrls,
-    });
+    // Two or more recipients → Telnyx Group MMS; one → ordinary 1:1 send.
+    const message = recipients.length > 1
+      ? await messagingService.sendGroupMessage(account.id, { to: recipients, body, mediaUrls })
+      : await messagingService.sendMessage(account.id, { to: recipients[0], body, mediaUrls });
     sendXml(res, 200, sendOkXml(message.id));
   } catch (err) {
     const status = err && err.status >= 400 ? err.status : 500;

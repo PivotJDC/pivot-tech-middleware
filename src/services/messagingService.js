@@ -86,6 +86,66 @@ async function sendMessage(accountId, input = {}) {
 }
 
 /**
+ * Send a group SMS/MMS from an account's own number to several recipients.
+ * Uses the Telnyx Group MMS endpoint and tags the stored row with a `group_id`
+ * (Telnyx's group identifier) plus the recipient list in `cc`, so the Acrobits
+ * fetch endpoint threads the whole group together.
+ * @param {string} accountId
+ * @param {{ to: string[], body?: string, mediaUrls?: string[] }} input
+ * @returns {Promise<object>} the persisted outbound message row.
+ */
+async function sendGroupMessage(accountId, input = {}) {
+  const account = await accountService.getAccountById(accountId); // throws NOT_FOUND
+  if (account.status !== 'active') {
+    throw errors.validation('Account must be active to send messages.', 'status');
+  }
+  if (!account.phone_e164) {
+    throw errors.validation('Account has no assigned number to send from.', 'account');
+  }
+
+  const to = Array.isArray(input.to)
+    ? input.to.map((t) => (typeof t === 'string' ? t.trim() : '')).filter(Boolean)
+    : [];
+  const body = typeof input.body === 'string' ? input.body : '';
+  const mediaUrls = Array.isArray(input.mediaUrls) ? input.mediaUrls : [];
+  if (to.length < 2) {
+    throw errors.validation('A group message needs at least two recipients.', 'to');
+  }
+  if (!body && mediaUrls.length === 0) {
+    throw errors.validation('A message body or media is required.', 'body');
+  }
+
+  const sent = await telnyx.sendGroupMessage({
+    from: account.phone_e164,
+    to,
+    body,
+    mediaUrls,
+  });
+  // DECISION: thread by Telnyx's group id (group_message_id, falling back to the
+  // message id). Inbound replies carry the same group_message_id, so both sides
+  // of the group share one stream_id in /fetch.
+  const groupId = (sent && (sent.group_message_id || sent.id)) || null;
+
+  const { rows } = await db.query(
+    `INSERT INTO messages
+       (account_id, direction, from_number, to_number, body, media_urls,
+        telnyx_message_id, status, group_id, cc)
+     VALUES ($1, 'outbound', $2, $3, $4, $5, $6, 'queued', $7, $8)
+     RETURNING *`,
+    // to_number is a single VARCHAR(20); store the first recipient there (the
+    // full list lives in cc). Threading uses group_id, not to_number.
+    [accountId, account.phone_e164, to[0], body, mediaUrls, (sent && sent.id) || null, groupId, to],
+  );
+  logger.info(
+    {
+      accountId, groupId, recipients: to.length, mms: mediaUrls.length > 0,
+    },
+    'outbound group message sent',
+  );
+  return rows[0];
+}
+
+/**
  * Archive inbound Telnyx media to our S3 bucket (Telnyx media URLs expire).
  * Downloads each item, compresses oversized images, and uploads under
  * mms-inbound/{accountId}/{messageId}_{index}.{ext}. Returns an array aligned to
@@ -149,6 +209,16 @@ async function handleInboundMessage(payload = {}) {
     : [];
   const telnyxMessageId = payload.id || null;
 
+  // Group message: Telnyx includes a `cc` array listing the other participants.
+  // Its entries may be objects ({ phone_number }) or bare strings — normalize to
+  // E.164 strings. A non-empty cc marks this as a group thread; store the group
+  // id (group_message_id, falling back to the message id) so /fetch can thread
+  // all group messages together.
+  const cc = Array.isArray(payload.cc)
+    ? payload.cc.map((c) => (c && c.phone_number) || c).filter(Boolean)
+    : [];
+  const groupId = cc.length > 0 ? (payload.group_message_id || telnyxMessageId) : null;
+
   const account = await db.query(
     'SELECT id FROM accounts WHERE phone_e164 = $1',
     [to],
@@ -176,11 +246,11 @@ async function handleInboundMessage(payload = {}) {
   const { rows } = await db.query(
     `INSERT INTO messages
        (account_id, direction, from_number, to_number, body, media_urls,
-        telnyx_message_id, status)
-     VALUES ($1, 'inbound', $2, $3, $4, $5, $6, 'received')
+        telnyx_message_id, status, group_id, cc)
+     VALUES ($1, 'inbound', $2, $3, $4, $5, $6, 'received', $7, $8)
      ON CONFLICT (telnyx_message_id) WHERE telnyx_message_id IS NOT NULL DO NOTHING
      RETURNING *`,
-    [accountId, from, to, body, mediaUrls, telnyxMessageId],
+    [accountId, from, to, body, mediaUrls, telnyxMessageId, groupId, cc],
   );
   const inbound = rows[0];
   if (!inbound) {
@@ -220,7 +290,8 @@ async function handleInboundMessage(payload = {}) {
     from: inbound.from_number,
     body: inbound.body,
     messageId: inbound.id,
-    streamId: inbound.from_number,
+    // Group messages thread by group_id (matching /fetch), 1:1 by the sender.
+    streamId: inbound.group_id || inbound.from_number,
   });
   return inbound;
 }
@@ -411,6 +482,7 @@ async function recordInboundMessage({
 
 module.exports = {
   sendMessage,
+  sendGroupMessage,
   handleInboundMessage,
   archiveInboundMedia,
   recordInboundMessage,
