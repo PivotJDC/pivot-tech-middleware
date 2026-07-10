@@ -443,6 +443,23 @@ describe('admin API', () => {
     expect(res.body).toHaveProperty('accounts');
   });
 
+  it('GET /admin/analytics/margin returns margin inputs', async () => {
+    adminService.getMarginMetrics.mockResolvedValueOnce({
+      subscribers: 100,
+      mrr: 2500,
+      voice_minutes: 5000,
+      data_gb: 500,
+      sms_count: 10000,
+      mms_count: 500,
+      period_start: 'a',
+      period_end: 'b',
+    });
+    const res = await request(app).get('/admin/analytics/margin');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ subscribers: 100, mrr: 2500 });
+    expect(adminService.getMarginMetrics).toHaveBeenCalled();
+  });
+
   it('GET /admin/usage/summary returns the current-period summary', async () => {
     usageService.getCurrentPeriodSummary.mockResolvedValueOnce({
       totalAccounts: 3, totalDataMb: 900,

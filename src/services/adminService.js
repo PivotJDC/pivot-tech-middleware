@@ -259,6 +259,81 @@ async function getMetrics(tenantId) {
   };
 }
 
+// Flagship MobilityNet plan price ($/month). MRR = active subscribers × this.
+const PLAN_MONTHLY_PRICE = 25;
+
+/**
+ * Revenue & margin inputs for the current calendar month: active subscriber
+ * count, MRR, and the usage volumes (voice minutes, data GB, SMS/MMS counts)
+ * that the admin's cost rates are applied to client-side. Tenant-scoped.
+ *
+ * Data usage takes the LATEST snapshot per account this month (usage_records are
+ * periodic cumulative snapshots — summing every poll would multiply-count).
+ * Messages have no tenant_id column, so they scope via the owning account.
+ * @returns {Promise<{ subscribers, mrr, voice_minutes, data_gb, sms_count,
+ *   mms_count, period_start, period_end }>}
+ */
+async function getMarginMetrics(tenantId) {
+  const t = tenantId ? ' AND tenant_id = $1' : '';
+  const p = tenantId ? [tenantId] : [];
+
+  // Active subscribers + MRR + the reporting window (from the DB clock).
+  const subsRow = (await db.query(
+    `SELECT COUNT(*)::int AS subscribers,
+            date_trunc('month', now()) AS period_start,
+            now() AS period_end
+       FROM accounts
+      WHERE status = 'active'${t}`,
+    p,
+  )).rows[0];
+  const { subscribers } = subsRow;
+
+  // Voice minutes this month (sum of call durations).
+  const voiceSecs = (await db.query(
+    `SELECT COALESCE(SUM(duration_seconds), 0)::bigint AS secs
+       FROM call_records
+      WHERE created_at >= date_trunc('month', now())${t}`,
+    p,
+  )).rows[0].secs;
+
+  // Data GB this month — latest snapshot per account (avoid double-counting).
+  const dataMb = (await db.query(
+    `SELECT COALESCE(SUM(data_total_mb), 0) AS mb FROM (
+        SELECT DISTINCT ON (account_id) data_total_mb
+          FROM usage_records
+         WHERE polled_at >= date_trunc('month', now())${t}
+         ORDER BY account_id, period_start DESC, polled_at DESC
+     ) latest`,
+    p,
+  )).rows[0].mb;
+
+  // Outbound SMS/MMS this month. MMS = has media; SMS = no media.
+  const msgParams = tenantId ? [tenantId] : [];
+  const msgScope = tenantId
+    ? ' AND account_id IN (SELECT id FROM accounts WHERE tenant_id = $1)'
+    : '';
+  const msg = (await db.query(
+    `SELECT
+        COUNT(*) FILTER (WHERE cardinality(media_urls) = 0)::int AS sms_count,
+        COUNT(*) FILTER (WHERE cardinality(media_urls) > 0)::int AS mms_count
+       FROM messages
+      WHERE direction = 'outbound'
+        AND created_at >= date_trunc('month', now())${msgScope}`,
+    msgParams,
+  )).rows[0];
+
+  return {
+    subscribers,
+    mrr: subscribers * PLAN_MONTHLY_PRICE,
+    voice_minutes: Math.round(Number(voiceSecs) / 60),
+    data_gb: Number((Number(dataMb) / 1024).toFixed(3)),
+    sms_count: msg.sms_count,
+    mms_count: msg.mms_count,
+    period_start: subsRow.period_start,
+    period_end: subsRow.period_end,
+  };
+}
+
 /**
  * Usage stats for one account: the latest data snapshot (usage_records) plus
  * this calendar month's voice/SMS/MMS totals (call_records + message_records),
@@ -556,6 +631,7 @@ module.exports = {
   getPortOrder,
   retryPort,
   getMetrics,
+  getMarginMetrics,
   getAccountUsageStats,
   getHourlyActivity,
   getUsageDistribution,

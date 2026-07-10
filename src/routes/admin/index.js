@@ -578,6 +578,15 @@ router.post(
 
 // --- Analytics ---
 
+// Revenue & margin inputs: current-month usage volumes + active subscribers +
+// MRR. Cost rates are applied client-side (admin-entered, persisted locally).
+router.get(
+  '/analytics/margin',
+  asyncHandler(async (req, res) => {
+    res.json(await adminService.getMarginMetrics(tenantScope(req)));
+  }),
+);
+
 // Network activity (calls + messages) by hour of day, current month.
 router.get(
   '/analytics/hourly-activity',

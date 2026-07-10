@@ -348,6 +348,68 @@ describe('listPorts', () => {
   });
 });
 
+describe('getMarginMetrics', () => {
+  it('returns subscribers, MRR, and current-month usage volumes', async () => {
+    db.query
+      .mockResolvedValueOnce({
+        rows: [{
+          subscribers: 100,
+          period_start: '2026-07-01T00:00:00Z',
+          period_end: '2026-07-10T12:00:00Z',
+        }],
+      }) // subscribers + window
+      .mockResolvedValueOnce({ rows: [{ secs: '300000' }] }) // 5000 minutes
+      .mockResolvedValueOnce({ rows: [{ mb: '512000' }] }) // 500 GB
+      .mockResolvedValueOnce({ rows: [{ sms_count: 10000, mms_count: 500 }] });
+
+    const result = await adminService.getMarginMetrics();
+
+    expect(result).toEqual({
+      subscribers: 100,
+      mrr: 2500,
+      voice_minutes: 5000,
+      data_gb: 500,
+      sms_count: 10000,
+      mms_count: 500,
+      period_start: '2026-07-01T00:00:00Z',
+      period_end: '2026-07-10T12:00:00Z',
+    });
+    // Data uses the latest snapshot per account (no double-count).
+    expect(db.query.mock.calls[2][0]).toContain('DISTINCT ON (account_id)');
+    // MMS = has media, SMS = none.
+    expect(db.query.mock.calls[3][0]).toContain('cardinality(media_urls) > 0');
+  });
+
+  it('scopes every query to the tenant when given', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ subscribers: 0, period_start: 'a', period_end: 'b' }] })
+      .mockResolvedValueOnce({ rows: [{ secs: '0' }] })
+      .mockResolvedValueOnce({ rows: [{ mb: '0' }] })
+      .mockResolvedValueOnce({ rows: [{ sms_count: 0, mms_count: 0 }] });
+
+    await adminService.getMarginMetrics('ten-1');
+
+    expect(db.query.mock.calls[0][1]).toEqual(['ten-1']); // accounts
+    expect(db.query.mock.calls[1][1]).toEqual(['ten-1']); // call_records
+    expect(db.query.mock.calls[2][1]).toEqual(['ten-1']); // usage_records
+    // messages have no tenant_id — scope via the owning account subquery.
+    expect(db.query.mock.calls[3][0]).toContain('account_id IN (SELECT id FROM accounts WHERE tenant_id');
+    expect(db.query.mock.calls[3][1]).toEqual(['ten-1']);
+  });
+
+  it('handles an empty tenant (zeros, no crash)', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ subscribers: 0, period_start: 'a', period_end: 'b' }] })
+      .mockResolvedValueOnce({ rows: [{ secs: '0' }] })
+      .mockResolvedValueOnce({ rows: [{ mb: '0' }] })
+      .mockResolvedValueOnce({ rows: [{ sms_count: 0, mms_count: 0 }] });
+    const result = await adminService.getMarginMetrics();
+    expect(result.mrr).toBe(0);
+    expect(result.voice_minutes).toBe(0);
+    expect(result.data_gb).toBe(0);
+  });
+});
+
 describe('listPortOrders', () => {
   it('lists FastPort port orders and strips encrypted secrets', async () => {
     db.query
