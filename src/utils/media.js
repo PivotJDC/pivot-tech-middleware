@@ -108,8 +108,8 @@ function runFfmpeg(args) {
 }
 
 /**
- * Compress an oversized MMS video with ffmpeg (H.264/AAC MP4): resize to 480px
- * width, CRF 28, faststart, and a hard 500 KB cap (-fs). The buffer is written to
+ * Compress an oversized MMS video with ffmpeg (H.264/AAC MP4): resize to 720px
+ * width, CRF 24, faststart, and a hard 1 MB cap (-fs). The buffer is written to
  * a temp file, transcoded, read back, and the temp files are removed. Non-videos,
  * already-small videos, or any ffmpeg failure return the input unchanged
  * (best-effort — compression must never break a send/archive). Requires ffmpeg on
