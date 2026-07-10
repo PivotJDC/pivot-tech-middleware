@@ -4,6 +4,8 @@ jest.mock('../../src/services/telgoo5Service');
 jest.mock('../../src/integrations/bics');
 jest.mock('../../src/integrations/telnyx');
 jest.mock('../../src/utils/crypto');
+// portService is lazily required inside createAccount for the port-in hook.
+jest.mock('../../src/services/portService');
 jest.mock('../../src/utils/logger', () => ({
   logger: { info: () => {}, warn: () => {}, error: () => {} },
   REDACT_PATHS: [],
@@ -15,6 +17,7 @@ const telgoo5Service = require('../../src/services/telgoo5Service');
 const bics = require('../../src/integrations/bics');
 const telnyx = require('../../src/integrations/telnyx');
 const crypto = require('../../src/utils/crypto');
+const portService = require('../../src/services/portService');
 const accountService = require('../../src/services/accountService');
 
 const baseRow = {
@@ -114,6 +117,63 @@ describe('createAccount', () => {
     expect(crypto.hashPassword).toHaveBeenCalledWith('plaintext-pw');
     expect(result.id).toBe(baseRow.id);
     expect(result).not.toHaveProperty('sip_password_hash');
+  });
+
+  it('opens a FastPort port order alongside a port-in signup', async () => {
+    wireHappyPath();
+    portService.createPort.mockResolvedValueOnce({
+      id: 'po-1', status: 'draft', temp_did: '+12085550100',
+    });
+
+    const result = await accountService.createAccount({
+      email: 'a@b.co',
+      market: 'lewiston-id',
+      service: 'port',
+      service_address: SVC_ADDR,
+      first_name: 'Jane',
+      last_name: 'Doe',
+      port: {
+        number_e164: '+12085551234',
+        account_number: 'ACC-9',
+        pin: '4321',
+      },
+    });
+
+    expect(portService.createPort).toHaveBeenCalledWith(baseRow.id, {
+      phoneNumber: '+12085551234',
+      accountNumber: 'ACC-9',
+      pin: '4321',
+      authName: 'Jane Doe',
+      serviceAddress: SVC_ADDR_NORM,
+    });
+    expect(result.port_order).toEqual({ id: 'po-1', status: 'draft', temp_did: '+12085550100' });
+  });
+
+  it('does not fail signup when the port order creation errors (best-effort)', async () => {
+    wireHappyPath();
+    portService.createPort.mockRejectedValueOnce(new Error('telnyx down'));
+    const result = await accountService.createAccount({
+      email: 'a@b.co',
+      market: 'lewiston-id',
+      service: 'port',
+      service_address: SVC_ADDR,
+      port: { number_e164: '+12085551234', account_number: 'ACC-9', pin: '4321' },
+    });
+    // Account still created (with its temp DID); no port_order attached.
+    expect(result.id).toBe(baseRow.id);
+    expect(result.port_order).toBeUndefined();
+  });
+
+  it('skips the port hook when carrier details are absent', async () => {
+    wireHappyPath();
+    await accountService.createAccount({
+      email: 'a@b.co',
+      market: 'lewiston-id',
+      service: 'port',
+      service_address: SVC_ADDR,
+      port: { number_e164: '+12085551234' }, // no account_number/pin yet
+    });
+    expect(portService.createPort).not.toHaveBeenCalled();
   });
 
   it('rejects a duplicate email before purchasing a DID', async () => {

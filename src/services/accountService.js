@@ -510,6 +510,33 @@ async function createAccount(input = {}) {
       ));
     }
 
+    // Port-in: open a FastPort port order alongside account creation, so the
+    // ported number swaps in once the port completes while the temp DID (the
+    // number assigned above) gives instant service. Best-effort — a porting
+    // hiccup must never fail signup (the customer keeps the working temp DID and
+    // ops can complete the port). Lazy require to avoid an accountService <->
+    // portService import cycle. Only fires when the carrier details are present.
+    const port = input.port || {};
+    if (input.service === 'port' && port.number_e164 && port.account_number && port.pin) {
+      try {
+        // eslint-disable-next-line global-require
+        const portService = require('./portService');
+        const order = await portService.createPort(account.id, {
+          phoneNumber: port.number_e164,
+          accountNumber: port.account_number,
+          pin: port.pin,
+          authName: port.auth_name || `${firstName || ''} ${lastName || ''}`.trim(),
+          serviceAddress,
+        });
+        activated.port_order = { id: order.id, status: order.status, temp_did: order.temp_did };
+      } catch (portErr) {
+        logger.error(
+          { accountId: account.id, err: portErr.message },
+          'port order creation failed at signup (best-effort); account keeps temp DID',
+        );
+      }
+    }
+
     const result = activated;
     result.esim = esim;
     if (esimError) result.esim_error = esimError;
