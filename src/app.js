@@ -35,6 +35,7 @@ const voiceRouter = require('./routes/v1/voice');
 const voicemailsRouter = require('./routes/v1/voicemails');
 const portPinRouter = require('./routes/v1/portPin');
 const portRouter = require('./routes/v1/port');
+const appRouter = require('./routes/v1/app');
 const provisioningQrRouter = require('./routes/v1/provisioningQr');
 const billingRouter = require('./routes/v1/billing');
 const partnerRouter = require('./routes/v1/partner');
@@ -152,6 +153,7 @@ function createApp() {
   app.use('/v1/account', voicemailsRouter);
   app.use('/v1/account', portPinRouter);
   app.use('/v1/port', portRouter);
+  app.use('/v1/app', appRouter);
   app.use('/v1/account', provisioningQrRouter);
   app.use('/v1/billing', billingRouter);
   app.use('/v1/partner', partnerRouter);
