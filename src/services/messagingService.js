@@ -146,6 +146,27 @@ async function sendGroupMessage(accountId, input = {}) {
 }
 
 /**
+ * Cache a video thumbnail (base64 JPEG) onto a message row so the Acrobits fetch
+ * endpoint can serve the preview straight from the row, without an S3 read on
+ * every poll (a slow/transient S3 read used to null out the preview and make the
+ * thumbnail flicker). Best-effort — a DB error is logged and swallowed so the
+ * caller still returns the thumbnail it already has in hand.
+ * @param {string} messageId
+ * @param {string} base64 - the JPEG thumbnail, base64-encoded.
+ */
+async function cacheVideoThumbnail(messageId, base64) {
+  if (!messageId || !base64) return;
+  try {
+    await db.query(
+      'UPDATE messages SET video_thumbnail_base64 = $1 WHERE id = $2',
+      [base64, messageId],
+    );
+  } catch (err) {
+    logger.warn({ messageId, err: err.message }, 'failed to cache video thumbnail');
+  }
+}
+
+/**
  * Archive inbound Telnyx media to our S3 bucket (Telnyx media URLs expire).
  * Downloads each item, compresses oversized images, and uploads under
  * mms-inbound/{accountId}/{messageId}_{index}.{ext}. Returns an array aligned to
@@ -175,6 +196,8 @@ async function archiveInboundMedia(accountId, messageId, mediaList = []) {
           const thumb = await generateVideoThumbnail(buffer, contentType);
           if (thumb) {
             await s3.uploadObject({ key: `${key}_thumb.jpg`, body: thumb, contentType: 'image/jpeg' });
+            // Cache the base64 on the row so /fetch never re-reads it from S3.
+            await cacheVideoThumbnail(messageId, thumb.toString('base64'));
           }
         } catch (thumbErr) {
           logger.warn({ accountId, messageId, err: thumbErr.message }, 'inbound video thumbnail failed');
@@ -485,6 +508,7 @@ module.exports = {
   sendGroupMessage,
   handleInboundMessage,
   archiveInboundMedia,
+  cacheVideoThumbnail,
   recordInboundMessage,
   getMessages,
   getConversation,

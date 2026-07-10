@@ -373,6 +373,30 @@ describe('archiveInboundMedia', () => {
     ]);
     const thumb = s3.uploadObject.mock.calls.find((c) => c[0].key.endsWith('_thumb.jpg'));
     expect(thumb[0].contentType).toBe('image/jpeg');
+    // The base64 thumbnail is cached on the row so /fetch never re-reads S3.
+    const upd = db.query.mock.calls.find((c) => /video_thumbnail_base64/.test(c[0]));
+    expect(upd[1]).toEqual([Buffer.from('thumb-bytes').toString('base64'), 'msg-7']);
+  });
+});
+
+describe('cacheVideoThumbnail', () => {
+  it('updates the message row with the base64 thumbnail', async () => {
+    db.query.mockResolvedValueOnce({ rowCount: 1 });
+    await messaging.cacheVideoThumbnail('msg-42', 'BASE64DATA');
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/UPDATE messages SET video_thumbnail_base64 = \$1 WHERE id = \$2/);
+    expect(params).toEqual(['BASE64DATA', 'msg-42']);
+  });
+
+  it('is a no-op when the id or base64 is missing', async () => {
+    await messaging.cacheVideoThumbnail('', 'x');
+    await messaging.cacheVideoThumbnail('msg-1', '');
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it('swallows a DB error (best-effort)', async () => {
+    db.query.mockRejectedValueOnce(new Error('db down'));
+    await expect(messaging.cacheVideoThumbnail('msg-9', 'b64')).resolves.toBeUndefined();
   });
 });
 

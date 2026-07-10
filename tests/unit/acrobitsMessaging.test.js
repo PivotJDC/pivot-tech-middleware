@@ -596,6 +596,60 @@ describe('GET /v1/acrobits/fetch', () => {
     expect(json.attachments[0]['content-type']).toBe('video/mp4');
   });
 
+  it('serves the cached thumbnail without hitting S3 when video_thumbnail_base64 is set', async () => {
+    s3.presignUrlIfOwn.mockImplementation((url) => Promise.resolve(`${url}?signed=1`));
+    s3.keyFromUrl.mockReturnValue('mms-inbound/acc-1/r7_0.mp4');
+    const cached = Buffer.from('CACHEDTHUMB').toString('base64');
+    messagingService.fetchForAcrobits.mockResolvedValueOnce({
+      received: [{
+        id: 'r7',
+        from_number: '+12085550142',
+        body: '',
+        created_at: '2026-06-25T12:00:00.000Z',
+        media_urls: ['https://bucket.s3.us-east-1.amazonaws.com/mms-inbound/acc-1/r7_0.mp4'],
+        video_thumbnail_base64: cached,
+      }],
+      sent: [],
+    });
+
+    const res = await request(app)
+      .get('/v1/acrobits/fetch')
+      .query({ username: 'pivottech-abc', password: 'pw' });
+
+    expect(res.status).toBe(200);
+    // No S3 read for the thumbnail, and no write-through (already cached).
+    expect(s3.getObjectBuffer).not.toHaveBeenCalled();
+    expect(messagingService.cacheVideoThumbnail).not.toHaveBeenCalled();
+    const json = JSON.parse(smsTextJson(res.text));
+    expect(json.attachments[0].preview).toEqual({ 'content-type': 'image/jpeg', content: cached });
+  });
+
+  it('falls back to S3 and writes the thumbnail back to the row (write-through)', async () => {
+    s3.presignUrlIfOwn.mockImplementation((url) => Promise.resolve(url));
+    s3.keyFromUrl.mockReturnValue('mms-inbound/acc-1/r8_0.mp4');
+    s3.getObjectBuffer.mockResolvedValueOnce(Buffer.from('FRESHTHUMB'));
+    messagingService.fetchForAcrobits.mockResolvedValueOnce({
+      received: [{
+        id: 'r8',
+        from_number: '+12085550142',
+        body: '',
+        created_at: '2026-06-25T12:00:00.000Z',
+        media_urls: ['https://bucket.s3.us-east-1.amazonaws.com/mms-inbound/acc-1/r8_0.mp4'],
+        // no video_thumbnail_base64 → S3 fallback + cache write-through
+      }],
+      sent: [],
+    });
+
+    const res = await request(app)
+      .get('/v1/acrobits/fetch')
+      .query({ username: 'pivottech-abc', password: 'pw' });
+
+    expect(res.status).toBe(200);
+    expect(s3.getObjectBuffer).toHaveBeenCalledWith('mms-inbound/acc-1/r8_0.mp4_thumb.jpg');
+    const freshB64 = Buffer.from('FRESHTHUMB').toString('base64');
+    expect(messagingService.cacheVideoThumbnail).toHaveBeenCalledWith('r8', freshB64);
+  });
+
   it('omits the text field and media elements appropriately', async () => {
     messagingService.fetchForAcrobits.mockResolvedValueOnce({
       received: [{

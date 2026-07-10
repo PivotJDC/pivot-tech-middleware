@@ -23,6 +23,7 @@ const acrobits = require('../../integrations/acrobits');
 const s3 = require('../../integrations/s3');
 const crypto = require('../../utils/crypto');
 const { formatNational } = require('../../utils/e164');
+const { logger } = require('../../utils/logger');
 const { asyncHandler } = require('../../middleware/errorHandler');
 
 const router = express.Router();
@@ -188,22 +189,42 @@ function fetchXml(received, sent, subscriberNumber) {
 
 /**
  * Prepare a message's media for the fetch response (mutates the row in place):
- *   - load a base64 JPEG preview for each video attachment (from the stored
- *     {key}_thumb.jpg in S3) into m.mediaPreviews, aligned to media_urls;
+ *   - load a base64 JPEG preview for each video attachment into m.mediaPreviews,
+ *     aligned to media_urls;
  *   - replace media_urls with fresh presigned URLs for our own S3 objects.
  * Best-effort throughout — external URLs, missing thumbnails, and signing
  * failures are left as-is.
+ *
+ * The video thumbnail is served from the cached column (video_thumbnail_base64)
+ * when present, so a fetch poll never depends on S3 — a slow/transient
+ * getObjectBuffer used to null the preview out, making the thumbnail flicker
+ * (appear, then disappear on the next poll). When the cache is empty (an
+ * outbound message, whose row is created after media archival, or a row from
+ * before this cache existed) we fall back to S3 and write the result back so the
+ * next poll is served from the row. Only the first video attachment is cached
+ * (the column holds one thumbnail per message).
  */
 async function prepareMessageMedia(m) {
   if (!m || !Array.isArray(m.media_urls) || m.media_urls.length === 0) return;
   const rawUrls = m.media_urls;
-  const previews = await Promise.all(rawUrls.map(async (rawUrl) => {
+  const firstVideoIdx = rawUrls.findIndex((u) => contentTypeForUrl(u).startsWith('video/'));
+  const previews = await Promise.all(rawUrls.map(async (rawUrl, i) => {
     if (!contentTypeForUrl(rawUrl).startsWith('video/')) return null;
+    // Cache hit: serve straight from the row, no S3 call.
+    if (i === firstVideoIdx && m.video_thumbnail_base64) {
+      logger.info({ messageId: m.id, source: 'cached' }, 'using cached video thumbnail');
+      return { 'content-type': 'image/jpeg', content: m.video_thumbnail_base64 };
+    }
     const key = s3.keyFromUrl(rawUrl);
     if (!key) return null;
     try {
       const buf = await s3.getObjectBuffer(`${key}_thumb.jpg`);
-      return { 'content-type': 'image/jpeg', content: buf.toString('base64') };
+      const base64 = buf.toString('base64');
+      // Write-through so subsequent polls skip S3 (best-effort; never throws).
+      if (i === firstVideoIdx) {
+        await messagingService.cacheVideoThumbnail(m.id, base64);
+      }
+      return { 'content-type': 'image/jpeg', content: base64 };
     } catch {
       return null; // no thumbnail stored
     }
