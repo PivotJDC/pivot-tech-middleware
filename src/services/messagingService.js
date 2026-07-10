@@ -190,7 +190,7 @@ async function handleInboundMessage(payload = {}) {
       'SELECT * FROM messages WHERE telnyx_message_id = $1',
       [telnyxMessageId],
     );
-    logger.info({ accountId, telnyxMessageId }, 'duplicate inbound message skipped');
+    logger.info({ accountId, telnyxMessageId }, 'duplicate inbound message resolved via conflict');
     return existing.rows[0] || null;
   }
   logger.info({ accountId, telnyxMessageId }, 'inbound message stored');
