@@ -4,7 +4,7 @@ const express = require('express');
 const request = require('supertest');
 const telnyx = require('../../src/integrations/telnyx');
 const didsRouter = require('../../src/routes/v1/dids');
-const { errorHandler } = require('../../src/middleware/errorHandler');
+const { errorHandler, AppError } = require('../../src/middleware/errorHandler');
 
 function buildApp() {
   const app = express();
@@ -93,5 +93,29 @@ describe('GET /v1/numbers/available', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ numbers: [] });
+  });
+
+  it('degrades to an empty list (not a 502) when Telnyx 400s the area code', async () => {
+    telnyx.searchAvailableNumbers.mockRejectedValueOnce(Object.assign(
+      new Error('Telnyx rejected GET /available_phone_numbers (400).'),
+      { code: 'TELNYX_ERROR', upstreamStatus: 400 },
+    ));
+
+    const res = await request(app).get('/v1/numbers/available?areacode=303');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ numbers: [] });
+  });
+
+  it('still surfaces a genuine Telnyx outage (5xx) as an error', async () => {
+    // No 4xx upstreamStatus → a real outage; propagates as the TELNYX_ERROR 502.
+    telnyx.searchAvailableNumbers.mockRejectedValueOnce(
+      new AppError('TELNYX_ERROR', 'Telnyx request failed after retries.', { status: 502 }),
+    );
+
+    const res = await request(app).get('/v1/numbers/available?areacode=303');
+
+    expect(res.status).toBe(502);
+    expect(res.body.error.code).toBe('TELNYX_ERROR');
   });
 });

@@ -176,6 +176,34 @@ describe('createAccount', () => {
     expect(portService.createPort).not.toHaveBeenCalled();
   });
 
+  it('populates the flat address columns from the service address', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] }); // email pre-check
+    didOrchestration.assignDid.mockResolvedValueOnce(credentials);
+    crypto.hashPassword.mockResolvedValueOnce('hashed-pw');
+    let insertParams;
+    db.withTransaction.mockImplementationOnce(async (fn) => {
+      const client = {
+        query: jest.fn()
+          .mockImplementationOnce((_sql, params) => {
+            insertParams = params;
+            return { rows: [baseRow] };
+          })
+          .mockResolvedValueOnce({ rows: [] }), // INSERT did
+      };
+      return fn(client);
+    });
+
+    await accountService.createAccount({
+      email: 'a@b.co', market: 'lewiston-id', service_address: SVC_ADDR,
+    });
+
+    // Flat columns ($22-$26) mirror the normalized service address so the admin
+    // profile section (which reads them) shows the signup address.
+    expect(insertParams.slice(21, 26)).toEqual([
+      '123 Main St', null, 'Lewiston', 'ID', '83501',
+    ]);
+  });
+
   it('rejects a duplicate email before purchasing a DID', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ id: 'existing' }] });
     await expect(accountService.createAccount({ email: 'a@b.co', market: 'lewiston-id', service_address: SVC_ADDR }))

@@ -207,6 +207,29 @@ describe('assignDid', () => {
     expect(telnyx.searchAvailableNumbers).toHaveBeenCalledTimes(2);
   });
 
+  it('turns a Telnyx 4xx on the search into a friendly DID_UNAVAILABLE (not a raw 502)', async () => {
+    const telnyx400 = Object.assign(new Error('Telnyx rejected GET /available_phone_numbers (400).'), {
+      code: 'TELNYX_ERROR',
+      upstreamStatus: 400,
+    });
+    telnyx.searchAvailableNumbers.mockRejectedValueOnce(telnyx400);
+
+    await expect(did.assignDid('direct', '303')).rejects.toMatchObject({
+      code: 'DID_UNAVAILABLE',
+      message: 'No numbers available in area code 303. Please try a different area code.',
+      field: 'area_code',
+    });
+  });
+
+  it('propagates a genuine Telnyx 5xx/outage (not swallowed as DID_UNAVAILABLE)', async () => {
+    const telnyx502 = Object.assign(new Error('Telnyx request failed after retries.'), {
+      code: 'TELNYX_ERROR',
+    });
+    telnyx.searchAvailableNumbers.mockRejectedValueOnce(telnyx502);
+
+    await expect(did.assignDid('direct', '303')).rejects.toMatchObject({ code: 'TELNYX_ERROR' });
+  });
+
   it('logs a DID_UNAVAILABLE error naming every area code tried on exhaustion', async () => {
     telnyx.searchAvailableNumbers.mockResolvedValue([]);
     await expect(did.assignDid('kendall-il')).rejects.toMatchObject({ code: 'DID_UNAVAILABLE' });

@@ -12,6 +12,7 @@
 const express = require('express');
 const telnyx = require('../../integrations/telnyx');
 const e164 = require('../../utils/e164');
+const { logger } = require('../../utils/logger');
 const { errors, asyncHandler } = require('../../middleware/errorHandler');
 
 const router = express.Router();
@@ -46,12 +47,28 @@ router.get(
       throw errors.validation('A 3-digit area code is required.', 'areacode');
     }
 
-    const results = await telnyx.searchAvailableNumbers(areacode, {
-      maxResults: parseMaxResults(maxRaw),
-      contains: cleanPattern(contains),
-      startsWith: cleanPattern(startsWith),
-      endsWith: cleanPattern(endsWith),
-    });
+    // A Telnyx 4xx (e.g. 400 for an area code with no orderable inventory) is
+    // treated as "no results" rather than a 502, so the signup number picker
+    // degrades to an empty list the UI can handle ("try another area code")
+    // instead of a hard error. Genuine 5xx/network failures still propagate.
+    let results = [];
+    try {
+      results = await telnyx.searchAvailableNumbers(areacode, {
+        maxResults: parseMaxResults(maxRaw),
+        contains: cleanPattern(contains),
+        startsWith: cleanPattern(startsWith),
+        endsWith: cleanPattern(endsWith),
+      });
+    } catch (err) {
+      if (err && err.upstreamStatus >= 400 && err.upstreamStatus < 500) {
+        logger.warn(
+          { areacode, upstreamStatus: err.upstreamStatus },
+          `Telnyx rejected number search for area code ${areacode}; returning empty list`,
+        );
+      } else {
+        throw err;
+      }
+    }
 
     const numbers = results
       .map((r) => r.number || r.e164)

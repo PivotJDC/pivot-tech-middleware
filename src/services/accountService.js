@@ -413,14 +413,20 @@ async function createAccount(input = {}) {
 
   try {
     const account = await db.withTransaction(async (client) => {
+      // Also populate the flat address columns from the service address so the
+      // admin profile section (which reads address_line1/city/state/zip) shows
+      // the signup address, not just the service_address JSONB.
+      const svc = serviceAddress || {};
       const inserted = await client.query(
         `INSERT INTO accounts
            (email, market, plan, phone_e164, sip_username, sip_endpoint_id,
             sip_password_hash, parent_account_id, line_label,
             external_billing_provider, broadband_provider, broadband_account_id, promo_code,
             first_name, last_name, service_address, billing_address,
-            e911_address_id, e911_enabled, tenant_id, port_out_pin)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+            e911_address_id, e911_enabled, tenant_id, port_out_pin,
+            address_line1, address_line2, city, state, zip)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
+                 $22, $23, $24, $25, $26)
          RETURNING *`,
         [
           email,
@@ -444,6 +450,11 @@ async function createAccount(input = {}) {
           credentials.e911Enabled || false,
           tenantId,
           generatePortPin(),
+          svc.line1 || null,
+          svc.line2 || null,
+          svc.city || null,
+          svc.state || null,
+          svc.zip || null,
         ],
       );
       const accountId = inserted.rows[0].id;

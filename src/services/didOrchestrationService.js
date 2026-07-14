@@ -53,8 +53,25 @@ async function findAvailableNumber(market, requestedAreaCode = null) {
   // Try each area code in order; sequential by design (stop at first hit).
   for (let i = 0; i < areaCodes.length; i += 1) {
     const areaCode = areaCodes[i];
-    // eslint-disable-next-line no-await-in-loop
-    const results = await telnyx.searchAvailableNumbers(areaCode);
+    let results = [];
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      results = await telnyx.searchAvailableNumbers(areaCode);
+    } catch (err) {
+      // A Telnyx 4xx (e.g. 400 for an area code with no orderable inventory) is
+      // NOT an outage — treat it as "none available" for this area code and try
+      // the next one, so a bad area code never surfaces a raw 502 to the signup
+      // flow. A 5xx / network failure (no 4xx upstreamStatus) is a genuine error
+      // and propagates as TELNYX_ERROR.
+      if (err && err.upstreamStatus >= 400 && err.upstreamStatus < 500) {
+        logger.warn(
+          { market, areaCode, upstreamStatus: err.upstreamStatus },
+          `Telnyx rejected the number search for area code ${areaCode} (${err.upstreamStatus}); treating as no inventory`,
+        );
+      } else {
+        throw err;
+      }
+    }
     if (results.length > 0) {
       // Surface when we landed on a fallback — a market whose primary area
       // code keeps coming up dry is an inventory signal ops should see.
@@ -72,17 +89,17 @@ async function findAvailableNumber(market, requestedAreaCode = null) {
     );
   }
 
-  // Every configured area code came up empty: log loudly with the full list
-  // tried so the CloudWatch line alone tells ops what to replenish.
+  // Every area code came up empty (or was rejected): log loudly with the full
+  // list tried so the CloudWatch line alone tells ops what to replenish, then
+  // surface a friendly, area-code-specific error — never the raw Telnyx message.
   logger.error(
     { code: 'DID_UNAVAILABLE', market, areaCodesTried: areaCodes },
     `DID_UNAVAILABLE: no numbers available for market ${market} after trying area codes ${areaCodes.join(', ')}`,
   );
-  throw new AppError(
-    'DID_UNAVAILABLE',
-    `No numbers available for market ${market} (area codes ${areaCodes.join(', ')}).`,
-    { field: 'market' },
-  );
+  const message = areaCodes.length === 1
+    ? `No numbers available in area code ${areaCodes[0]}. Please try a different area code.`
+    : `No numbers available in area codes ${areaCodes.join(', ')}. Please try a different area code.`;
+  throw new AppError('DID_UNAVAILABLE', message, { field: 'area_code' });
 }
 
 /**
