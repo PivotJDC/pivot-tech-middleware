@@ -466,11 +466,25 @@ async function createE911Address(address) {
       : null;
     if (!suggestions) throw err;
 
+    const corrected = { ...address, ...suggestions };
+    // Log BOTH the original and the USPS-corrected address (location fields
+    // only; the subscriber name is omitted) so an ops review can see exactly
+    // what Telnyx normalized.
+    const locationFields = (a) => ({
+      line1: a.line1,
+      line2: a.line2 || '',
+      city: a.city,
+      state: a.state,
+      zip: a.zip,
+    });
     logger.info(
-      { fields: Object.keys(suggestions) },
+      {
+        fields: Object.keys(suggestions),
+        original: locationFields(address),
+        corrected: locationFields(corrected),
+      },
       'retrying E911 address with Telnyx USPS suggestions',
     );
-    const corrected = { ...address, ...suggestions };
     const data = unwrap(await request('POST', '/addresses', e911AddressBody(corrected)));
     return { addressId: data && data.id, status: data && data.status };
   }
