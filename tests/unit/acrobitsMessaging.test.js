@@ -268,6 +268,72 @@ describe('GET/POST /v1/acrobits/send', () => {
     });
   });
 
+  it('acks a video MMS immediately and sends it in the background', async () => {
+    // Video decrypt+transcode can take 60s+, past Cloud Softphone's ~30s HTTP
+    // timeout, so we ack right away and process asynchronously.
+    crypto.randomSecret.mockReturnValue('rand9');
+    messagingService.sendMessage.mockResolvedValueOnce({ id: 'vid-1' });
+    mmsService.resolveMediaUrls.mockResolvedValueOnce(['https://s3/mms/acc-1/vid.mp4']);
+    const body = JSON.stringify({
+      attachments: [{ 'content-url': 'https://acrobits/vid', 'content-type': 'video/mp4', 'encryption-key': 'ab12' }],
+    });
+    const res = await request(app)
+      .post('/v1/acrobits/send')
+      .type('form')
+      .send({
+        username: 'pivottech-abc', password: 'pw', sms_to: '+12085550142', sms_body: body,
+      });
+    // Immediate success ack with a synthetic async id (no real message id yet).
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<sms_id>async-rand9</sms_id>');
+    // The actual send runs in the background (after the response is sent).
+    await new Promise((resolve) => { setImmediate(resolve); });
+    expect(mmsService.resolveMediaUrls).toHaveBeenCalledWith('acc-1', [
+      { url: 'https://acrobits/vid', contentType: 'video/mp4', encryptionKey: 'ab12' },
+    ]);
+    expect(messagingService.sendMessage).toHaveBeenCalledWith('acc-1', {
+      to: '+12085550142',
+      body: '',
+      mediaUrls: ['https://s3/mms/acc-1/vid.mp4'],
+    });
+  });
+
+  it('still returns 200 when the background video send fails (logged, not surfaced)', async () => {
+    crypto.randomSecret.mockReturnValue('randX');
+    mmsService.resolveMediaUrls.mockRejectedValueOnce(new Error('ffmpeg boom'));
+    const body = JSON.stringify({
+      attachments: [{ 'content-url': 'https://acrobits/vid', 'content-type': 'video/mp4' }],
+    });
+    const res = await request(app)
+      .post('/v1/acrobits/send')
+      .type('form')
+      .send({
+        username: 'pivottech-abc', password: 'pw', sms_to: '+12085550142', sms_body: body,
+      });
+    // The app sees success even though the background send will fail.
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<sms_id>async-randX</sms_id>');
+    // The background rejection is swallowed by .catch — no send, no crash.
+    await new Promise((resolve) => { setImmediate(resolve); });
+    expect(messagingService.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps the synchronous path for image MMS (returns the real message id)', async () => {
+    messagingService.sendMessage.mockResolvedValueOnce({ id: 'img-sync' });
+    const body = JSON.stringify({
+      attachments: [{ 'content-url': 'https://media/pic.jpg', 'content-type': 'image/jpeg' }],
+    });
+    const res = await request(app)
+      .post('/v1/acrobits/send')
+      .type('form')
+      .send({
+        username: 'pivottech-abc', password: 'pw', sms_to: '+12085550142', sms_body: body,
+      });
+    // Real message id in the ack — the send completed before responding.
+    expect(res.text).toContain('<sms_id>img-sync</sms_id>');
+    expect(messagingService.sendMessage).toHaveBeenCalled();
+  });
+
   it('sends an MMS with text alongside the attachments', async () => {
     messagingService.sendMessage.mockResolvedValueOnce({ id: 'mms-2' });
     const body = JSON.stringify({

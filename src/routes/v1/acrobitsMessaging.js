@@ -339,6 +339,34 @@ function parseRecipients(p) {
   return out;
 }
 
+/** True when any attachment is a video (content-type starts with "video/"). */
+function hasVideoAttachment(attachments) {
+  return attachments.some(
+    (a) => a && typeof a.contentType === 'string' && a.contentType.toLowerCase().startsWith('video/'),
+  );
+}
+
+/**
+ * Resolve the encrypted Acrobits media and send the message. Shared by the
+ * synchronous (image/text) and asynchronous (video) send paths.
+ * @returns {Promise<object>} the persisted message row.
+ */
+async function resolveAndSend(account, recipients, text, attachments) {
+  // Resolve encrypted Acrobits media to Telnyx-fetchable URLs (best-effort).
+  const mediaUrls = await mmsService.resolveMediaUrls(account.id, attachments);
+  // Fallback: if the MMS had attachments but none could be resolved
+  // (download/decrypt/upload failed) and there's no text, send a plain SMS
+  // placeholder instead of failing the whole message.
+  let body = text;
+  if (!body && mediaUrls.length === 0 && attachments.length > 0) {
+    body = '[Photo message]';
+  }
+  // Two or more recipients → Telnyx Group MMS; one → ordinary 1:1 send.
+  return recipients.length > 1
+    ? messagingService.sendGroupMessage(account.id, { to: recipients, body, mediaUrls })
+    : messagingService.sendMessage(account.id, { to: recipients[0], body, mediaUrls });
+}
+
 // --- Send (GET or POST) ---
 async function sendHandler(req, res) {
   const p = params(req);
@@ -350,20 +378,34 @@ async function sendHandler(req, res) {
   const recipients = parseRecipients(p);
   // SMS vs MMS: an attachments JSON body yields media; plain text is SMS.
   const { text, attachments } = parseSendBody(p.body || p.sms_body || p.message_body);
+
+  // Video MMS: download + AES-decrypt + ffmpeg transcode can take 60s+, well
+  // past Cloud Softphone's ~30s HTTP timeout — which surfaces as "SMS Error" in
+  // the app even when the send ultimately succeeds. Acknowledge immediately and
+  // do the work in the background.
+  // Trade-off (accepted): the app can't observe an async failure, so we only log
+  // it; a delivery-status update to the subscriber is a follow-up.
+  if (hasVideoAttachment(attachments)) {
+    const ackId = `async-${crypto.randomSecret(9)}`;
+    sendXml(res, 200, sendOkXml(ackId));
+    // Fire-and-forget: never awaited by the request. .then/.catch handles the
+    // promise so there's no unhandled rejection.
+    resolveAndSend(account, recipients, text, attachments)
+      .then((message) => logger.info(
+        { accountId: account.id, ackId, telnyxMessageId: message && message.id },
+        'async video MMS sent',
+      ))
+      .catch((err) => logger.error(
+        { accountId: account.id, ackId, err: err.message },
+        'async video MMS send failed',
+      ));
+    return;
+  }
+
+  // Image/text: sharp image compression is typically < 5s — fast enough to keep
+  // the synchronous flow and return the real message id (or a send error).
   try {
-    // Resolve encrypted Acrobits media to Telnyx-fetchable URLs (best-effort).
-    const mediaUrls = await mmsService.resolveMediaUrls(account.id, attachments);
-    // Fallback: if the MMS had attachments but none could be resolved
-    // (download/decrypt/upload failed) and there's no text, send a plain SMS
-    // placeholder instead of failing the whole message.
-    let body = text;
-    if (!body && mediaUrls.length === 0 && attachments.length > 0) {
-      body = '[Photo message]';
-    }
-    // Two or more recipients → Telnyx Group MMS; one → ordinary 1:1 send.
-    const message = recipients.length > 1
-      ? await messagingService.sendGroupMessage(account.id, { to: recipients, body, mediaUrls })
-      : await messagingService.sendMessage(account.id, { to: recipients[0], body, mediaUrls });
+    const message = await resolveAndSend(account, recipients, text, attachments);
     sendXml(res, 200, sendOkXml(message.id));
   } catch (err) {
     const status = err && err.status >= 400 ? err.status : 500;
