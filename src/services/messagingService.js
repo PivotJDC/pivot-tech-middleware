@@ -234,12 +234,16 @@ async function handleInboundMessage(payload = {}) {
 
   // Group message: Telnyx includes a `cc` array listing the other participants.
   // Its entries may be objects ({ phone_number }) or bare strings — normalize to
-  // E.164 strings. A non-empty cc marks this as a group thread; store the group
-  // id (group_message_id, falling back to the message id) so /fetch can thread
-  // all group messages together.
-  const cc = Array.isArray(payload.cc)
+  // E.164 strings.
+  const ccRaw = Array.isArray(payload.cc)
     ? payload.cc.map((c) => (c && c.phone_number) || c).filter(Boolean)
     : [];
+  // A P2P MMS can echo our own DID (`to`) or the sender (`from`) into `cc` — those
+  // are NOT additional recipients. Only genuine OTHER participants make this a
+  // group. Assigning a group_id to a 1:1 thread orphans it in Cloud Softphone
+  // (its stream_id no longer falls back to from_number), so require at least one
+  // real other recipient before treating the message as a group.
+  const cc = ccRaw.filter((n) => n !== to && n !== from);
   const groupId = cc.length > 0 ? (payload.group_message_id || telnyxMessageId) : null;
 
   const account = await db.query(

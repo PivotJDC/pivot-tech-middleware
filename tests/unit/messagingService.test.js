@@ -233,6 +233,64 @@ describe('handleInboundMessage', () => {
     expect(params[7]).toEqual([]); // cc
   });
 
+  it('does not assign a group_id when cc only echoes our own DID (P2P MMS)', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 'in-p2p', direction: 'inbound' }] });
+
+    await messaging.handleInboundMessage({
+      id: 'tmsg-p2p-self',
+      group_message_id: 'gm-bogus', // Telnyx sends one even for P2P MMS
+      from: { phone_number: '+12085550142' },
+      to: [{ phone_number: '+12085550100' }],
+      cc: [{ phone_number: '+12085550100' }], // just our own DID echoed back
+      text: 'pic for you',
+    });
+    const params = db.query.mock.calls[2][1];
+    expect(params[6]).toBeNull(); // group_id — NOT gm-bogus
+    expect(params[7]).toEqual([]); // cc — the self-echo is dropped
+  });
+
+  it('does not assign a group_id when cc only echoes the sender (P2P MMS)', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 'in-p2p2', direction: 'inbound' }] });
+
+    await messaging.handleInboundMessage({
+      id: 'tmsg-p2p-sender',
+      group_message_id: 'gm-bogus2',
+      from: { phone_number: '+12085550142' },
+      to: [{ phone_number: '+12085550100' }],
+      cc: ['+12085550142'], // sender echoed into cc
+      text: 'pic',
+    });
+    const params = db.query.mock.calls[2][1];
+    expect(params[6]).toBeNull(); // group_id
+    expect(params[7]).toEqual([]); // cc
+  });
+
+  it('still assigns a group_id when cc has a genuine third party (mixed with self-echo)', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ id: ACCOUNT_ID }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 'in-g2', direction: 'inbound', group_id: 'gm-9' }] });
+
+    await messaging.handleInboundMessage({
+      id: 'tmsg-in-g2',
+      group_message_id: 'gm-9',
+      from: { phone_number: '+12085550142' },
+      to: [{ phone_number: '+12085550100' }],
+      // Our DID echoed alongside a real third participant.
+      cc: [{ phone_number: '+12085550100' }, '+12085550144'],
+      text: 'group hi',
+    });
+    const params = db.query.mock.calls[2][1];
+    expect(params[6]).toBe('gm-9'); // group_id kept
+    expect(params[7]).toEqual(['+12085550144']); // only the genuine other party
+  });
+
   it('ignores an inbound message for an unknown number', async () => {
     db.query.mockResolvedValueOnce({ rows: [] }); // no account
     const result = await messaging.handleInboundMessage({
