@@ -56,6 +56,21 @@ function emitOpsAlert(detail) {
 }
 
 /**
+ * Detect a BUSINESS-level auth failure. BICS returns HTTP 200 (so res.status is
+ * never 401) but signals an expired token inside the envelope: resultCode "401"
+ * — at the top level or in resultParam — or a resultDescription containing
+ * "Authorization Failed". This is distinct from the HTTP-401 path.
+ */
+function isBusinessAuthFailure(payload) {
+  const envelope = payload && payload.Response;
+  if (!envelope) return false;
+  const rp = envelope.resultParam || {};
+  const codes = [envelope.resultCode, rp.resultCode];
+  const desc = String(rp.resultDescription || envelope.resultDescription || '');
+  return codes.some((c) => String(c) === '401') || /authorization failed/i.test(desc);
+}
+
+/**
  * Issue an HTTP request with the transport/5xx/429 retry policy. Returns the
  * raw fetch Response so the caller can inspect status (notably 401 for the
  * re-auth flow). Throws BICS_ERROR only once transport/5xx retries are
@@ -173,22 +188,40 @@ async function request(method, path, body, opts = {}) {
 
   let res = await sendWithRetry(method, url, buildInit());
 
-  // Token expired — re-auth once and replay with the fresh token.
+  // HTTP-level 401 — token expired at the transport layer. Re-auth once and
+  // replay with the fresh token.
   if (res.status === 401) {
     await authenticate();
     res = await sendWithRetry(method, url, buildInit());
   }
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    logger.error({
-      method, path, status: res.status, body: text,
-    }, 'BICS client error');
-    throw new AppError('BICS_ERROR', `BICS rejected ${method} ${path} (${res.status}).`, { status: 502 });
-  }
+  // Parse an HTTP response into JSON, throwing BICS_ERROR on a non-ok status.
+  const parseResponse = async (r) => {
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      logger.error({
+        method, path, status: r.status, body: t,
+      }, 'BICS client error');
+      throw new AppError('BICS_ERROR', `BICS rejected ${method} ${path} (${r.status}).`, { status: 502 });
+    }
+    const t = r.status === 204 ? '' : await r.text();
+    return t ? JSON.parse(t) : null;
+  };
 
-  const text = res.status === 204 ? '' : await res.text();
-  const payload = text ? JSON.parse(text) : null;
+  let payload = await parseResponse(res);
+
+  // BUSINESS-level 401: BICS answers HTTP 200 but sets resultCode "401" /
+  // resultDescription "Authorization Failed" when the token has expired. The
+  // HTTP-status check above never catches this, so handle it here (before the
+  // envelope failure check, and regardless of skipEnvelopeCheck): clear the
+  // cached token, re-authenticate, and replay ONCE with the fresh token.
+  if (isBusinessAuthFailure(payload)) {
+    logger.info('BICS token expired (resultCode 401), re-authenticating');
+    cachedToken = null;
+    await authenticate();
+    res = await sendWithRetry(method, url, buildInit());
+    payload = await parseResponse(res);
+  }
 
   // Business-failure envelope: resultCode "0" = success, "1" = failure.
   const envelope = payload && payload.Response;

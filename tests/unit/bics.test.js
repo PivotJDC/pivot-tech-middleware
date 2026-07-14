@@ -147,6 +147,75 @@ describe('auto-refresh on 401', () => {
   });
 });
 
+describe('auto-refresh on a business-level 401 (HTTP 200, resultCode "401")', () => {
+  // BICS answers HTTP 200 with a "401" in the envelope when the token expires —
+  // the HTTP-status check never sees it, so this path handles it.
+  function bizAuthFail(resultDescription = 'Authorization Failed') {
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        Response: { resultCode: '401', resultParam: { resultCode: '401', resultDescription } },
+      }),
+    };
+  }
+
+  it('re-authenticates and replays once on resultCode "401"', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk('tok-1')) // initial login
+      .mockResolvedValueOnce(bizAuthFail()) // HTTP 200 but envelope 401
+      .mockResolvedValueOnce(loginOk('tok-2')) // re-auth
+      .mockResolvedValueOnce(envOk({ rows: [{ iccid: 'icc-1' }] })); // replay succeeds
+
+    const rows = await bics.fetchSimInventory();
+    expect(rows).toEqual([{ iccid: 'icc-1' }]);
+
+    // The token was cleared + refreshed; the replay used the new token.
+    const replay = global.fetch.mock.calls[3];
+    expect(replay[1].headers['X-Authorization']).toBe('Bearer tok-2');
+    expect(global.fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it('also triggers on a resultDescription containing "Authorization Failed"', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk('tok-1'))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        // resultCode is not literally "401", but the description is the signal.
+        text: async () => JSON.stringify({
+          Response: { resultCode: '1', resultParam: { resultCode: '99', resultDescription: 'Authorization Failed for token' } },
+        }),
+      })
+      .mockResolvedValueOnce(loginOk('tok-2'))
+      .mockResolvedValueOnce(envOk({ rows: [] }));
+
+    await bics.fetchSimInventory();
+    expect(global.fetch).toHaveBeenCalledTimes(4);
+    expect(global.fetch.mock.calls[3][1].headers['X-Authorization']).toBe('Bearer tok-2');
+  });
+
+  it('applies to skipEnvelopeCheck action endpoints too (e.g. activateEndpoint)', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk('tok-1'))
+      .mockResolvedValueOnce(bizAuthFail()) // business 401 on the action call
+      .mockResolvedValueOnce(loginOk('tok-2')) // re-auth
+      .mockResolvedValueOnce(actionRes('5014')); // replay: newly activated
+
+    await expect(bics.activateEndpoint('ep-1')).resolves.toBeDefined();
+    expect(global.fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not loop forever — a persistent business 401 surfaces as an error', async () => {
+    global.fetch
+      .mockResolvedValueOnce(loginOk('tok-1'))
+      .mockResolvedValueOnce(bizAuthFail())
+      .mockResolvedValueOnce(loginOk('tok-2'))
+      .mockResolvedValueOnce(bizAuthFail()); // still 401 after re-auth → envelope check throws
+    await expect(bics.fetchSimInventory()).rejects.toMatchObject({ code: 'BICS_ERROR' });
+  });
+});
+
 describe('fetchSimByIccid', () => {
   it('returns the SIM with its eSIM activation code', async () => {
     const sim = {
