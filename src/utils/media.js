@@ -100,20 +100,58 @@ function runFfmpeg(args) {
   return new Promise((resolve, reject) => {
     // execFile (no shell) — args are passed as an array, so no injection risk.
     // ffmpeg logs to stderr; cap it and the runtime so a bad input can't hang us.
-    execFile('ffmpeg', args, { timeout: 120000, maxBuffer: 8 * 1024 * 1024 }, (err) => {
-      if (err) reject(err);
-      else resolve();
+    execFile('ffmpeg', args, { timeout: 120000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        // Node does NOT attach captured output to the error for execFile — the
+        // real ffmpeg diagnostic is on stderr. Attach it so callers can log the
+        // actual failure (bad input, unsupported codec) instead of just "exit 1".
+        // eslint-disable-next-line no-param-reassign
+        err.stderr = stderr;
+        reject(err);
+      } else {
+        resolve();
+      }
     });
   });
 }
 
+// Aggressive fallback size cap (500 KB) for the second video pass.
+const AGGRESSIVE_VIDEO_BYTES = 500 * 1024;
+
 /**
- * Compress an oversized MMS video with ffmpeg (H.264/AAC MP4): resize to 720px
- * width, CRF 24, faststart, and a hard 1 MB cap (-fs). The buffer is written to
- * a temp file, transcoded, read back, and the temp files are removed. Non-videos,
- * already-small videos, or any ffmpeg failure return the input unchanged
- * (best-effort — compression must never break a send/archive). Requires ffmpeg on
- * the host (installed in the Docker image).
+ * Build the ffmpeg arg list for a video transcode pass.
+ *   -err_detect ignore_err  tolerate minor input errors (before -i, decoder opt)
+ *   -threads 1              cap threads → lower peak memory on constrained containers
+ * @param {{ scale: string, crf: number, sizeCap: number }} pass
+ */
+function videoArgs(inputPath, outputPath, { scale, crf, sizeCap }) {
+  return [
+    '-y',
+    '-loglevel', 'error',
+    '-err_detect', 'ignore_err',
+    '-i', inputPath,
+    '-threads', '1',
+    '-vf', `scale=${scale}`,
+    '-c:v', 'libx264', '-preset', 'fast', '-crf', String(crf),
+    '-c:a', 'aac', '-b:a', '64k',
+    '-movflags', '+faststart', // streaming-friendly (moov atom up front)
+    '-fs', String(sizeCap), // hard output-size cap
+    outputPath,
+  ];
+}
+
+/**
+ * Compress an oversized MMS video with ffmpeg (H.264/AAC MP4). Two escalating
+ * passes: (1) 720px / CRF 24 / 1 MB cap; (2) if that pass errors on a quirky
+ * input, retry harder at 480px / CRF 30 / 500 KB. Only if BOTH passes fail do we
+ * fall back to the (over-large) original — a 24 MB clip is too big for MMS, so
+ * we try hard before giving up. Every failure logs the FULL ffmpeg stderr so the
+ * real cause (bad input, unsupported codec) is visible, not just "exit 1".
+ *
+ * The buffer is written to a temp file, transcoded, read back, and the temp
+ * files removed. Non-videos / already-small videos pass through unchanged.
+ * Best-effort throughout — compression must never break a send/archive.
+ * Requires ffmpeg on the host (installed in the Docker image).
  * @param {Buffer} buffer
  * @param {string} contentType
  * @returns {Promise<{ buffer: Buffer, contentType: string }>}
@@ -126,28 +164,53 @@ async function compressVideoIfNeeded(buffer, contentType) {
   const id = nodeCrypto.randomUUID();
   const inputPath = path.join(os.tmpdir(), `mms-${id}-in.${extFor(contentType)}`);
   const outputPath = path.join(os.tmpdir(), `mms-${id}-out.mp4`);
+
+  const passes = [
+    {
+      label: 'standard', scale: '720:-2', crf: 24, sizeCap: MAX_VIDEO_BYTES,
+    },
+    {
+      label: 'aggressive', scale: '480:-2', crf: 30, sizeCap: AGGRESSIVE_VIDEO_BYTES,
+    },
+  ];
+
   try {
     await fs.writeFile(inputPath, buffer);
-    await runFfmpeg([
-      '-y',
-      '-loglevel', 'error',
-      '-i', inputPath,
-      '-vf', 'scale=720:-2', // 720px width, keep aspect (height rounded to even)
-      '-c:v', 'libx264', '-preset', 'fast', '-crf', '24',
-      '-c:a', 'aac', '-b:a', '64k',
-      '-movflags', '+faststart', // streaming-friendly (moov atom up front)
-      '-fs', '1000000', // hard 1 MB output cap
-      outputPath,
-    ]);
-    const out = await fs.readFile(outputPath);
-    logger.info(
-      { originalBytes, compressedBytes: out.length, contentType },
-      'MMS video compressed',
-    );
-    return { buffer: out, contentType: 'video/mp4' };
-  } catch (err) {
+    for (let i = 0; i < passes.length; i += 1) {
+      const pass = passes[i];
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await runFfmpeg(videoArgs(inputPath, outputPath, pass));
+        // eslint-disable-next-line no-await-in-loop
+        const out = await fs.readFile(outputPath);
+        logger.info(
+          {
+            originalBytes, compressedBytes: out.length, contentType, pass: pass.label,
+          },
+          'MMS video compressed',
+        );
+        return { buffer: out, contentType: 'video/mp4' };
+      } catch (err) {
+        // Log the FULL ffmpeg stderr (the real diagnostic), not just the message.
+        logger.warn(
+          {
+            pass: pass.label, originalBytes, err: err.message, stderr: err.stderr,
+          },
+          'MMS video compression pass failed',
+        );
+      }
+    }
+    // Every pass failed — fall back to the original (best-effort). It's likely
+    // too large for the carrier, but a passthrough beats dropping the message.
     logger.warn(
-      { err: err.message, originalBytes },
+      { originalBytes },
+      'MMS video compression failed after all passes; using original (may exceed MMS limits)',
+    );
+    return { buffer, contentType };
+  } catch (err) {
+    // A non-ffmpeg failure (e.g. writing the temp file).
+    logger.warn(
+      { err: err.message, stderr: err.stderr, originalBytes },
       'MMS video compression failed; using original',
     );
     return { buffer, contentType };

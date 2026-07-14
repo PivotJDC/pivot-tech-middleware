@@ -12,12 +12,13 @@ jest.mock('sharp', () => jest.fn(() => mockChain));
 const mockExecFile = jest.fn();
 jest.mock('child_process', () => ({ execFile: (...args) => mockExecFile(...args) }));
 jest.mock('../../src/utils/logger', () => ({
-  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
   REDACT_PATHS: [],
 }));
 
 const fsp = require('fs').promises;
 const sharp = require('sharp');
+const { logger } = require('../../src/utils/logger');
 const {
   compressImageIfNeeded, compressVideoIfNeeded, compressMediaIfNeeded,
   generateVideoThumbnail, extFor, isImage, isVideo,
@@ -44,6 +45,9 @@ beforeEach(() => {
   mockChain.jpeg.mockClear();
   mockChain.toBuffer.mockReset();
   mockExecFile.mockReset();
+  logger.info.mockClear();
+  logger.warn.mockClear();
+  logger.error.mockClear();
 });
 
 describe('extFor / isImage', () => {
@@ -137,12 +141,13 @@ describe('compressVideoIfNeeded', () => {
 
     expect(out.contentType).toBe('video/mp4');
     expect(out.buffer.length).toBe(80);
-    // ffmpeg args carry the quality-bumped flags.
+    // ffmpeg args carry the quality flags plus the memory/robustness flags.
     const [cmd, args] = mockExecFile.mock.calls[0];
     expect(cmd).toBe('ffmpeg');
     expect(args).toEqual(expect.arrayContaining([
       '-vf', 'scale=720:-2', '-c:v', 'libx264', '-crf', '24',
       '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', '-fs', '1000000',
+      '-threads', '1', '-err_detect', 'ignore_err',
     ]));
     // Input temp file uses the source extension (mov for quicktime).
     expect(args[args.indexOf('-i') + 1]).toMatch(/\.mov$/);
@@ -151,13 +156,48 @@ describe('compressVideoIfNeeded', () => {
     await expect(fsp.access(args[args.length - 1])).rejects.toBeDefined();
   });
 
-  it('returns the original when ffmpeg fails (best-effort)', async () => {
-    mockExecFile.mockImplementation((file, args, opts, cb) => cb(new Error('ffmpeg boom')));
+  it('escalates to an aggressive pass (480p/crf30/500KB) when the first pass fails', async () => {
+    // First ffmpeg call errors; the second (aggressive) writes an output file.
+    mockExecFile
+      // execFile calls back (error, stdout, stderr) — ffmpeg's diagnostic is on
+      // stderr (3rd arg), which runFfmpeg attaches to the error.
+      .mockImplementationOnce((file, args, opts, cb) => cb(new Error('Command failed'), '', 'moov atom not found'))
+      .mockImplementationOnce((file, args, opts, cb) => {
+        const outputPath = args[args.length - 1];
+        fsp.writeFile(outputPath, Buffer.alloc(40, 3)).then(() => cb(null)).catch(cb);
+      });
+
+    const out = await compressVideoIfNeeded(bigVideo(), 'video/mp4');
+
+    expect(out.contentType).toBe('video/mp4');
+    expect(out.buffer.length).toBe(40);
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
+    // The retry uses the aggressive flags.
+    const retryArgs = mockExecFile.mock.calls[1][1];
+    expect(retryArgs).toEqual(expect.arrayContaining([
+      '-vf', 'scale=480:-2', '-crf', '30', '-fs', String(500 * 1024),
+    ]));
+    // The first failure logged the FULL ffmpeg stderr, not just the message.
+    const failLog = logger.warn.mock.calls.find((c) => c[0] && c[0].stderr === 'moov atom not found');
+    expect(failLog).toBeDefined();
+  });
+
+  it('falls back to the original only after BOTH passes fail (logs stderr)', async () => {
+    mockExecFile.mockImplementation(
+      (file, args, opts, cb) => cb(new Error('ffmpeg boom'), '', 'Invalid data found when processing input'),
+    );
     const buf = bigVideo();
 
     const out = await compressVideoIfNeeded(buf, 'video/mp4');
 
     expect(out).toEqual({ buffer: buf, contentType: 'video/mp4' });
+    // Tried both passes before giving up.
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
+    // Both failures logged the full stderr.
+    const stderrLogs = logger.warn.mock.calls.filter(
+      (c) => c[0] && c[0].stderr === 'Invalid data found when processing input',
+    );
+    expect(stderrLogs).toHaveLength(2);
   });
 });
 
