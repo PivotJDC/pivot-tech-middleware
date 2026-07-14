@@ -835,6 +835,26 @@ describe('getAccountById', () => {
   });
 });
 
+describe('getAccountStatus', () => {
+  it('returns the lightweight status incl. bics_provisioned (for onboarding polling)', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{
+        id: baseRow.id, status: 'active', phone_e164: '+12085550100', bics_provisioned: true,
+      }],
+    });
+    const result = await accountService.getAccountStatus(baseRow.id);
+    expect(result).toMatchObject({ status: 'active', bics_provisioned: true });
+    // The query selects bics_provisioned so the page can gate the eSIM step on it.
+    expect(db.query.mock.calls[0][0]).toMatch(/bics_provisioned/);
+  });
+
+  it('throws NOT_FOUND when the account is missing', async () => {
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await expect(accountService.getAccountStatus(baseRow.id))
+      .rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
 describe('getEsimQr', () => {
   const LPA = 'LPA:1$thales3.prod.ondemandconnectivity.com$MATCH-1';
 

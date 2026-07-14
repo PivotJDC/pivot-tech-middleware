@@ -814,7 +814,9 @@ async function getSipEndpointIds() {
 async function getAccountStatus(id) {
   assertUuid(id);
   const { rows } = await db.query(
-    'SELECT id, status, phone_e164, activated_at FROM accounts WHERE id = $1',
+    // bics_provisioned lets the onboarding/status page advance only once the eSIM
+    // (cellular data) is actually ready, not just when the account flips active.
+    'SELECT id, status, phone_e164, activated_at, bics_provisioned FROM accounts WHERE id = $1',
     [id],
   );
   if (rows.length === 0) {
