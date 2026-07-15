@@ -472,6 +472,7 @@ describe('admin API', () => {
         mms_outbound_count: 300,
         active_dids: 95,
       },
+      acrobits: { active_users: 60 },
       subscribers: 100,
       mrr: 2500,
     });

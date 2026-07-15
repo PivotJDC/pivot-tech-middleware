@@ -343,6 +343,7 @@ async function getMarginMetrics(tenantId) {
  *     telnyx: { inbound_voice_minutes, outbound_voice_minutes,
  *               sms_inbound_count, sms_outbound_count,
  *               mms_inbound_count, mms_outbound_count, active_dids },
+ *     acrobits: { active_users },
  *     subscribers, mrr }
  */
 async function getVendorCosts(tenantId) {
@@ -411,6 +412,25 @@ async function getVendorCosts(tenantId) {
     p,
   )).rows[0].count;
 
+  // Acrobits: Acrobits bills only for users with dialer traffic — count accounts
+  // that placed/received a call OR sent an outbound message this month.
+  const activeUsers = (await db.query(
+    `SELECT COUNT(*)::int AS active_users
+       FROM accounts a
+      WHERE (
+        EXISTS (
+          SELECT 1 FROM call_records c
+           WHERE c.account_id = a.id AND c.created_at >= date_trunc('month', now())
+        )
+        OR EXISTS (
+          SELECT 1 FROM messages m
+           WHERE m.account_id = a.id AND m.direction = 'outbound'
+             AND m.created_at >= date_trunc('month', now())
+        )
+      )${t}`,
+    p,
+  )).rows[0].active_users;
+
   return {
     bics: {
       active_sims: sims.active_sims,
@@ -425,6 +445,9 @@ async function getVendorCosts(tenantId) {
       mms_inbound_count: msg.mms_inbound,
       mms_outbound_count: msg.mms_outbound,
       active_dids: activeDids,
+    },
+    acrobits: {
+      active_users: activeUsers,
     },
     subscribers,
     mrr: subscribers * PLAN_MONTHLY_PRICE,

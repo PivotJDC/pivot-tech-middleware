@@ -422,7 +422,8 @@ describe('getVendorCosts', () => {
           sms_inbound: 4000, sms_outbound: 6000, mms_inbound: 200, mms_outbound: 300,
         }],
       })
-      .mockResolvedValueOnce({ rows: [{ count: 95 }] }); // active DIDs
+      .mockResolvedValueOnce({ rows: [{ count: 95 }] }) // active DIDs
+      .mockResolvedValueOnce({ rows: [{ active_users: 60 }] }); // acrobits active users
 
     const result = await adminService.getVendorCosts();
 
@@ -437,6 +438,7 @@ describe('getVendorCosts', () => {
         mms_outbound_count: 300,
         active_dids: 95,
       },
+      acrobits: { active_users: 60 },
       subscribers: 100,
       mrr: 2500,
     });
@@ -447,6 +449,9 @@ describe('getVendorCosts', () => {
     expect(db.query.mock.calls[4][0]).toContain("direction = 'outbound'");
     // Active DIDs count only assigned numbers.
     expect(db.query.mock.calls[5][0]).toContain("status = 'assigned'");
+    // Acrobits active users = accounts with a call OR an outbound message.
+    expect(db.query.mock.calls[6][0]).toContain('FROM call_records');
+    expect(db.query.mock.calls[6][0]).toContain('FROM messages');
   });
 
   it('scopes every query to the tenant when given', async () => {
@@ -460,12 +465,14 @@ describe('getVendorCosts', () => {
           sms_inbound: 0, sms_outbound: 0, mms_inbound: 0, mms_outbound: 0,
         }],
       })
-      .mockResolvedValueOnce({ rows: [{ count: 0 }] });
+      .mockResolvedValueOnce({ rows: [{ count: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ active_users: 0 }] });
 
     await adminService.getVendorCosts('ten-1');
 
     expect(db.query.mock.calls[0][1]).toEqual(['ten-1']); // accounts
     expect(db.query.mock.calls[5][1]).toEqual(['ten-1']); // dids
+    expect(db.query.mock.calls[6][1]).toEqual(['ten-1']); // acrobits active users
     // messages have no tenant_id — scope via the owning account subquery.
     expect(db.query.mock.calls[4][0]).toContain('account_id IN (SELECT id FROM accounts WHERE tenant_id');
   });
