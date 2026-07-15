@@ -462,9 +462,15 @@ describe('admin API', () => {
 
   it('GET /admin/analytics/vendor-costs returns per-vendor volumes', async () => {
     adminService.getVendorCosts.mockResolvedValueOnce({
-      bics: { active_sims: 80, new_sims: 12, data_mb: 512000 },
+      bics: { active_sims: 80, new_sims_this_month: 12, data_mb: 512000 },
       telnyx: {
-        voice_minutes: 5000, sms_count: 10000, mms_count: 500, active_dids: 95,
+        inbound_voice_minutes: 2000,
+        outbound_voice_minutes: 3000,
+        sms_inbound_count: 4000,
+        sms_outbound_count: 6000,
+        mms_inbound_count: 200,
+        mms_outbound_count: 300,
+        active_dids: 95,
       },
       subscribers: 100,
       mrr: 2500,
@@ -472,7 +478,9 @@ describe('admin API', () => {
     const res = await request(app).get('/admin/analytics/vendor-costs');
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
-      bics: { active_sims: 80 }, telnyx: { active_dids: 95 }, subscribers: 100,
+      bics: { active_sims: 80 },
+      telnyx: { outbound_voice_minutes: 3000, active_dids: 95 },
+      subscribers: 100,
     });
     expect(adminService.getVendorCosts).toHaveBeenCalled();
   });

@@ -411,29 +411,42 @@ describe('getMarginMetrics', () => {
 });
 
 describe('getVendorCosts', () => {
-  it('returns per-vendor usage volumes plus subscribers and MRR', async () => {
+  it('returns per-vendor volumes with voice + messaging split by direction', async () => {
     db.query
       .mockResolvedValueOnce({ rows: [{ subscribers: 100 }] }) // active subs
       .mockResolvedValueOnce({ rows: [{ active_sims: 80, new_sims: 12 }] }) // SIMs
       .mockResolvedValueOnce({ rows: [{ mb: '512000' }] }) // data MB
-      .mockResolvedValueOnce({ rows: [{ secs: '300000' }] }) // 5000 minutes
-      .mockResolvedValueOnce({ rows: [{ sms_count: 10000, mms_count: 500 }] }) // SMS/MMS
+      .mockResolvedValueOnce({ rows: [{ inbound_secs: '120000', outbound_secs: '180000' }] }) // voice: 2000/3000 min
+      .mockResolvedValueOnce({
+        rows: [{
+          sms_inbound: 4000, sms_outbound: 6000, mms_inbound: 200, mms_outbound: 300,
+        }],
+      })
       .mockResolvedValueOnce({ rows: [{ count: 95 }] }); // active DIDs
 
     const result = await adminService.getVendorCosts();
 
     expect(result).toEqual({
-      bics: { active_sims: 80, new_sims: 12, data_mb: 512000 },
+      bics: { active_sims: 80, new_sims_this_month: 12, data_mb: 512000 },
       telnyx: {
-        voice_minutes: 5000, sms_count: 10000, mms_count: 500, active_dids: 95,
+        inbound_voice_minutes: 2000,
+        outbound_voice_minutes: 3000,
+        sms_inbound_count: 4000,
+        sms_outbound_count: 6000,
+        mms_inbound_count: 200,
+        mms_outbound_count: 300,
+        active_dids: 95,
       },
       subscribers: 100,
       mrr: 2500,
     });
+    // Voice split by direction.
+    expect(db.query.mock.calls[3][0]).toContain("FILTER (WHERE direction = 'inbound')");
+    // Messaging counts both directions (no outbound-only WHERE).
+    expect(db.query.mock.calls[4][0]).toContain("direction = 'inbound'");
+    expect(db.query.mock.calls[4][0]).toContain("direction = 'outbound'");
     // Active DIDs count only assigned numbers.
     expect(db.query.mock.calls[5][0]).toContain("status = 'assigned'");
-    // New SIMs are scoped to this month.
-    expect(db.query.mock.calls[1][0]).toContain("date_trunc('month', now())");
   });
 
   it('scopes every query to the tenant when given', async () => {
@@ -441,8 +454,12 @@ describe('getVendorCosts', () => {
       .mockResolvedValueOnce({ rows: [{ subscribers: 0 }] })
       .mockResolvedValueOnce({ rows: [{ active_sims: 0, new_sims: 0 }] })
       .mockResolvedValueOnce({ rows: [{ mb: '0' }] })
-      .mockResolvedValueOnce({ rows: [{ secs: '0' }] })
-      .mockResolvedValueOnce({ rows: [{ sms_count: 0, mms_count: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ inbound_secs: '0', outbound_secs: '0' }] })
+      .mockResolvedValueOnce({
+        rows: [{
+          sms_inbound: 0, sms_outbound: 0, mms_inbound: 0, mms_outbound: 0,
+        }],
+      })
       .mockResolvedValueOnce({ rows: [{ count: 0 }] });
 
     await adminService.getVendorCosts('ten-1');

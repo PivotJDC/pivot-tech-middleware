@@ -337,9 +337,12 @@ async function getMarginMetrics(tenantId) {
 /**
  * Per-vendor usage volumes for the current calendar month, so the admin
  * Revenue & Margin view can apply each vendor's own cost rates (BICS, Telnyx,
- * Acrobits) client-side. Tenant-scoped. Returns:
- *   { bics: { active_sims, new_sims, data_mb },
- *     telnyx: { voice_minutes, sms_count, mms_count, active_dids },
+ * Acrobits) client-side. Voice and SMS/MMS are split by direction (Telnyx bills
+ * inbound and outbound at different rates). Tenant-scoped. Returns:
+ *   { bics: { active_sims, new_sims_this_month, data_mb },
+ *     telnyx: { inbound_voice_minutes, outbound_voice_minutes,
+ *               sms_inbound_count, sms_outbound_count,
+ *               mms_inbound_count, mms_outbound_count, active_dids },
  *     subscribers, mrr }
  */
 async function getVendorCosts(tenantId) {
@@ -376,30 +379,33 @@ async function getVendorCosts(tenantId) {
     p,
   )).rows[0].mb;
 
-  // Telnyx: voice minutes this month.
-  const voiceSecs = (await db.query(
-    `SELECT COALESCE(SUM(duration_seconds), 0)::bigint AS secs
+  // Telnyx: voice minutes this month, split by direction (billed differently).
+  const voice = (await db.query(
+    `SELECT
+        COALESCE(SUM(duration_seconds) FILTER (WHERE direction = 'inbound'), 0)::bigint AS inbound_secs,
+        COALESCE(SUM(duration_seconds) FILTER (WHERE direction = 'outbound'), 0)::bigint AS outbound_secs
        FROM call_records
       WHERE created_at >= date_trunc('month', now())${t}`,
     p,
-  )).rows[0].secs;
+  )).rows[0];
 
-  // Telnyx: outbound SMS/MMS this month (messages have no tenant_id → scope via
-  // the owning account).
+  // Telnyx: SMS/MMS this month split by direction × media (messages have no
+  // tenant_id → scope via the owning account).
   const msgScope = tenantId
     ? ' AND account_id IN (SELECT id FROM accounts WHERE tenant_id = $1)'
     : '';
   const msg = (await db.query(
     `SELECT
-        COUNT(*) FILTER (WHERE cardinality(media_urls) = 0)::int AS sms_count,
-        COUNT(*) FILTER (WHERE cardinality(media_urls) > 0)::int AS mms_count
+        COUNT(*) FILTER (WHERE direction = 'inbound'  AND cardinality(media_urls) = 0)::int AS sms_inbound,
+        COUNT(*) FILTER (WHERE direction = 'outbound' AND cardinality(media_urls) = 0)::int AS sms_outbound,
+        COUNT(*) FILTER (WHERE direction = 'inbound'  AND cardinality(media_urls) > 0)::int AS mms_inbound,
+        COUNT(*) FILTER (WHERE direction = 'outbound' AND cardinality(media_urls) > 0)::int AS mms_outbound
        FROM messages
-      WHERE direction = 'outbound'
-        AND created_at >= date_trunc('month', now())${msgScope}`,
+      WHERE created_at >= date_trunc('month', now())${msgScope}`,
     p,
   )).rows[0];
 
-  // Telnyx: active DIDs (assigned numbers we pay rental on).
+  // Telnyx: active DIDs (assigned numbers we pay rental / CNAM / E911 on).
   const activeDids = (await db.query(
     `SELECT COUNT(*)::int AS count FROM dids WHERE status = 'assigned'${t}`,
     p,
@@ -408,13 +414,16 @@ async function getVendorCosts(tenantId) {
   return {
     bics: {
       active_sims: sims.active_sims,
-      new_sims: sims.new_sims,
+      new_sims_this_month: sims.new_sims,
       data_mb: Number(Number(dataMb).toFixed(3)),
     },
     telnyx: {
-      voice_minutes: Math.round(Number(voiceSecs) / 60),
-      sms_count: msg.sms_count,
-      mms_count: msg.mms_count,
+      inbound_voice_minutes: Math.round(Number(voice.inbound_secs) / 60),
+      outbound_voice_minutes: Math.round(Number(voice.outbound_secs) / 60),
+      sms_inbound_count: msg.sms_inbound,
+      sms_outbound_count: msg.sms_outbound,
+      mms_inbound_count: msg.mms_inbound,
+      mms_outbound_count: msg.mms_outbound,
       active_dids: activeDids,
     },
     subscribers,
