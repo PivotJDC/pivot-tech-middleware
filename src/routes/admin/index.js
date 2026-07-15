@@ -587,6 +587,15 @@ router.get(
   }),
 );
 
+// Per-vendor usage volumes (BICS / Telnyx) + subscribers + MRR, for the
+// vendor-specific cost breakdown. Rates are applied client-side per vendor.
+router.get(
+  '/analytics/vendor-costs',
+  asyncHandler(async (req, res) => {
+    res.json(await adminService.getVendorCosts(tenantScope(req)));
+  }),
+);
+
 // Network activity (calls + messages) by hour of day, current month.
 router.get(
   '/analytics/hourly-activity',

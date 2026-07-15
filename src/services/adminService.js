@@ -335,6 +335,94 @@ async function getMarginMetrics(tenantId) {
 }
 
 /**
+ * Per-vendor usage volumes for the current calendar month, so the admin
+ * Revenue & Margin view can apply each vendor's own cost rates (BICS, Telnyx,
+ * Acrobits) client-side. Tenant-scoped. Returns:
+ *   { bics: { active_sims, new_sims, data_mb },
+ *     telnyx: { voice_minutes, sms_count, mms_count, active_dids },
+ *     subscribers, mrr }
+ */
+async function getVendorCosts(tenantId) {
+  const t = tenantId ? ' AND tenant_id = $1' : '';
+  const p = tenantId ? [tenantId] : [];
+
+  // Active subscribers + MRR.
+  const { subscribers } = (await db.query(
+    `SELECT COUNT(*)::int AS subscribers FROM accounts WHERE status = 'active'${t}`,
+    p,
+  )).rows[0];
+
+  // BICS: SIM counts (any account holding a BICS endpoint) + new SIMs this month.
+  const sims = (await db.query(
+    `SELECT
+        COUNT(*) FILTER (WHERE bics_endpoint_id IS NOT NULL)::int AS active_sims,
+        COUNT(*) FILTER (
+          WHERE bics_endpoint_id IS NOT NULL
+            AND created_at >= date_trunc('month', now())
+        )::int AS new_sims
+       FROM accounts
+      WHERE TRUE${t}`,
+    p,
+  )).rows[0];
+
+  // BICS: data usage this month — latest snapshot per account (avoid double-count).
+  const dataMb = (await db.query(
+    `SELECT COALESCE(SUM(data_total_mb), 0) AS mb FROM (
+        SELECT DISTINCT ON (account_id) data_total_mb
+          FROM usage_records
+         WHERE polled_at >= date_trunc('month', now())${t}
+         ORDER BY account_id, period_start DESC, polled_at DESC
+     ) latest`,
+    p,
+  )).rows[0].mb;
+
+  // Telnyx: voice minutes this month.
+  const voiceSecs = (await db.query(
+    `SELECT COALESCE(SUM(duration_seconds), 0)::bigint AS secs
+       FROM call_records
+      WHERE created_at >= date_trunc('month', now())${t}`,
+    p,
+  )).rows[0].secs;
+
+  // Telnyx: outbound SMS/MMS this month (messages have no tenant_id → scope via
+  // the owning account).
+  const msgScope = tenantId
+    ? ' AND account_id IN (SELECT id FROM accounts WHERE tenant_id = $1)'
+    : '';
+  const msg = (await db.query(
+    `SELECT
+        COUNT(*) FILTER (WHERE cardinality(media_urls) = 0)::int AS sms_count,
+        COUNT(*) FILTER (WHERE cardinality(media_urls) > 0)::int AS mms_count
+       FROM messages
+      WHERE direction = 'outbound'
+        AND created_at >= date_trunc('month', now())${msgScope}`,
+    p,
+  )).rows[0];
+
+  // Telnyx: active DIDs (assigned numbers we pay rental on).
+  const activeDids = (await db.query(
+    `SELECT COUNT(*)::int AS count FROM dids WHERE status = 'assigned'${t}`,
+    p,
+  )).rows[0].count;
+
+  return {
+    bics: {
+      active_sims: sims.active_sims,
+      new_sims: sims.new_sims,
+      data_mb: Number(Number(dataMb).toFixed(3)),
+    },
+    telnyx: {
+      voice_minutes: Math.round(Number(voiceSecs) / 60),
+      sms_count: msg.sms_count,
+      mms_count: msg.mms_count,
+      active_dids: activeDids,
+    },
+    subscribers,
+    mrr: subscribers * PLAN_MONTHLY_PRICE,
+  };
+}
+
+/**
  * Usage stats for one account: the latest data snapshot (usage_records) plus
  * this calendar month's voice/SMS/MMS totals (call_records + message_records),
  * in a single round-trip. Missing data yields zeros (never null).
@@ -632,6 +720,7 @@ module.exports = {
   retryPort,
   getMetrics,
   getMarginMetrics,
+  getVendorCosts,
   getAccountUsageStats,
   getHourlyActivity,
   getUsageDistribution,

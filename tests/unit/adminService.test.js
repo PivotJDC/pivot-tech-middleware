@@ -410,6 +410,50 @@ describe('getMarginMetrics', () => {
   });
 });
 
+describe('getVendorCosts', () => {
+  it('returns per-vendor usage volumes plus subscribers and MRR', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ subscribers: 100 }] }) // active subs
+      .mockResolvedValueOnce({ rows: [{ active_sims: 80, new_sims: 12 }] }) // SIMs
+      .mockResolvedValueOnce({ rows: [{ mb: '512000' }] }) // data MB
+      .mockResolvedValueOnce({ rows: [{ secs: '300000' }] }) // 5000 minutes
+      .mockResolvedValueOnce({ rows: [{ sms_count: 10000, mms_count: 500 }] }) // SMS/MMS
+      .mockResolvedValueOnce({ rows: [{ count: 95 }] }); // active DIDs
+
+    const result = await adminService.getVendorCosts();
+
+    expect(result).toEqual({
+      bics: { active_sims: 80, new_sims: 12, data_mb: 512000 },
+      telnyx: {
+        voice_minutes: 5000, sms_count: 10000, mms_count: 500, active_dids: 95,
+      },
+      subscribers: 100,
+      mrr: 2500,
+    });
+    // Active DIDs count only assigned numbers.
+    expect(db.query.mock.calls[5][0]).toContain("status = 'assigned'");
+    // New SIMs are scoped to this month.
+    expect(db.query.mock.calls[1][0]).toContain("date_trunc('month', now())");
+  });
+
+  it('scopes every query to the tenant when given', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ subscribers: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ active_sims: 0, new_sims: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ mb: '0' }] })
+      .mockResolvedValueOnce({ rows: [{ secs: '0' }] })
+      .mockResolvedValueOnce({ rows: [{ sms_count: 0, mms_count: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ count: 0 }] });
+
+    await adminService.getVendorCosts('ten-1');
+
+    expect(db.query.mock.calls[0][1]).toEqual(['ten-1']); // accounts
+    expect(db.query.mock.calls[5][1]).toEqual(['ten-1']); // dids
+    // messages have no tenant_id — scope via the owning account subquery.
+    expect(db.query.mock.calls[4][0]).toContain('account_id IN (SELECT id FROM accounts WHERE tenant_id');
+  });
+});
+
 describe('listPortOrders', () => {
   it('lists FastPort port orders and strips encrypted secrets', async () => {
     db.query
