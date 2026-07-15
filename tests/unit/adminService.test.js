@@ -470,11 +470,45 @@ describe('getVendorCosts', () => {
 
     await adminService.getVendorCosts('ten-1');
 
-    expect(db.query.mock.calls[0][1]).toEqual(['ten-1']); // accounts
+    // Snapshot queries: tenant is the sole param ($1).
+    expect(db.query.mock.calls[0][1]).toEqual(['ten-1']); // subscribers
     expect(db.query.mock.calls[5][1]).toEqual(['ten-1']); // dids
-    expect(db.query.mock.calls[6][1]).toEqual(['ten-1']); // acrobits active users
+    // Date-ranged queries: [from, to, tenant] with defaults (null) for the range.
+    expect(db.query.mock.calls[6][1]).toEqual([null, null, 'ten-1']); // acrobits
     // messages have no tenant_id — scope via the owning account subquery.
     expect(db.query.mock.calls[4][0]).toContain('account_id IN (SELECT id FROM accounts WHERE tenant_id');
+  });
+
+  it('applies each vendor its own date range', async () => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ subscribers: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ active_sims: 0, new_sims: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ mb: '0' }] })
+      .mockResolvedValueOnce({ rows: [{ inbound_secs: '0', outbound_secs: '0' }] })
+      .mockResolvedValueOnce({
+        rows: [{
+          sms_inbound: 0, sms_outbound: 0, mms_inbound: 0, mms_outbound: 0,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ count: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ active_users: 0 }] });
+
+    await adminService.getVendorCosts(null, {
+      bics: { from: '2026-06-01', to: '2026-06-30' },
+      telnyx: { from: '2026-06-15', to: '2026-07-14' },
+      acrobits: { from: '2026-05-01', to: '2026-05-31' },
+    });
+
+    // BICS queries (sims + data) use the BICS range.
+    expect(db.query.mock.calls[1][1]).toEqual(['2026-06-01', '2026-06-30']);
+    expect(db.query.mock.calls[2][1]).toEqual(['2026-06-01', '2026-06-30']);
+    // Telnyx queries (voice + messaging) use the Telnyx range.
+    expect(db.query.mock.calls[3][1]).toEqual(['2026-06-15', '2026-07-14']);
+    expect(db.query.mock.calls[4][1]).toEqual(['2026-06-15', '2026-07-14']);
+    // Acrobits query uses the Acrobits range.
+    expect(db.query.mock.calls[6][1]).toEqual(['2026-05-01', '2026-05-31']);
+    // The range clause defaults to the current month when a bound is absent.
+    expect(db.query.mock.calls[1][0]).toContain("date_trunc('month', now())");
   });
 });
 

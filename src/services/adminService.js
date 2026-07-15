@@ -335,10 +335,33 @@ async function getMarginMetrics(tenantId) {
 }
 
 /**
- * Per-vendor usage volumes for the current calendar month, so the admin
- * Revenue & Margin view can apply each vendor's own cost rates (BICS, Telnyx,
- * Acrobits) client-side. Voice and SMS/MMS are split by direction (Telnyx bills
- * inbound and outbound at different rates). Tenant-scoped. Returns:
+ * SQL fragment: `<col>` falls within the [from,to] window carried by params
+ * $1 (from) / $2 (to). Either bound may be NULL, in which case it defaults to
+ * the current calendar month. `to` is inclusive of the whole day.
+ */
+function periodClause(col) {
+  return `${col} >= COALESCE($1::date, date_trunc('month', now()))`
+    + ` AND ${col} < (COALESCE($2::date, now())::date + interval '1 day')`;
+}
+
+/** Param array for a date-ranged query: [from, to] (+ tenantId as $3). */
+function periodParams(range, tenantId) {
+  const r = range || {};
+  const p = [r.from || null, r.to || null];
+  if (tenantId) p.push(tenantId);
+  return p;
+}
+
+/**
+ * Per-vendor usage volumes so the admin Revenue & Margin view can apply each
+ * vendor's own cost rates (BICS, Telnyx, Acrobits) client-side. Voice and
+ * SMS/MMS are split by direction (Telnyx bills inbound/outbound differently).
+ *
+ * Each vendor bills on its own cycle, so its usage is fetched for its OWN date
+ * range (`ranges.{bics,telnyx,acrobits}.{from,to}`, YYYY-MM-DD). A missing range
+ * defaults to the current calendar month. Snapshot counts (active subscribers,
+ * active SIMs, active DIDs) are point-in-time and not date-filtered.
+ * Tenant-scoped. Returns:
  *   { bics: { active_sims, new_sims_this_month, data_mb },
  *     telnyx: { inbound_voice_minutes, outbound_voice_minutes,
  *               sms_inbound_count, sms_outbound_count,
@@ -346,54 +369,56 @@ async function getMarginMetrics(tenantId) {
  *     acrobits: { active_users },
  *     subscribers, mrr }
  */
-async function getVendorCosts(tenantId) {
+async function getVendorCosts(tenantId, ranges = {}) {
+  // Snapshot queries: tenant param is $1.
   const t = tenantId ? ' AND tenant_id = $1' : '';
-  const p = tenantId ? [tenantId] : [];
+  const snap = tenantId ? [tenantId] : [];
+  // Date-ranged queries: from/to are $1/$2, tenant is $3.
+  const tr = tenantId ? ' AND tenant_id = $3' : '';
 
-  // Active subscribers + MRR.
+  // Active subscribers + MRR (snapshot).
   const { subscribers } = (await db.query(
     `SELECT COUNT(*)::int AS subscribers FROM accounts WHERE status = 'active'${t}`,
-    p,
+    snap,
   )).rows[0];
 
-  // BICS: SIM counts (any account holding a BICS endpoint) + new SIMs this month.
+  // BICS: active SIMs (snapshot) + new SIMs within the BICS period.
   const sims = (await db.query(
     `SELECT
         COUNT(*) FILTER (WHERE bics_endpoint_id IS NOT NULL)::int AS active_sims,
         COUNT(*) FILTER (
-          WHERE bics_endpoint_id IS NOT NULL
-            AND created_at >= date_trunc('month', now())
+          WHERE bics_endpoint_id IS NOT NULL AND ${periodClause('created_at')}
         )::int AS new_sims
        FROM accounts
-      WHERE TRUE${t}`,
-    p,
+      WHERE TRUE${tr}`,
+    periodParams(ranges.bics, tenantId),
   )).rows[0];
 
-  // BICS: data usage this month — latest snapshot per account (avoid double-count).
+  // BICS: data usage in the BICS period — latest snapshot per account.
   const dataMb = (await db.query(
     `SELECT COALESCE(SUM(data_total_mb), 0) AS mb FROM (
         SELECT DISTINCT ON (account_id) data_total_mb
           FROM usage_records
-         WHERE polled_at >= date_trunc('month', now())${t}
+         WHERE ${periodClause('polled_at')}${tr}
          ORDER BY account_id, period_start DESC, polled_at DESC
      ) latest`,
-    p,
+    periodParams(ranges.bics, tenantId),
   )).rows[0].mb;
 
-  // Telnyx: voice minutes this month, split by direction (billed differently).
+  // Telnyx: voice minutes in the Telnyx period, split by direction.
   const voice = (await db.query(
     `SELECT
         COALESCE(SUM(duration_seconds) FILTER (WHERE direction = 'inbound'), 0)::bigint AS inbound_secs,
         COALESCE(SUM(duration_seconds) FILTER (WHERE direction = 'outbound'), 0)::bigint AS outbound_secs
        FROM call_records
-      WHERE created_at >= date_trunc('month', now())${t}`,
-    p,
+      WHERE ${periodClause('created_at')}${tr}`,
+    periodParams(ranges.telnyx, tenantId),
   )).rows[0];
 
-  // Telnyx: SMS/MMS this month split by direction × media (messages have no
-  // tenant_id → scope via the owning account).
+  // Telnyx: SMS/MMS in the Telnyx period, split by direction × media (messages
+  // have no tenant_id → scope via the owning account).
   const msgScope = tenantId
-    ? ' AND account_id IN (SELECT id FROM accounts WHERE tenant_id = $1)'
+    ? ' AND account_id IN (SELECT id FROM accounts WHERE tenant_id = $3)'
     : '';
   const msg = (await db.query(
     `SELECT
@@ -402,33 +427,33 @@ async function getVendorCosts(tenantId) {
         COUNT(*) FILTER (WHERE direction = 'inbound'  AND cardinality(media_urls) > 0)::int AS mms_inbound,
         COUNT(*) FILTER (WHERE direction = 'outbound' AND cardinality(media_urls) > 0)::int AS mms_outbound
        FROM messages
-      WHERE created_at >= date_trunc('month', now())${msgScope}`,
-    p,
+      WHERE ${periodClause('created_at')}${msgScope}`,
+    periodParams(ranges.telnyx, tenantId),
   )).rows[0];
 
-  // Telnyx: active DIDs (assigned numbers we pay rental / CNAM / E911 on).
+  // Telnyx: active DIDs (snapshot — assigned numbers we pay rental/CNAM/E911 on).
   const activeDids = (await db.query(
     `SELECT COUNT(*)::int AS count FROM dids WHERE status = 'assigned'${t}`,
-    p,
+    snap,
   )).rows[0].count;
 
-  // Acrobits: Acrobits bills only for users with dialer traffic — count accounts
-  // that placed/received a call OR sent an outbound message this month.
+  // Acrobits: users with dialer traffic (a call OR an outbound message) within
+  // the Acrobits period.
   const activeUsers = (await db.query(
     `SELECT COUNT(*)::int AS active_users
        FROM accounts a
       WHERE (
         EXISTS (
           SELECT 1 FROM call_records c
-           WHERE c.account_id = a.id AND c.created_at >= date_trunc('month', now())
+           WHERE c.account_id = a.id AND ${periodClause('c.created_at')}
         )
         OR EXISTS (
           SELECT 1 FROM messages m
            WHERE m.account_id = a.id AND m.direction = 'outbound'
-             AND m.created_at >= date_trunc('month', now())
+             AND ${periodClause('m.created_at')}
         )
-      )${t}`,
-    p,
+      )${tr}`,
+    periodParams(ranges.acrobits, tenantId),
   )).rows[0].active_users;
 
   return {

@@ -587,12 +587,25 @@ router.get(
   }),
 );
 
-// Per-vendor usage volumes (BICS / Telnyx) + subscribers + MRR, for the
-// vendor-specific cost breakdown. Rates are applied client-side per vendor.
+// Per-vendor usage volumes (BICS / Telnyx / Acrobits) + subscribers + MRR, for
+// the vendor-specific cost breakdown. Each vendor bills on its own cycle, so it
+// accepts an independent date range per vendor (?bics_from=&bics_to=&telnyx_from=
+// &telnyx_to=&acrobits_from=&acrobits_to=, YYYY-MM-DD). Missing/invalid ranges
+// default to the current calendar month. Rates are applied client-side.
 router.get(
   '/analytics/vendor-costs',
   asyncHandler(async (req, res) => {
-    res.json(await adminService.getVendorCosts(tenantScope(req)));
+    const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+    const range = (from, to) => ({
+      from: isDate(from) ? from : undefined,
+      to: isDate(to) ? to : undefined,
+    });
+    const ranges = {
+      bics: range(req.query.bics_from, req.query.bics_to),
+      telnyx: range(req.query.telnyx_from, req.query.telnyx_to),
+      acrobits: range(req.query.acrobits_from, req.query.acrobits_to),
+    };
+    res.json(await adminService.getVendorCosts(tenantScope(req), ranges));
   }),
 );
 

@@ -486,6 +486,33 @@ describe('admin API', () => {
     expect(adminService.getVendorCosts).toHaveBeenCalled();
   });
 
+  it('GET /admin/analytics/vendor-costs forwards per-vendor date ranges', async () => {
+    adminService.getVendorCosts.mockResolvedValueOnce({});
+    await request(app).get(
+      '/admin/analytics/vendor-costs'
+      + '?bics_from=2026-06-01&bics_to=2026-06-30'
+      + '&telnyx_from=2026-06-15&telnyx_to=2026-07-14'
+      + '&acrobits_from=2026-05-01&acrobits_to=2026-05-31',
+    );
+    expect(adminService.getVendorCosts).toHaveBeenCalledWith(
+      null,
+      {
+        bics: { from: '2026-06-01', to: '2026-06-30' },
+        telnyx: { from: '2026-06-15', to: '2026-07-14' },
+        acrobits: { from: '2026-05-01', to: '2026-05-31' },
+      },
+    );
+  });
+
+  it('GET /admin/analytics/vendor-costs ignores malformed date params', async () => {
+    adminService.getVendorCosts.mockResolvedValueOnce({});
+    await request(app).get('/admin/analytics/vendor-costs?bics_from=nope&bics_to=2026/06/30');
+    expect(adminService.getVendorCosts).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ bics: { from: undefined, to: undefined } }),
+    );
+  });
+
   it('GET /admin/usage/summary returns the current-period summary', async () => {
     usageService.getCurrentPeriodSummary.mockResolvedValueOnce({
       totalAccounts: 3, totalDataMb: 900,
